@@ -18,16 +18,23 @@ services:
     tty: true
     command: ["/bin/bash"]
 
-  # Placeholder for future TypeScript frontend
-  # frontend:
-  #   build:
-  #     context: ./frontend
-  #     dockerfile: Dockerfile
-  #   container_name: deal-finder-frontend
-  #   ports:
-  #     - "3000:3000"
-  #   depends_on:
-  #     - api
+  # Next.js frontend
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: deal-finder-frontend
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=development
+    volumes:
+      # Mount for development (hot reload)
+      - ./frontend:/app
+      - /app/node_modules
+      - /app/.next
+    stdin_open: true
+    tty: true
 
   # Placeholder for future API service
   # api:
