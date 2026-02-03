@@ -4,67 +4,15 @@ import React from "react"
 
 import { useState, useEffect, useCallback } from "react";
 
-// Mock data for generating CSV results
-const MOCK_LISTINGS = [
-  {
-    title: "iPhone 13 Pro Max 256GB",
-    price: 650,
-    location: "Brooklyn, NY",
-    dealScore: 28,
-    url: "https://facebook.com/marketplace/item/123456",
-  },
-  {
-    title: "Sony PlayStation 5 Disc Edition",
-    price: 380,
-    location: "Queens, NY",
-    dealScore: 24,
-    url: "https://facebook.com/marketplace/item/234567",
-  },
-  {
-    title: "MacBook Pro 14\" M1 Pro",
-    price: 1200,
-    location: "Manhattan, NY",
-    dealScore: 31,
-    url: "https://facebook.com/marketplace/item/345678",
-  },
-  {
-    title: "Nintendo Switch OLED",
-    price: 220,
-    location: "Bronx, NY",
-    dealScore: 18,
-    url: "https://facebook.com/marketplace/item/456789",
-  },
-  {
-    title: "Herman Miller Aeron Chair",
-    price: 450,
-    location: "Jersey City, NJ",
-    dealScore: 42,
-    url: "https://facebook.com/marketplace/item/567890",
-  },
-  {
-    title: "Samsung 65\" QLED TV",
-    price: 580,
-    location: "Newark, NJ",
-    dealScore: 35,
-    url: "https://facebook.com/marketplace/item/678901",
-  },
-  {
-    title: "Dyson V15 Vacuum",
-    price: 320,
-    location: "Hoboken, NJ",
-    dealScore: 22,
-    url: "https://facebook.com/marketplace/item/789012",
-  },
-  {
-    title: "Canon EOS R6 Camera Body",
-    price: 1100,
-    location: "Staten Island, NY",
-    dealScore: 27,
-    url: "https://facebook.com/marketplace/item/890123",
-  },
-];
+type AppState = "form" | "loading" | "done" | "error";
 
-type AppState = "form" | "loading" | "done";
+interface Listing {
+  title: string;
+  price: number;
+  location: string;
+  url: string;
+  dealScore: number;
+}
 
 interface FormData {
   query: string;
@@ -91,6 +39,8 @@ function TreasureIcon({ className = "" }: { className?: string }) {
   );
 }
 
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+
 export default function Home() {
   const [appState, setAppState] = useState<AppState>("form");
   const [formData, setFormData] = useState<FormData>({
@@ -102,10 +52,12 @@ export default function Home() {
   const [scannedCount, setScannedCount] = useState(0);
   const [evaluatedCount, setEvaluatedCount] = useState(0);
   const [csvBlob, setCsvBlob] = useState<Blob | null>(null);
+  const [listings, setListings] = useState<Listing[]>([]);
+  const [error, setError] = useState<string | null>(null);
 
-  const generateCSV = useCallback(() => {
+  const generateCSV = useCallback((listingsData: Listing[]) => {
     const headers = ["Treasure", "Doubloons", "Location", "Steal Score (%)", "Loot URL"];
-    const rows = MOCK_LISTINGS.map((item) => [
+    const rows = listingsData.map((item) => [
       `"${item.title}"`,
       `$${item.price}`,
       `"${item.location}"`,
@@ -133,44 +85,45 @@ export default function Home() {
   useEffect(() => {
     if (appState !== "loading") return;
 
-    const targetScanned = 847;
-    const targetEvaluated = 156;
-    const duration = 4000;
+    const searchAPI = async () => {
+      try {
+        setError(null);
+        const response = await fetch(`${API_URL}/api/search`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            query: formData.query,
+            zipCode: formData.zipCode,
+            radius: formData.radius,
+            threshold: formData.threshold,
+          }),
+        });
 
-    const scanInterval = setInterval(() => {
-      setScannedCount((prev) => {
-        const increment = Math.floor(Math.random() * 30) + 10;
-        return Math.min(prev + increment, targetScanned);
-      });
-    }, 50);
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => ({ detail: "Unknown error" }));
+          throw new Error(errorData.detail || `HTTP error! status: ${response.status}`);
+        }
 
-    const evalInterval = setInterval(() => {
-      setEvaluatedCount((prev) => {
-        const increment = Math.floor(Math.random() * 8) + 2;
-        return Math.min(prev + increment, targetEvaluated);
-      });
-    }, 100);
+        const data = await response.json();
+        setScannedCount(data.scannedCount);
+        setEvaluatedCount(data.evaluatedCount);
+        setListings(data.listings);
 
-    const timeout = setTimeout(() => {
-      clearInterval(scanInterval);
-      clearInterval(evalInterval);
-      setScannedCount(targetScanned);
-      setEvaluatedCount(targetEvaluated);
+        const blob = generateCSV(data.listings);
+        setCsvBlob(blob);
 
-      const blob = generateCSV();
-      setCsvBlob(blob);
-
-      setTimeout(() => {
         setAppState("done");
-      }, 500);
-    }, duration);
-
-    return () => {
-      clearInterval(scanInterval);
-      clearInterval(evalInterval);
-      clearTimeout(timeout);
+      } catch (err) {
+        console.error("Search error:", err);
+        setError(err instanceof Error ? err.message : "Failed to search marketplace");
+        setAppState("error");
+      }
     };
-  }, [appState, generateCSV]);
+
+    searchAPI();
+  }, [appState, formData, generateCSV]);
 
   useEffect(() => {
     if (appState === "done" && csvBlob) {
@@ -186,6 +139,8 @@ export default function Home() {
     setScannedCount(0);
     setEvaluatedCount(0);
     setCsvBlob(null);
+    setListings([]);
+    setError(null);
     setAppState("loading");
   };
 
@@ -194,6 +149,8 @@ export default function Home() {
     setScannedCount(0);
     setEvaluatedCount(0);
     setCsvBlob(null);
+    setListings([]);
+    setError(null);
   };
 
   return (
@@ -219,6 +176,7 @@ export default function Home() {
               {appState === "form" && "AWAITING ORDERS"}
               {appState === "loading" && "RAIDING..."}
               {appState === "done" && "TREASURE ACQUIRED"}
+              {appState === "error" && "MISSION FAILED"}
             </span>
           </div>
         </header>
@@ -309,13 +267,15 @@ export default function Home() {
                 <div className="space-y-4">
                   <LoadingBar 
                     label="Infiltrating listings" 
-                    count={scannedCount} 
+                    count={scannedCount}
+                    maxCount={scannedCount || 100}
                     suffix="scanned" 
                     icon="~"
                   />
                   <LoadingBar 
                     label="Evaluating loot value" 
-                    count={evaluatedCount} 
+                    count={evaluatedCount}
+                    maxCount={scannedCount || 100}
                     suffix="assessed" 
                     icon="*"
                   />
@@ -356,7 +316,7 @@ export default function Home() {
                     HEIST COMPLETE!
                   </h2>
                   <p className="font-mono text-sm text-muted-foreground">
-                    Plundered {MOCK_LISTINGS.length} treasures above {formData.threshold}% steal score
+                    Plundered {listings.length} treasures above {formData.threshold}% steal score
                   </p>
                 </div>
 
@@ -383,6 +343,28 @@ export default function Home() {
                     className="border-2 border-accent bg-accent px-4 py-3 font-mono text-sm font-bold text-accent-foreground transition-all hover:bg-transparent hover:text-accent"
                   >
                     NEW HEIST
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Error State */}
+            {appState === "error" && (
+              <div className="space-y-6">
+                <div className="text-center">
+                  <div className="mb-4 text-5xl">⚠️</div>
+                  <h2 className="mb-2 font-mono text-xl font-bold text-destructive">
+                    HEIST FAILED!
+                  </h2>
+                  <p className="font-mono text-sm text-muted-foreground mb-4">
+                    {error || "An unknown error occurred"}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={handleReset}
+                    className="border-2 border-accent bg-accent px-4 py-3 font-mono text-sm font-bold text-accent-foreground transition-all hover:bg-transparent hover:text-accent"
+                  >
+                    TRY AGAIN
                   </button>
                 </div>
               </div>
@@ -466,14 +448,18 @@ function FormField({
 function LoadingBar({ 
   label, 
   count, 
+  maxCount,
   suffix,
   icon 
 }: { 
   label: string; 
-  count: number; 
+  count: number;
+  maxCount: number;
   suffix: string;
   icon: string;
 }) {
+  const percentage = maxCount > 0 ? Math.min((count / maxCount) * 100, 100) : 0;
+  
   return (
     <div className="space-y-2">
       <div className="flex items-baseline justify-between">
@@ -488,7 +474,7 @@ function LoadingBar({
       <div className="h-1.5 w-full overflow-hidden bg-secondary">
         <div 
           className="h-full bg-primary transition-all duration-100"
-          style={{ width: `${Math.min((count / 847) * 100, 100)}%` }}
+          style={{ width: `${percentage}%` }}
         />
       </div>
     </div>
