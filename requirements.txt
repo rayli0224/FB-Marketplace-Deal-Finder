@@ -1,16 +1,5 @@
-# eBay Sold Items Price Analyzer - Dependencies
+# eBay Price Analyzer - Dependencies
 # Install with: pip install -r requirements.txt
 
-# Core dependencies
-selenium>=4.15.0
-webdriver-manager>=4.0.0      # Auto-manages ChromeDriver
-numpy>=1.24.0                  # For percentile calculations
-requests>=2.31.0               # HTTP requests
-
-# Anti-detection
-selenium-stealth>=1.0.6        # Makes Selenium undetectable
-undetected-chromedriver>=3.5.0 # Best anti-detection driver
-
-# Optional: For Jupyter notebook usage
-# jupyter>=1.0.0
-# ipywidgets>=8.0.0
+requests>=2.31.0    # HTTP requests for eBay API
+numpy>=1.24.0       # For percentile calculations

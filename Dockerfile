@@ -1,35 +1,11 @@
 # ============================================
-# Python + Chrome for undetected-chromedriver
+# eBay Price Analyzer - Lightweight API-only
 # ============================================
 
 FROM python:3.12-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    DISPLAY=:99
-
-# Install dependencies for Chrome (not chromium - let undetected-chromedriver handle it)
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    # For undetected-chromedriver to download Chrome
-    wget \
-    gnupg \
-    curl \
-    unzip \
-    # Virtual display
-    xvfb \
-    # Chrome dependencies
-    libnss3 \
-    libxss1 \
-    libasound2 \
-    libatk-bridge2.0-0 \
-    libgtk-3-0 \
-    libdrm2 \
-    libgbm1 \
-    # Fonts
-    fonts-liberation \
-    fonts-dejavu-core \
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+    PYTHONUNBUFFERED=1
 
 WORKDIR /app
 
@@ -40,9 +16,4 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application code
 COPY *.py ./
 
-# Copy entrypoint script
-COPY docker/entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
-
-ENTRYPOINT ["/entrypoint.sh"]
-CMD ["/bin/bash"]
+CMD ["python", "ebay_scraper.py"]
