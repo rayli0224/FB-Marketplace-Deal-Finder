@@ -21,4 +21,33 @@ services:
     # Interactive shell
     stdin_open: true
     tty: true
-    command: ["python", "ebay_scraper.py"]
+    command: ["/bin/bash"]
+
+  # Next.js frontend
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: deal-finder-frontend
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=development
+    volumes:
+      # Mount for development (hot reload)
+      - ./frontend:/app
+      - /app/node_modules
+      - /app/.next
+    stdin_open: true
+    tty: true
+
+  # Placeholder for future API service
+  # api:
+  #   build:
+  #     context: .
+  #     dockerfile: Dockerfile.api
+  #   container_name: deal-finder-api
+  #   ports:
+  #     - "8000:8000"
+  #   depends_on:
+  #     - scraper
