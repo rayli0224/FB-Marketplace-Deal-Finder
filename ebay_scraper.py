@@ -8,12 +8,11 @@ Author: Auto-generated
 """
 
 import re
-import time
-import random
 import statistics
 from dataclasses import dataclass
 from typing import Optional
 import logging
+from scrapers.utils import random_delay
 
 # Third-party imports
 import requests
@@ -194,10 +193,6 @@ class EbayScraper:
         
         return driver
     
-    def _random_delay(self, min_sec: float = 1.0, max_sec: float = 3.0):
-        """Add a random delay to mimic human behavior."""
-        time.sleep(random.uniform(min_sec, max_sec))
-    
     def _parse_price(self, price_text: str) -> Optional[float]:
         """
         Parse a price string into a float.
@@ -334,11 +329,11 @@ class EbayScraper:
             
             # First visit eBay homepage to establish session (helps avoid detection)
             self.driver.get("https://www.ebay.com")
-            self._random_delay(2, 4)
+            random_delay(2, 4)
             
             # Now navigate to search results
             self.driver.get(url)
-            self._random_delay(3, 5)
+            random_delay(3, 5)
             
             # Check for CAPTCHA or blocking
             page_source_lower = self.driver.page_source.lower()
@@ -373,7 +368,7 @@ class EbayScraper:
                         )
                         if next_button:
                             next_button.click()
-                            self._random_delay(2, 4)
+                            random_delay(2, 4)
                         else:
                             break
                     except NoSuchElementException:
