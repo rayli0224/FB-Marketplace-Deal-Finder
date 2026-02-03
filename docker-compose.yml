@@ -1,41 +1,24 @@
-# Docker Compose for FB Marketplace Deal Finder
-# Run: docker compose up --build
+# Docker Compose for eBay Price Analyzer
+# Run: docker compose run --rm scraper
 
 services:
-  # Python scraper service
   scraper:
     build:
       context: .
       dockerfile: Dockerfile
     container_name: ebay-scraper
     
-    # Mount local files for development (no rebuild needed)
+    # Mount local file for development (no rebuild needed for code changes)
     volumes:
       - ./ebay_scraper.py:/app/ebay_scraper.py
+    
+    # eBay API credentials (required)
+    # Get from https://developer.ebay.com
+    environment:
+      - EBAY_CLIENT_ID=${EBAY_CLIENT_ID}
+      - EBAY_CLIENT_SECRET=${EBAY_CLIENT_SECRET}
     
     # Interactive shell
     stdin_open: true
     tty: true
-    command: ["/bin/bash"]
-
-  # Placeholder for future TypeScript frontend
-  # frontend:
-  #   build:
-  #     context: ./frontend
-  #     dockerfile: Dockerfile
-  #   container_name: deal-finder-frontend
-  #   ports:
-  #     - "3000:3000"
-  #   depends_on:
-  #     - api
-
-  # Placeholder for future API service
-  # api:
-  #   build:
-  #     context: .
-  #     dockerfile: Dockerfile.api
-  #   container_name: deal-finder-api
-  #   ports:
-  #     - "8000:8000"
-  #   depends_on:
-  #     - scraper
+    command: ["python", "ebay_scraper.py"]
