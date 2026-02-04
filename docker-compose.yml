@@ -14,12 +14,15 @@ services:
     environment:
       - NODE_ENV=development
       - DISPLAY=:99
+      - FB_COOKIES_FILE=/app/cookies/facebook_cookies.json
     volumes:
       # Mount for development (hot reload)
       - ./src:/app/src
       - ./frontend:/app/frontend
       - /app/frontend/node_modules
       - /app/frontend/.next
+      # Mount cookies directory for Facebook authentication
+      - ./cookies:/app/cookies:ro
     stdin_open: true
     tty: true
     command: ["/bin/bash"]
