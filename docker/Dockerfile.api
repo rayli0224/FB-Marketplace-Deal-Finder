@@ -42,13 +42,14 @@ RUN playwright install chromium
 RUN playwright install-deps chromium
 
 # Copy application code
-COPY *.py ./
-COPY scrapers/ ./scrapers/
-COPY api/ ./api/
+COPY src/ ./src/
+
+# Set PYTHONPATH to include src directory
+ENV PYTHONPATH=/app
 
 # Expose API port
 EXPOSE 8000
 
 # Start Xvfb and API server with auto-reload
-CMD ["sh", "-c", "Xvfb :99 -screen 0 1920x1080x24 & uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload"]
+CMD ["sh", "-c", "Xvfb :99 -screen 0 1920x1080x24 & uvicorn src.api.main:app --host 0.0.0.0 --port 8000 --reload"]
 

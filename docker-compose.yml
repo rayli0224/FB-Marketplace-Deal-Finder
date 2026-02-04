@@ -6,12 +6,12 @@ services:
   scraper:
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: docker/Dockerfile.scraper
     container_name: ebay-scraper
     
     # Mount local files for development (no rebuild needed)
     volumes:
-      - ./ebay_scraper.py:/app/ebay_scraper.py
+      - ./src:/app/src
     
     # Interactive shell
     stdin_open: true
@@ -40,7 +40,7 @@ services:
   api:
     build:
       context: .
-      dockerfile: Dockerfile.api
+      dockerfile: docker/Dockerfile.api
     container_name: deal-finder-api
     ports:
       - "8000:8000"
@@ -48,8 +48,6 @@ services:
       - DISPLAY=:99
     volumes:
       # Mount for development (hot reload)
-      - ./api:/app/api
-      - ./scrapers:/app/scrapers
-      - ./ebay_scraper.py:/app/ebay_scraper.py
+      - ./src:/app/src
     stdin_open: true
     tty: true
