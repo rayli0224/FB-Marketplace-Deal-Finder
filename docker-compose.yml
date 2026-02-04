@@ -2,54 +2,24 @@
 # Run: docker compose up --build
 
 services:
-  # Python scraper service
-  scraper:
+  # Unified container for entire application
+  app:
     build:
       context: .
-      dockerfile: Dockerfile
-    container_name: ebay-scraper
-    
-    # Mount local files for development (no rebuild needed)
-    volumes:
-      - ./ebay_scraper.py:/app/ebay_scraper.py
-    
-    # Interactive shell
-    stdin_open: true
-    tty: true
-    command: ["/bin/bash"]
-
-  # Next.js frontend
-  frontend:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
-    container_name: deal-finder-frontend
+      dockerfile: docker/Dockerfile
+    container_name: deal-finder-app
     ports:
       - "3000:3000"
-    environment:
-      - NODE_ENV=development
-    volumes:
-      # Mount for development (hot reload)
-      - ./frontend:/app
-      - /app/node_modules
-      - /app/.next
-    stdin_open: true
-    tty: true
-
-  # FastAPI backend service
-  api:
-    build:
-      context: .
-      dockerfile: Dockerfile.api
-    container_name: deal-finder-api
-    ports:
       - "8000:8000"
     environment:
+      - NODE_ENV=development
       - DISPLAY=:99
     volumes:
       # Mount for development (hot reload)
-      - ./api:/app/api
-      - ./scrapers:/app/scrapers
-      - ./ebay_scraper.py:/app/ebay_scraper.py
+      - ./src:/app/src
+      - ./frontend:/app/frontend
+      - /app/frontend/node_modules
+      - /app/frontend/.next
     stdin_open: true
     tty: true
+    command: ["/bin/bash"]
