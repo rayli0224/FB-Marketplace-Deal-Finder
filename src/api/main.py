@@ -95,26 +95,38 @@ def search_deals(request: SearchRequest):
     except Exception as e:
         logger.warning(f"eBay scraping failed: {e}")
     
-    if not ebay_stats:
-        logger.warning("Could not get eBay price statistics")
+    # If eBay stats available, filter by deal score
+    if ebay_stats:
+        scored_listings = filter_and_score_listings(
+            fb_listings=fb_listings,
+            ebay_stats=ebay_stats,
+            threshold=request.threshold
+        )
+        evaluated_count = len(scored_listings)
+        logger.info(f"Found {evaluated_count} deals above {request.threshold}% threshold")
+        
         return SearchResponse(
-            listings=[],
+            listings=[ListingResponse(**listing) for listing in scored_listings],
             scannedCount=scanned_count,
-            evaluatedCount=0
+            evaluatedCount=evaluated_count
         )
     
-    scored_listings = filter_and_score_listings(
-        fb_listings=fb_listings,
-        ebay_stats=ebay_stats,
-        threshold=request.threshold
-    )
-    
-    evaluated_count = len(scored_listings)
-    logger.info(f"Found {evaluated_count} deals above {request.threshold}% threshold")
+    # No eBay stats - return all FB listings with dealScore=0 (unknown)
+    logger.warning("No eBay stats - returning all FB listings without deal scoring")
+    all_listings = [
+        ListingResponse(
+            title=listing.title,
+            price=listing.price,
+            location=listing.location,
+            url=listing.url,
+            dealScore=0.0,  # Unknown deal score
+        )
+        for listing in fb_listings
+    ]
     
     return SearchResponse(
-        listings=[ListingResponse(**listing) for listing in scored_listings],
+        listings=all_listings,
         scannedCount=scanned_count,
-        evaluatedCount=evaluated_count
+        evaluatedCount=len(all_listings)
     )
 
