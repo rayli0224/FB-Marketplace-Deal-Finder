@@ -8,9 +8,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Optional
 
-from scrapers.fb_marketplace_scraper import search_marketplace as search_fb_marketplace
-from ebay_scraper import get_sold_item_stats
-from api.deal_calculator import filter_and_score_listings
+from src.scrapers.fb_marketplace_scraper import search_marketplace as search_fb_marketplace
+from src.scrapers.ebay_scraper import get_sold_item_stats
+from src.api.deal_calculator import filter_and_score_listings
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -19,8 +19,8 @@ app = FastAPI(title="FB Marketplace Deal Finder API")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://frontend:3000"],
-    allow_credentials=True,
+    allow_origins=["*"],
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )

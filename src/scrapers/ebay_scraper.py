@@ -8,11 +8,12 @@ Author: Auto-generated
 """
 
 import re
+import random
 import statistics
 from dataclasses import dataclass
 from typing import Optional
 import logging
-from scrapers.utils import random_delay
+from src.scrapers.utils import random_delay
 
 # Third-party imports
 import requests

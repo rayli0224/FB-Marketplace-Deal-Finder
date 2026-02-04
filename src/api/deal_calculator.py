@@ -3,8 +3,8 @@ Deal score calculator for comparing Facebook Marketplace prices to eBay market d
 """
 
 from typing import List, Optional
-from scrapers.fb_marketplace_scraper import Listing
-from ebay_scraper import get_sold_item_stats, PriceStats
+from src.scrapers.fb_marketplace_scraper import Listing
+from src.scrapers.ebay_scraper import PriceStats
 
 
 def calculate_deal_score(fb_price: float, ebay_stats: Optional[PriceStats]) -> Optional[float]:

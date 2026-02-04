@@ -10,7 +10,7 @@ import logging
 from dataclasses import dataclass
 from typing import Optional, List
 from playwright.sync_api import sync_playwright, Browser, Page, TimeoutError as PlaywrightTimeoutError
-from scrapers.utils import random_delay, parse_price, is_valid_listing_price
+from src.scrapers.utils import random_delay, parse_price, is_valid_listing_price
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
