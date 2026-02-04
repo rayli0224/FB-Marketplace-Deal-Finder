@@ -125,14 +125,7 @@ export default function Home() {
     searchAPI();
   }, [appState, formData, generateCSV]);
 
-  useEffect(() => {
-    if (appState === "done" && csvBlob) {
-      const timeout = setTimeout(() => {
-        downloadCSV();
-      }, 100);
-      return () => clearTimeout(timeout);
-    }
-  }, [appState, csvBlob, downloadCSV]);
+  // Removed auto-download - now showing results in UI instead
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -158,7 +151,7 @@ export default function Home() {
       {/* Scanlines overlay */}
       <div className="pointer-events-none fixed inset-0 bg-[repeating-linear-gradient(0deg,transparent,transparent_2px,rgba(0,0,0,0.1)_2px,rgba(0,0,0,0.1)_4px)] opacity-30" />
       
-      <div className="relative mx-auto max-w-lg">
+      <div className="relative mx-auto max-w-4xl">
         {/* Header */}
         <header className="mb-8 text-center">
           <div className="mb-4 text-4xl">
@@ -305,46 +298,94 @@ export default function Home() {
               </div>
             )}
 
-            {/* Done State */}
+            {/* Done State - Results List */}
             {appState === "done" && (
               <div className="space-y-6">
-                <div className="text-center">
-                  <div className="mb-4 text-5xl">
-                    <TreasureIcon className="text-accent" />
+                {/* Header */}
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h2 className="font-mono text-lg font-bold text-foreground">
+                      HEIST COMPLETE!
+                    </h2>
+                    <p className="font-mono text-xs text-muted-foreground">
+                      Found {listings.length} treasures from {scannedCount} scanned
+                    </p>
                   </div>
-                  <h2 className="mb-2 font-mono text-xl font-bold text-foreground">
-                    HEIST COMPLETE!
-                  </h2>
-                  <p className="font-mono text-sm text-muted-foreground">
-                    Plundered {listings.length} treasures above {formData.threshold}% steal score
-                  </p>
-                </div>
-
-                <div className="border border-primary bg-primary/10 p-4">
-                  <div className="flex items-center justify-between">
-                    <span className="font-mono text-xs text-muted-foreground">LOOT_MAP.CSV</span>
-                    <span className="font-mono text-xs text-primary">DOWNLOADED</span>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={downloadCSV}
+                      className="border-2 border-primary bg-transparent px-3 py-2 font-mono text-xs font-bold text-primary transition-all hover:bg-primary hover:text-primary-foreground"
+                    >
+                      EXPORT CSV
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleReset}
+                      className="border-2 border-accent bg-accent px-3 py-2 font-mono text-xs font-bold text-accent-foreground transition-all hover:bg-transparent hover:text-accent"
+                    >
+                      NEW SEARCH
+                    </button>
                   </div>
-                  <div className="mt-2 h-1 w-full bg-primary" />
                 </div>
 
-                <div className="grid grid-cols-2 gap-3">
-                  <button
-                    type="button"
-                    onClick={downloadCSV}
-                    className="border-2 border-primary bg-transparent px-4 py-3 font-mono text-sm font-bold text-primary transition-all hover:bg-primary hover:text-primary-foreground"
-                  >
-                    RE-DOWNLOAD
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={handleReset}
-                    className="border-2 border-accent bg-accent px-4 py-3 font-mono text-sm font-bold text-accent-foreground transition-all hover:bg-transparent hover:text-accent"
-                  >
-                    NEW HEIST
-                  </button>
-                </div>
+                {/* Results Table */}
+                {listings.length > 0 ? (
+                  <div className="max-h-[60vh] overflow-auto border border-border">
+                    <table className="w-full border-collapse font-mono text-sm">
+                      <thead className="sticky top-0 bg-secondary">
+                        <tr className="border-b border-border text-left">
+                          <th className="px-3 py-2 text-xs text-muted-foreground">TITLE</th>
+                          <th className="px-3 py-2 text-xs text-muted-foreground">PRICE</th>
+                          <th className="px-3 py-2 text-xs text-muted-foreground">LOCATION</th>
+                          <th className="px-3 py-2 text-xs text-muted-foreground">DEAL %</th>
+                          <th className="px-3 py-2 text-xs text-muted-foreground">LINK</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {listings.map((listing, index) => (
+                          <tr 
+                            key={index} 
+                            className="border-b border-border/50 hover:bg-secondary/50 transition-colors"
+                          >
+                            <td className="px-3 py-2 max-w-[300px] truncate" title={listing.title}>
+                              {listing.title}
+                            </td>
+                            <td className="px-3 py-2 text-primary font-bold">
+                              ${listing.price.toFixed(2)}
+                            </td>
+                            <td className="px-3 py-2 text-muted-foreground max-w-[150px] truncate" title={listing.location}>
+                              {listing.location}
+                            </td>
+                            <td className="px-3 py-2">
+                              {listing.dealScore > 0 ? (
+                                <span className={`font-bold ${listing.dealScore >= 20 ? 'text-green-500' : listing.dealScore >= 10 ? 'text-accent' : 'text-muted-foreground'}`}>
+                                  {listing.dealScore}%
+                                </span>
+                              ) : (
+                                <span className="text-muted-foreground/50">--</span>
+                              )}
+                            </td>
+                            <td className="px-3 py-2">
+                              <a 
+                                href={listing.url} 
+                                target="_blank" 
+                                rel="noopener noreferrer"
+                                className="text-primary hover:underline"
+                              >
+                                VIEW →
+                              </a>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <div className="border border-border bg-secondary p-8 text-center">
+                    <p className="font-mono text-muted-foreground">No listings found matching your criteria.</p>
+                  </div>
+                )}
               </div>
             )}
 
