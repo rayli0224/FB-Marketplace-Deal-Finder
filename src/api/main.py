@@ -262,9 +262,9 @@ def ebay_active_listings(request: EbayStatsRequest):
         return EbayStatsResponse(stats=None)
 
     if not stats:
-        return EbayStatsResponse(stats=None)
-
-    return EbayStatsResponse(
+        return EbayStatsResponse(stats=None)    
+    else:
+        return EbayStatsResponse(
         stats=EbayStats(
             searchTerm=stats.search_term,
             sampleSize=stats.sample_size,
