@@ -9,17 +9,17 @@ from src.scrapers.ebay_scraper import PriceStats
 
 def calculate_deal_score(fb_price: float, ebay_stats: Optional[PriceStats]) -> Optional[float]:
     """
-    Calculate deal score as percentage savings compared to eBay median price.
+    Calculate deal score as percentage savings compared to eBay average price.
     
     Returns:
         Deal score as percentage (e.g., 25.0 means 25% below market value)
         None if eBay stats are not available
     """
-    if not ebay_stats or ebay_stats.median == 0:
+    if not ebay_stats or ebay_stats.average == 0:
         return None
     
-    savings = ebay_stats.median - fb_price
-    score = (savings / ebay_stats.median) * 100
+    savings = ebay_stats.average - fb_price
+    score = (savings / ebay_stats.average) * 100
     return round(score, 1)
 
 

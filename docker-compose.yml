@@ -11,10 +11,11 @@ services:
     ports:
       - "3000:3000"
       - "8000:8000"
+    env_file:
+      - .env
     environment:
       - NODE_ENV=development
       - DISPLAY=:99
-      - FB_COOKIES_FILE=/app/cookies/facebook_cookies.json
     volumes:
       # Mount for development (hot reload)
       - ./src:/app/src

@@ -13,7 +13,7 @@ from pydantic import BaseModel
 from typing import List, Optional
 
 from src.scrapers.fb_marketplace_scraper import search_marketplace as search_fb_marketplace
-from src.scrapers.ebay_scraper import get_sold_item_stats
+from src.scrapers.ebay_scraper import get_market_price
 from src.api.deal_calculator import filter_and_score_listings
 
 logging.basicConfig(level=logging.INFO)
@@ -49,6 +49,22 @@ class SearchResponse(BaseModel):
     listings: List[ListingResponse]
     scannedCount: int
     evaluatedCount: int
+
+
+class EbayStatsRequest(BaseModel):
+    query: str
+    nItems: int = 50
+
+
+class EbayStats(BaseModel):
+    searchTerm: str
+    sampleSize: int
+    average: float
+    rawPrices: List[float]
+
+
+class EbayStatsResponse(BaseModel):
+    stats: Optional[EbayStats]
 
 
 @app.get("/api/health")
@@ -91,10 +107,9 @@ def search_deals(request: SearchRequest):
     # Get eBay price statistics
     ebay_stats = None
     try:
-        ebay_stats = get_sold_item_stats(
+        ebay_stats = get_market_price(
             search_term=request.query,
             n_items=50,
-            headless=True
         )
     except Exception as e:
         logger.warning(f"eBay scraping failed: {e}")
@@ -227,4 +242,33 @@ def search_deals_stream(request: SearchRequest):
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "Connection": "keep-alive"}
     )
+    
+    
+@app.post("/api/ebay", response_model=EbayStatsResponse)
+def ebay_active_listings(request: EbayStatsRequest):
+    """
+    Directly call the eBay active listings API.
+    Returns average price from active listings.
+    """
+    logger.info(f"eBay test request: query={request.query}, nItems={request.nItems}")
 
+    try:
+        stats = get_market_price(
+            search_term=request.query,
+            n_items=request.nItems,
+        )
+    except Exception as e:
+        logger.error(f"eBay test scraping failed: {e}")
+        return EbayStatsResponse(stats=None)
+
+    if not stats:
+        return EbayStatsResponse(stats=None)
+
+    return EbayStatsResponse(
+        stats=EbayStats(
+            searchTerm=stats.search_term,
+            sampleSize=stats.sample_size,
+            average=stats.average,
+            rawPrices=stats.raw_prices,
+        )
+    )
