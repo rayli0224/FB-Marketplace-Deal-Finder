@@ -88,7 +88,7 @@ export default function Home() {
     const searchAPI = async () => {
       try {
         setError(null);
-        const response = await fetch(`${API_URL}/api/search`, {
+        const response = await fetch(`${API_URL}/api/search/stream`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -102,19 +102,43 @@ export default function Home() {
         });
 
         if (!response.ok) {
-          const errorData = await response.json().catch(() => ({ detail: "Unknown error" }));
-          throw new Error(errorData.detail || `HTTP error! status: ${response.status}`);
+          throw new Error(`HTTP error! status: ${response.status}`);
         }
 
-        const data = await response.json();
-        setScannedCount(data.scannedCount);
-        setEvaluatedCount(data.evaluatedCount);
-        setListings(data.listings);
+        // Read the SSE stream
+        const reader = response.body?.getReader();
+        const decoder = new TextDecoder();
 
-        const blob = generateCSV(data.listings);
-        setCsvBlob(blob);
+        if (!reader) {
+          throw new Error("No response body");
+        }
 
-        setAppState("done");
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          const text = decoder.decode(value);
+          const lines = text.split("\n");
+
+          for (const line of lines) {
+            if (line.startsWith("data: ")) {
+              const data = JSON.parse(line.slice(6));
+
+              if (data.type === "progress") {
+                setScannedCount(data.scannedCount);
+              } else if (data.type === "done") {
+                setScannedCount(data.scannedCount);
+                setEvaluatedCount(data.evaluatedCount);
+                setListings(data.listings);
+
+                const blob = generateCSV(data.listings);
+                setCsvBlob(blob);
+
+                setAppState("done");
+              }
+            }
+          }
+        }
       } catch (err) {
         console.error("Search error:", err);
         setError(err instanceof Error ? err.message : "Failed to search marketplace");

@@ -33,8 +33,11 @@
 - All functions should have docstrings that explain:
   1. **What** the function does (its purpose)
   2. **How** it accomplishes this (the approach or strategy)
+- **Do not assume the reader has context** - docstrings should be understandable on their own
+- Write as if the reader is encountering this function for the first time
 - Include implementation details that aren't obvious from reading the code
-- Be concise but comprehensive
+- Explain technical decisions or non-obvious patterns (e.g., "We use a queue because...")
+- Be clear and comprehensive, prioritizing understanding over brevity
 
 ### Comments
 - Remove comments that don't add value
