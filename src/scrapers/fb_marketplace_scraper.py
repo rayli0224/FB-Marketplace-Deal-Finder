@@ -283,130 +283,265 @@ class FBMarketplaceScraper:
             logger.error(f"Error during search: {e}")
             raise
     
+    def _extract_price(self, element) -> Optional[float]:
+        """
+        Extract price from a listing element.
+        
+        Tries CSS selectors to find price elements (span/div with 'price' in class, or span with '$'),
+        extracts the text, and parses it to float. Returns first valid price found or None.
+        """
+        price_selectors = [
+            "span[class*='price']",
+            "div[class*='price']",
+            "span:has-text('$')",
+        ]
+        
+        for selector in price_selectors:
+            try:
+                price_elem = element.locator(selector).first
+                if price_elem.is_visible(timeout=1000):
+                    price_text = price_elem.inner_text().strip()
+                    price = parse_price(price_text)
+                    if price:
+                        return price
+            except:
+                continue
+        
+        return None
+    
+    def _try_extract_title_by_dom_structure(self, element, price: float) -> str:
+        """
+        Try to extract title by locating price element and taking text before it.
+        
+        Uses DOM structure: finds the price element using the same selectors as _extract_price,
+        locates its position in the element's text, and returns the first non-empty line that
+        appears before the price. This leverages the fact that titles typically appear before
+        prices in Facebook Marketplace DOM structure.
+        """
+        try:
+            price_selectors = [
+                "span[class*='price']",
+                "div[class*='price']",
+                "span:has-text('$')",
+            ]
+            
+            price_elem = None
+            for selector in price_selectors:
+                try:
+                    candidate = element.locator(selector).first
+                    if candidate.is_visible(timeout=1000):
+                        price_text = candidate.inner_text().strip()
+                        parsed = parse_price(price_text)
+                        if parsed == price:
+                            price_elem = candidate
+                            break
+                except:
+                    continue
+            
+            if price_elem:
+                all_text = element.inner_text().strip()
+                price_text = price_elem.inner_text().strip()
+                price_index = all_text.find(price_text)
+                if price_index > 0:
+                    title_candidate = all_text[:price_index].strip()
+                    lines = title_candidate.split("\n")
+                    for line in lines:
+                        line = line.strip()
+                        if line:
+                            return line
+        except:
+            pass
+        
+        return ""
+    
+    def _try_extract_title_by_text_analysis(self, element) -> str:
+        """
+        Try to extract title by analyzing text lines, preferring those with letters.
+        
+        Splits element text into lines and analyzes them. First pass: returns first line
+        containing letters (keeps lines with both letters and numbers like "iPhone 13").
+        Skips lines that are only numbers/$ symbols. Second pass: if no lines with letters
+        found, returns first line that isn't a pure price format.
+        """
+        try:
+            all_lines = element.inner_text().strip().split("\n")
+            
+            for line in all_lines:
+                line = line.strip()
+                if not line:
+                    continue
+                if re.match(r'^[\$0-9.\s]+$', line):
+                    continue
+                if re.search(r'[A-Za-z]', line):
+                    return line
+            
+            for line in all_lines:
+                line = line.strip()
+                if not line:
+                    continue
+                if re.match(r'^[\$0-9.\s]+$', line):
+                    continue
+                return line
+        except:
+            pass
+        
+        return ""
+    
+    def _extract_title(self, element, price: Optional[float]) -> str:
+        """
+        Extract title from a listing element using text analysis.
+        
+        Uses text analysis as the primary method since Facebook Marketplace listings follow
+        a predictable text structure: prices first, then title, then location. Text analysis
+        skips price-only lines and returns the first line containing letters. Falls back to
+        DOM structure analysis if text analysis fails.
+        """
+        title = self._try_extract_title_by_text_analysis(element)
+        if title:
+            return title
+        
+        if price:
+            title = self._try_extract_title_by_dom_structure(element, price)
+            if title:
+                return title
+        
+        return ""
+    
+    def _extract_location(self, element) -> str:
+        """
+        Extract location from a listing element.
+        
+        Tries CSS selectors for location elements. If that fails, uses regex to find
+        location pattern "City Name, ST" (e.g., "New York, NY") in the element's text.
+        """
+        location_selectors = [
+            "span[class*='location']",
+            "div[class*='location']",
+        ]
+        
+        for selector in location_selectors:
+            try:
+                location_elem = element.locator(selector).first
+                if location_elem.is_visible(timeout=1000):
+                    location = location_elem.inner_text().strip()
+                    if location:
+                        return location
+            except:
+                continue
+        
+        try:
+            full_text = element.inner_text()
+            location_match = re.search(r'([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*,\s*[A-Z]{2})', full_text)
+            if location_match:
+                return location_match.group(1)
+        except:
+            pass
+        
+        return ""
+    
+    def _scroll_page_to_load_content(self):
+        """Scroll the page to load more listing content."""
+        scroll_attempts = 3
+        for _ in range(scroll_attempts):
+            self.page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+            random_delay(1, 2)
+    
+    def _find_listing_elements(self) -> List:
+        """
+        Find listing elements on the page using multiple CSS selectors.
+        
+        Tries selectors in order: article elements, marketplace listing test IDs,
+        and marketplace item links. Falls back to marketplace item links if no
+        elements found. Returns list of Playwright locators.
+        """
+        listing_container_selectors = [
+            "div[role='article']",
+            "div[data-testid='marketplace-listing']",
+            "a[href*='/marketplace/item/']",
+        ]
+        
+        listing_elements = []
+        for selector in listing_container_selectors:
+            try:
+                elements = self.page.locator(selector).all()
+                if elements:
+                    listing_elements = elements
+                    logger.info(f"Found {len(elements)} listings using selector: {selector}")
+                    break
+            except Exception as e:
+                logger.debug(f"Selector {selector} failed: {e}")
+                continue
+        
+        if not listing_elements:
+            logger.warning("No listing elements found with standard selectors, trying alternative approach")
+            listing_elements = self.page.locator("a[href*='/marketplace/item/']").all()
+        
+        return listing_elements
+    
+    def _extract_listing_from_element(self, element) -> Optional[Listing]:
+        """
+        Extract a single listing from a listing element.
+        
+        Extracts URL, price, title, and location from the element. Validates that
+        price is valid and title is not a price format. Returns Listing object if
+        valid, or None if extraction fails or data is invalid.
+        """
+        try:
+            url = element.get_attribute("href") or ""
+            if not url.startswith("http"):
+                url = f"https://www.facebook.com{url}" if url.startswith("/") else ""
+            
+            if not url:
+                return None
+            
+            price = self._extract_price(element)
+            
+            if not is_valid_listing_price(price):
+                return None
+            
+            title = self._extract_title(element, price)
+            
+            # Final validation: only skip if title is EXACTLY a price format (no letters)
+            if title and re.match(r'^[\$0-9.\s]+$', title):
+                logger.debug(f"Title '{title}' appears to be a price format, clearing")
+                title = ""
+            
+            location = self._extract_location(element)
+            
+            if title and price:
+                return Listing(
+                    title=title,
+                    price=price,
+                    location=location or "Unknown",
+                    url=url
+                )
+            
+            return None
+            
+        except Exception as e:
+            logger.debug(f"Error extracting listing: {e}")
+            return None
+    
     def _extract_listings(self) -> List[Listing]:
-        """Extract listings from the current page."""
+        """
+        Extract listings from the current Facebook Marketplace page.
+        
+        Scrolls the page to load more content, finds listing elements, and extracts
+        data from each element using helper functions. Returns list of successfully
+        extracted listings.
+        """
         logger.info("Extracting listings from page")
         
         listings = []
         
         try:
-            scroll_attempts = 3
-            for _ in range(scroll_attempts):
-                self.page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-                random_delay(1, 2)
-            
-            listing_container_selectors = [
-                "div[role='article']",
-                "div[data-testid='marketplace-listing']",
-                "a[href*='/marketplace/item/']",
-            ]
-            
-            listing_elements = []
-            for selector in listing_container_selectors:
-                try:
-                    elements = self.page.locator(selector).all()
-                    if elements:
-                        listing_elements = elements
-                        logger.info(f"Found {len(elements)} listings using selector: {selector}")
-                        break
-                except Exception as e:
-                    logger.debug(f"Selector {selector} failed: {e}")
-                    continue
-            
-            if not listing_elements:
-                logger.warning("No listing elements found with standard selectors, trying alternative approach")
-                listing_elements = self.page.locator("a[href*='/marketplace/item/']").all()
+            self._scroll_page_to_load_content()
+            listing_elements = self._find_listing_elements()
             
             for element in listing_elements[:50]:
-                try:
-                    url = element.get_attribute("href") or ""
-                    if not url.startswith("http"):
-                        url = f"https://www.facebook.com{url}" if url.startswith("/") else ""
-                    
-                    if not url:
-                        continue
-                    
-                    title = ""
-                    title_selectors = [
-                        "span[class*='title']",
-                        "div[class*='title']",
-                        "span:has-text('')",
-                    ]
-                    
-                    for selector in title_selectors:
-                        try:
-                            title_elem = element.locator(selector).first
-                            if title_elem.is_visible(timeout=1000):
-                                title = title_elem.inner_text().strip()
-                                if title:
-                                    break
-                        except:
-                            continue
-                    
-                    if not title:
-                        try:
-                            title = element.inner_text().strip().split("\n")[0]
-                        except:
-                            pass
-                    
-                    price = None
-                    price_selectors = [
-                        "span[class*='price']",
-                        "div[class*='price']",
-                        "span:has-text('$')",
-                    ]
-                    
-                    for selector in price_selectors:
-                        try:
-                            price_elem = element.locator(selector).first
-                            if price_elem.is_visible(timeout=1000):
-                                price_text = price_elem.inner_text().strip()
-                                price = parse_price(price_text)
-                                if price:
-                                    break
-                        except:
-                            continue
-                    
-                    if not is_valid_listing_price(price):
-                        continue
-                    
-                    location = ""
-                    location_selectors = [
-                        "span[class*='location']",
-                        "div[class*='location']",
-                    ]
-                    
-                    for selector in location_selectors:
-                        try:
-                            location_elem = element.locator(selector).first
-                            if location_elem.is_visible(timeout=1000):
-                                location = location_elem.inner_text().strip()
-                                if location:
-                                    break
-                        except:
-                            continue
-                    
-                    if not location:
-                        try:
-                            full_text = element.inner_text()
-                            location_match = re.search(r'([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*,\s*[A-Z]{2})', full_text)
-                            if location_match:
-                                location = location_match.group(1)
-                        except:
-                            pass
-                    
-                    if title and price:
-                        listing = Listing(
-                            title=title,
-                            price=price,
-                            location=location or "Unknown",
-                            url=url
-                        )
-                        listings.append(listing)
-                        
-                except Exception as e:
-                    logger.debug(f"Error extracting listing: {e}")
-                    continue
+                listing = self._extract_listing_from_element(element)
+                if listing:
+                    listings.append(listing)
             
             logger.info(f"Successfully extracted {len(listings)} listings")
             
