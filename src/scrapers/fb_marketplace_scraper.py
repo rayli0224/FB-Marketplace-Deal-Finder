@@ -522,13 +522,13 @@ class FBMarketplaceScraper:
             logger.debug(f"Error extracting listing: {e}")
             return None
     
-    def _extract_listings(self) -> List[Listing]:
+    def _extract_listings(self, on_listing_found=None) -> List[Listing]:
         """
         Extract listings from the current Facebook Marketplace page.
         
         Scrolls the page to load more content, finds listing elements, and extracts
-        data from each element using helper functions. Returns list of successfully
-        extracted listings.
+        data from each element using helper functions. Optionally calls a callback
+        each time a listing is found. Returns list of successfully extracted listings.
         """
         logger.info("Extracting listings from page")
         
@@ -542,6 +542,8 @@ class FBMarketplaceScraper:
                 listing = self._extract_listing_from_element(element)
                 if listing:
                     listings.append(listing)
+                    if on_listing_found:
+                        on_listing_found(listing, len(listings))
             
             logger.info(f"Successfully extracted {len(listings)} listings")
             
@@ -550,7 +552,7 @@ class FBMarketplaceScraper:
         
         return listings
     
-    def search_marketplace(self, query: str, zip_code: str, radius: int = 25) -> List[Listing]:
+    def search_marketplace(self, query: str, zip_code: str, radius: int = 25, on_listing_found=None) -> List[Listing]:
         """Search Facebook Marketplace for listings matching the query."""
         logger.info(f"Starting marketplace search: query='{query}', zip={zip_code}, radius={radius}mi")
         
@@ -560,7 +562,7 @@ class FBMarketplaceScraper:
             
             self._set_location(zip_code, radius)
             self._search(query)
-            listings = self._extract_listings()
+            listings = self._extract_listings(on_listing_found=on_listing_found)
             
             logger.info(f"Search completed. Found {len(listings)} listings")
             return listings
@@ -585,11 +587,12 @@ def search_marketplace(
     zip_code: str,
     radius: int = 25,
     headless: bool = None,
+    on_listing_found=None,
 ) -> List[Listing]:
     """Convenience function to search Facebook Marketplace."""
     scraper = FBMarketplaceScraper(headless=headless)
     try:
-        return scraper.search_marketplace(query, zip_code, radius)
+        return scraper.search_marketplace(query, zip_code, radius, on_listing_found=on_listing_found)
     finally:
         scraper.close()
 

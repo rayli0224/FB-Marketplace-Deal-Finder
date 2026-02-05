@@ -3,8 +3,12 @@ FastAPI application for FB Marketplace Deal Finder.
 """
 
 import logging
+import json
+import queue
+import threading
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import List, Optional
 
@@ -128,5 +132,99 @@ def search_deals(request: SearchRequest):
         listings=all_listings,
         scannedCount=scanned_count,
         evaluatedCount=len(all_listings)
+    )
+
+
+@app.post("/api/search/stream")
+def search_deals_stream(request: SearchRequest):
+    """
+    Search Facebook Marketplace and stream real-time progress to the frontend.
+    
+    This endpoint allows the frontend to show a live counter of listings found,
+    rather than waiting for the entire search to complete before showing results.
+    
+    How it works:
+    1. Frontend connects to this endpoint using EventSource (Server-Sent Events)
+    2. As each Facebook listing is found, we send a progress event: {"type": "progress", "scannedCount": N}
+    3. After all listings are found, we fetch eBay prices and calculate deal scores
+    4. Finally, we send a completion event with all results: {"type": "done", "listings": [...], ...}
+    
+    Technical note: We use a background thread for scraping because the scraper uses
+    a callback for each listing found, but SSE requires a generator. A queue bridges
+    the two: the callback pushes events to the queue, the generator reads from it.
+    """
+    event_queue = queue.Queue()
+    fb_listings = []
+    
+    def on_listing_found(listing, count):
+        fb_listings.append(listing)
+        event_queue.put({"type": "progress", "scannedCount": count})
+    
+    def scrape_worker():
+        try:
+            search_fb_marketplace(
+                query=request.query,
+                zip_code=request.zipCode,
+                radius=request.radius,
+                headless=True,
+                on_listing_found=on_listing_found
+            )
+        except Exception as e:
+            logger.warning(f"FB Marketplace scraping failed: {e}")
+        event_queue.put({"type": "scrape_done"})
+    
+    def event_generator():
+        # Phase 1: Scraping Facebook
+        yield f"data: {json.dumps({'type': 'phase', 'phase': 'scraping'})}\n\n"
+        
+        thread = threading.Thread(target=scrape_worker)
+        thread.start()
+        
+        # Stream progress events
+        while True:
+            event = event_queue.get()
+            if event["type"] == "scrape_done":
+                break
+            yield f"data: {json.dumps(event)}\n\n"
+        
+        thread.join()
+        
+        # Phase 2: Fetching eBay prices
+        yield f"data: {json.dumps({'type': 'phase', 'phase': 'ebay'})}\n\n"
+        
+        scored_listings = []
+        if fb_listings:
+            try:
+                ebay_stats = get_sold_item_stats(
+                    search_term=request.query,
+                    n_items=50,
+                    headless=True
+                )
+                
+                # Phase 3: Calculating deals
+                yield f"data: {json.dumps({'type': 'phase', 'phase': 'calculating'})}\n\n"
+                
+                if ebay_stats:
+                    scored_listings = filter_and_score_listings(
+                        fb_listings=fb_listings,
+                        ebay_stats=ebay_stats,
+                        threshold=request.threshold
+                    )
+            except Exception as e:
+                logger.warning(f"eBay scraping failed: {e}")
+        
+        # Send completion event
+        done_event = {
+            "type": "done",
+            "scannedCount": len(fb_listings),
+            "evaluatedCount": len(scored_listings),
+            "listings": scored_listings
+        }
+        yield f"data: {json.dumps(done_event)}\n\n"
+    
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "Connection": "keep-alive"}
     )
 
