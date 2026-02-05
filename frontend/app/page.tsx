@@ -54,6 +54,7 @@ export default function Home() {
   const [csvBlob, setCsvBlob] = useState<Blob | null>(null);
   const [listings, setListings] = useState<Listing[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [phase, setPhase] = useState<string>("scraping");
 
   const generateCSV = useCallback((listingsData: Listing[]) => {
     const headers = ["Treasure", "Doubloons", "Location", "Steal Score (%)", "Loot URL"];
@@ -124,7 +125,9 @@ export default function Home() {
             if (line.startsWith("data: ")) {
               const data = JSON.parse(line.slice(6));
 
-              if (data.type === "progress") {
+              if (data.type === "phase") {
+                setPhase(data.phase);
+              } else if (data.type === "progress") {
                 setScannedCount(data.scannedCount);
               } else if (data.type === "done") {
                 setScannedCount(data.scannedCount);
@@ -158,6 +161,7 @@ export default function Home() {
     setCsvBlob(null);
     setListings([]);
     setError(null);
+    setPhase("scraping");
     setAppState("loading");
   };
 
@@ -281,6 +285,26 @@ export default function Home() {
             {/* Loading State */}
             {appState === "loading" && (
               <div className="space-y-6">
+                <div className="border border-border bg-secondary p-4">
+                  <div className="flex items-center gap-3">
+                    <div className="flex gap-1">
+                      <span className="inline-block h-2 w-2 animate-bounce bg-primary" style={{ animationDelay: "0ms" }} />
+                      <span className="inline-block h-2 w-2 animate-bounce bg-primary" style={{ animationDelay: "150ms" }} />
+                      <span className="inline-block h-2 w-2 animate-bounce bg-primary" style={{ animationDelay: "300ms" }} />
+                    </div>
+                    <span className="font-mono text-sm text-muted-foreground">
+                      {phase === "scraping" && "🔍 Searching Facebook Marketplace..."}
+                      {phase === "ebay" && "📊 Fetching eBay prices..."}
+                      {phase === "calculating" && "🧮 Calculating deals..."}
+                    </span>
+                  </div>
+                  <div className="mt-3 font-mono text-xs text-muted-foreground/60">
+                    {phase === "scraping" && "Infiltrating the marketplace for treasures..."}
+                    {phase === "ebay" && "Checking market values on eBay..."}
+                    {phase === "calculating" && "Crunching numbers to find the best deals..."}
+                  </div>
+                </div>
+
                 <div className="space-y-4">
                   <LoadingBar 
                     label="Infiltrating listings" 
@@ -296,28 +320,6 @@ export default function Home() {
                     suffix="assessed" 
                     icon="*"
                   />
-                </div>
-
-                <div className="border border-border bg-secondary p-4">
-                  <div className="flex items-center gap-3">
-                    <div className="flex gap-1">
-                      <span className="inline-block h-2 w-2 animate-bounce bg-primary" style={{ animationDelay: "0ms" }} />
-                      <span className="inline-block h-2 w-2 animate-bounce bg-primary" style={{ animationDelay: "150ms" }} />
-                      <span className="inline-block h-2 w-2 animate-bounce bg-primary" style={{ animationDelay: "300ms" }} />
-                    </div>
-                    <span className="font-mono text-sm text-muted-foreground">
-                      Sneaking through the marketplace...
-                    </span>
-                  </div>
-                  <div className="mt-3 font-mono text-xs text-muted-foreground/60">
-                    <TypewriterText texts={[
-                      "bypassing security...",
-                      "cracking price databases...",
-                      "comparing market values...",
-                      "finding hidden treasures...",
-                      "preparing loot manifest...",
-                    ]} />
-                  </div>
                 </div>
               </div>
             )}

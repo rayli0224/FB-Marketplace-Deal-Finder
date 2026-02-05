@@ -174,7 +174,9 @@ def search_deals_stream(request: SearchRequest):
         event_queue.put({"type": "scrape_done"})
     
     def event_generator():
-        # Start scraping in background thread
+        # Phase 1: Scraping Facebook
+        yield f"data: {json.dumps({'type': 'phase', 'phase': 'scraping'})}\n\n"
+        
         thread = threading.Thread(target=scrape_worker)
         thread.start()
         
@@ -187,7 +189,9 @@ def search_deals_stream(request: SearchRequest):
         
         thread.join()
         
-        # Calculate deal scores
+        # Phase 2: Fetching eBay prices
+        yield f"data: {json.dumps({'type': 'phase', 'phase': 'ebay'})}\n\n"
+        
         scored_listings = []
         if fb_listings:
             try:
@@ -196,6 +200,10 @@ def search_deals_stream(request: SearchRequest):
                     n_items=50,
                     headless=True
                 )
+                
+                # Phase 3: Calculating deals
+                yield f"data: {json.dumps({'type': 'phase', 'phase': 'calculating'})}\n\n"
+                
                 if ebay_stats:
                     scored_listings = filter_and_score_listings(
                         fb_listings=fb_listings,
