@@ -15,6 +15,7 @@ from typing import List, Optional
 from src.scrapers.fb_marketplace_scraper import search_marketplace as search_fb_marketplace
 from src.scrapers.ebay_scraper import get_market_price
 from src.api.deal_calculator import filter_and_score_listings
+from src.utils.listing_processor import process_single_listing
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -152,8 +153,12 @@ def search_deals(request: SearchRequest):
 
 @app.post("/api/search/stream")
 def search_deals_stream(request: SearchRequest):
+    logger.info(f"🔍 Received search request: query='{request.query}', zip={request.zipCode}, radius={request.radius}mi")
     """
     Search Facebook Marketplace and stream real-time progress to the frontend.
+    
+    Note: This endpoint processes listings individually, making OpenAI and eBay API calls
+    for each FB listing found. This can be slow but provides accurate per-listing comparisons.
     
     This endpoint allows the frontend to show a live counter of listings found,
     rather than waiting for the entire search to complete before showing results.
@@ -204,34 +209,54 @@ def search_deals_stream(request: SearchRequest):
         
         thread.join()
         
-        # Phase 2: Fetching eBay prices
-        yield f"data: {json.dumps({'type': 'phase', 'phase': 'ebay'})}\n\n"
+        # Phase 2: Processing each listing individually
+        yield f"data: {json.dumps({'type': 'phase', 'phase': 'evaluating'})}\n\n"
         
         scored_listings = []
+        evaluated_count = 0
+        
         if fb_listings:
-            try:
-                ebay_stats = get_market_price(
-                    search_term=request.query,
-                    n_items=50,
-                )
-                
-                # Phase 3: Calculating deals
-                yield f"data: {json.dumps({'type': 'phase', 'phase': 'calculating'})}\n\n"
-                
-                if ebay_stats:
-                    scored_listings = filter_and_score_listings(
-                        fb_listings=fb_listings,
-                        ebay_stats=ebay_stats,
-                        threshold=request.threshold
+            logger.info(f"Processing {len(fb_listings)} FB listings individually...")
+            
+            for listing in fb_listings:
+                try:
+                    # Process single listing: OpenAI → eBay → deal score
+                    result = process_single_listing(
+                        listing=listing,
+                        original_query=request.query,
+                        threshold=request.threshold,
+                        n_items=50
                     )
-            except Exception as e:
-                logger.warning(f"eBay scraping failed: {e}")
+                    
+                    evaluated_count += 1
+                    
+                    # Stream progress after each listing is processed
+                    yield f"data: {json.dumps({
+                        'type': 'listing_processed',
+                        'evaluatedCount': evaluated_count,
+                        'currentListing': listing.title
+                    })}\n\n"
+                    
+                    # If listing meets threshold, add to results
+                    if result:
+                        scored_listings.append(result)
+                        logger.info(f"Found deal: {result['title']} - {result['dealScore']}% savings")
+                        
+                except Exception as e:
+                    logger.warning(f"Error processing listing '{listing.title}': {e}")
+                    evaluated_count += 1
+                    # Stream progress even if processing failed
+                    yield f"data: {json.dumps({
+                        'type': 'listing_processed',
+                        'evaluatedCount': evaluated_count,
+                        'currentListing': listing.title
+                    })}\n\n"
         
         # Send completion event
         done_event = {
             "type": "done",
             "scannedCount": len(fb_listings),
-            "evaluatedCount": len(scored_listings),
+            "evaluatedCount": evaluated_count,
             "listings": scored_listings
         }
         yield f"data: {json.dumps(done_event)}\n\n"

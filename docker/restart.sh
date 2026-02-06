@@ -17,8 +17,9 @@ echo ""
 
 # Start containers with --build to ensure dependencies are up-to-date
 # This rebuilds the image if requirements.txt or Dockerfile changed
+# --remove-orphans removes containers from previous compose file versions
 echo "Starting services..."
-docker compose up -d --build
+docker compose up -d --build --remove-orphans
 
 echo ""
 echo "✅ Containers started successfully!"

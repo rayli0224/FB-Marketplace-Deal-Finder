@@ -12,6 +12,9 @@ fastapi>=0.104.0               # FastAPI web framework
 uvicorn[standard]>=0.24.0      # ASGI server
 pydantic>=2.0.0                # Data validation
 
+# OpenAI API for query enhancement
+openai>=1.0.0
+
 # Optional: For Jupyter notebook usage
 # jupyter>=1.0.0
 # ipywidgets>=8.0.0
