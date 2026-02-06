@@ -65,6 +65,38 @@
 - This makes imports consistent, easier to refactor, and clearer about where components come from
 - Example: Use `@/components/search-form/MarketplaceSearchForm` instead of `./MarketplaceSearchForm` or `../search-form/MarketplaceSearchForm`
 
+## Component Abstraction
+
+### When to Abstract Components
+- **Extract reusable UI patterns**: If a UI element appears in multiple places or could be reused, create a component
+- **Complex UI structures**: If a section of JSX is complex (20+ lines) and has a clear purpose, consider extracting it
+- **Reusable interactions**: Components with their own state and behavior that could be used elsewhere should be abstracted
+- **UI primitives**: Common UI elements like buttons, modals, toggles, inputs should be abstracted into reusable components
+
+### Component Organization
+- Place reusable UI components in `@/components/ui/` directory
+- Place domain-specific components in appropriate subdirectories (e.g., `@/components/results/`, `@/components/search-form/`)
+- Use descriptive, self-explanatory component names that clearly indicate their purpose
+- Each component should have a single, focused responsibility
+
+### Component Structure
+- All components should have TypeScript interfaces for props
+- Include docstrings explaining what the component does and how to use it
+- Export both the component and its props interface
+- Use absolute imports (`@/components/...`) for all component imports
+
+### Examples of Good Abstraction
+- A toggle switch used in filters → `ToggleSwitch` component in `@/components/ui/`
+- An overlay panel that appears over content → `OverlayPanel` component in `@/components/ui/`
+- A form input field → `FormInputField` component (already exists)
+- A complex table row with specific logic → Extract to `TableRow` component if reused
+
+### Component Naming
+- Use semantically clear names that describe what the component does or represents
+- Avoid technical jargon or ambiguous terms (e.g., use `OverlayPanel` instead of `Modal`)
+- Names should be self-explanatory without needing to read the implementation
+- Prefer descriptive names over generic ones (e.g., `SearchResultsTable` over `Table`)
+
 ## General Principles
 
 - **Clarity over cleverness**: Write code that's easy to understand
