@@ -2,7 +2,7 @@
 
 import React from "react"
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 
 type AppState = "form" | "loading" | "done" | "error";
 
@@ -20,6 +20,16 @@ interface FormData {
   radius: number;
   threshold: number;
 }
+
+type JobInfo = {
+  id: string;
+  query: string;
+  zipCode: string;
+  status: string;
+  queuePosition?: number;
+  results?: Listing[];
+  dismissed?: boolean;
+};
 
 // Cute skull ASCII art
 function SkullIcon({ className = "" }: { className?: string }) {
@@ -55,6 +65,10 @@ export default function Home() {
   const [listings, setListings] = useState<Listing[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [phase, setPhase] = useState<string>("scraping");
+  const [currentJobId, setCurrentJobId] = useState<string | null>(null);
+  const currentJobIdRef = useRef<string | null>(null);
+  const [queueStatus, setQueueStatus] = useState<{queueSize: number; maxQueueSize: number; activeJobs: number} | null>(null);
+  const [jobs, setJobs] = useState<Map<string, JobInfo>>(new Map());
 
   const generateCSV = useCallback((listingsData: Listing[]) => {
     const headers = ["Treasure", "Doubloons", "Location", "Steal Score (%)", "Loot URL"];
@@ -82,6 +96,88 @@ export default function Home() {
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
   }, [csvBlob, formData.query]);
+
+  const fetchQueueStatus = useCallback(async () => {
+    try {
+      const response = await fetch(`${API_URL}/api/queue/status`);
+      if (!response.ok) {
+        console.error(`Failed to fetch queue status: ${response.status} ${response.statusText}`);
+        return;
+      }
+      const data = await response.json();
+      if (data && typeof data === 'object' && 'queueSize' in data) {
+        setQueueStatus(data);
+      } else {
+        console.error("Invalid queue status response:", data);
+      }
+    } catch (err) {
+      console.error("Failed to fetch queue status:", err);
+    }
+  }, []);
+
+  const loadJobs = useCallback(async () => {
+    try {
+      const response = await fetch(`${API_URL}/api/jobs?include_dismissed=false`);
+      if (response.ok) {
+        const data = await response.json();
+        const jobsMap = new Map();
+        data.jobs.forEach((job: any) => {
+          jobsMap.set(job.jobId, {
+            id: job.jobId,
+            query: job.query,
+            zipCode: job.zipCode,
+            status: job.status,
+            results: job.results || [],
+            dismissed: job.dismissed
+          });
+        });
+        setJobs(jobsMap);
+      }
+    } catch (err) {
+      console.error("Failed to load jobs:", err);
+    }
+  }, []);
+
+  const dismissJob = useCallback(async (jobId: string) => {
+    try {
+      const response = await fetch(`${API_URL}/api/jobs/${jobId}/dismiss`, {
+        method: "POST"
+      });
+      if (response.ok) {
+        setJobs((prev: Map<string, JobInfo>) => {
+          const newJobs = new Map(prev);
+          const job = newJobs.get(jobId);
+          if (job) {
+            newJobs.set(jobId, { ...job, dismissed: true });
+          }
+          return newJobs;
+        });
+        // Reload jobs to get updated list
+        loadJobs();
+      }
+    } catch (err) {
+      console.error("Failed to dismiss job:", err);
+    }
+  }, [loadJobs]);
+
+  const deleteJob = useCallback(async (jobId: string) => {
+    try {
+      const response = await fetch(`${API_URL}/api/jobs/${jobId}`, {
+        method: "DELETE"
+      });
+      if (response.ok) {
+        setJobs((prev: Map<string, JobInfo>) => {
+          const newJobs = new Map(prev);
+          newJobs.delete(jobId);
+          return newJobs;
+        });
+        // Reload jobs to get updated list
+        loadJobs();
+      }
+    } catch (err) {
+      console.error("Failed to delete job:", err);
+    }
+  }, [loadJobs]);
 
   useEffect(() => {
     if (appState !== "loading") return;
@@ -125,8 +221,48 @@ export default function Home() {
             if (line.startsWith("data: ")) {
               const data = JSON.parse(line.slice(6));
 
-              if (data.type === "phase") {
+              if (data.type === "queued") {
+                const jobId = data.jobId;
+                setCurrentJobId(jobId);
+                currentJobIdRef.current = jobId;
+                setJobs((prev: Map<string, JobInfo>) => {
+                  const newJobs = new Map(prev);
+                  newJobs.set(jobId, {
+                    id: jobId,
+                    query: formData.query,
+                    zipCode: formData.zipCode,
+                    status: "pending",
+                    queuePosition: data.queuePosition
+                  });
+                  return newJobs;
+                });
+                fetchQueueStatus();
+              } else if (data.type === "waiting") {
+                const jobId = currentJobIdRef.current;
+                if (jobId) {
+                  setJobs((prev: Map<string, JobInfo>) => {
+                    const newJobs = new Map(prev);
+                    const job = newJobs.get(jobId);
+                    if (job) {
+                      newJobs.set(jobId, { ...job, queuePosition: data.queuePosition });
+                    }
+                    return newJobs;
+                  });
+                }
+                fetchQueueStatus();
+              } else if (data.type === "phase") {
                 setPhase(data.phase);
+                const jobId = currentJobIdRef.current;
+                if (jobId) {
+                  setJobs((prev: Map<string, JobInfo>) => {
+                    const newJobs = new Map(prev);
+                    const job = newJobs.get(jobId);
+                    if (job) {
+                      newJobs.set(jobId, { ...job, status: "processing" });
+                    }
+                    return newJobs;
+                  });
+                }
               } else if (data.type === "progress") {
                 setScannedCount(data.scannedCount);
               } else if (data.type === "done") {
@@ -137,7 +273,39 @@ export default function Home() {
                 const blob = generateCSV(data.listings);
                 setCsvBlob(blob);
 
+                const jobId = currentJobIdRef.current;
+                if (jobId) {
+                  setJobs((prev: Map<string, JobInfo>) => {
+                    const newJobs = new Map(prev);
+                    const job = newJobs.get(jobId);
+                    if (job) {
+                      newJobs.set(jobId, {
+                        ...job,
+                        status: "completed",
+                        results: data.listings
+                      });
+                    }
+                    return newJobs;
+                  });
+                }
+
                 setAppState("done");
+                fetchQueueStatus();
+              } else if (data.type === "error") {
+                setError(data.message);
+                const jobId = currentJobIdRef.current;
+                if (jobId) {
+                  setJobs((prev: Map<string, JobInfo>) => {
+                    const newJobs = new Map(prev);
+                    const job = newJobs.get(jobId);
+                    if (job) {
+                      newJobs.set(jobId, { ...job, status: "failed" });
+                    }
+                    return newJobs;
+                  });
+                }
+                setAppState("error");
+                fetchQueueStatus();
               }
             }
           }
@@ -150,11 +318,27 @@ export default function Home() {
     };
 
     searchAPI();
-  }, [appState, formData, generateCSV]);
+  }, [appState, formData, generateCSV, fetchQueueStatus]);
+
+  // Load jobs from database on mount
+  useEffect(() => {
+    loadJobs();
+  }, [loadJobs]);
+
+  // Poll queue status periodically when there are active jobs
+  useEffect(() => {
+    if (jobs.size > 0 || (queueStatus && queueStatus.queueSize > 0)) {
+      const interval = setInterval(() => {
+        fetchQueueStatus();
+        loadJobs(); // Also refresh jobs list
+      }, 2000); // Poll every 2 seconds
+      return () => clearInterval(interval);
+    }
+  }, [jobs.size, queueStatus, fetchQueueStatus, loadJobs]);
 
   // Removed auto-download - now showing results in UI instead
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleBeginHeist = async (e: React.FormEvent) => {
     e.preventDefault();
     setScannedCount(0);
     setEvaluatedCount(0);
@@ -163,6 +347,71 @@ export default function Home() {
     setError(null);
     setPhase("scraping");
     setAppState("loading");
+    // The streaming logic in useEffect will handle the rest
+  };
+
+  const handleAddToQueue = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      setError(null);
+      const response = await fetch(`${API_URL}/api/search/stream`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          query: formData.query,
+          zipCode: formData.zipCode,
+          radius: formData.radius,
+          threshold: formData.threshold,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      // Read just the initial queued event to get job ID
+      const reader = response.body?.getReader();
+      const decoder = new TextDecoder();
+
+      if (!reader) {
+        throw new Error("No response body");
+      }
+
+      // Read first event to get job ID, then close the stream
+      const { done, value } = await reader.read();
+      if (!done && value) {
+        const text = decoder.decode(value);
+        const lines = text.split("\n");
+        for (const line of lines) {
+          if (line.startsWith("data: ")) {
+            const data = JSON.parse(line.slice(6));
+            if (data.type === "queued") {
+              const jobId = data.jobId;
+              setJobs((prev: Map<string, JobInfo>) => {
+                const newJobs = new Map(prev);
+                newJobs.set(jobId, {
+                  id: jobId,
+                  query: formData.query,
+                  zipCode: formData.zipCode,
+                  status: "pending",
+                  queuePosition: data.queuePosition
+                });
+                return newJobs;
+              });
+              fetchQueueStatus();
+              // Close the reader - we don't need to stream for queue mode
+              reader.cancel();
+              break;
+            }
+          }
+        }
+      }
+    } catch (err) {
+      console.error("Failed to add job to queue:", err);
+      setError(err instanceof Error ? err.message : "Failed to add job to queue");
+    }
   };
 
   const handleReset = () => {
@@ -172,6 +421,8 @@ export default function Home() {
     setCsvBlob(null);
     setListings([]);
     setError(null);
+    setCurrentJobId(null);
+    setPhase("scraping");
   };
 
   return (
@@ -202,6 +453,139 @@ export default function Home() {
           </div>
         </header>
 
+        {/* Queue Display */}
+        {Array.from(jobs.values()).some(job => !job.dismissed) || (queueStatus && queueStatus.queueSize > 0) ? (
+          <div className="mb-6 border-2 border-border bg-card p-4">
+            <div className="mb-3 flex items-center justify-between">
+              <h2 className="font-mono text-sm font-bold text-foreground">
+                <span className="text-primary">{">"}</span> HEIST QUEUE
+              </h2>
+              {queueStatus && (
+                <span className="font-mono text-xs text-muted-foreground">
+                  {queueStatus.queueSize}/{queueStatus.maxQueueSize} queued
+                </span>
+              )}
+            </div>
+            <div className="space-y-4">
+              {Array.from(jobs.values())
+                .filter((job): job is JobInfo => !job.dismissed)
+                .map((job: JobInfo) => (
+                <div key={job.id} className="space-y-2">
+                  <div
+                    className={`flex items-center justify-between border px-3 py-2 font-mono text-xs ${
+                      job.status === "processing"
+                        ? "border-primary bg-primary/10"
+                        : job.status === "completed"
+                        ? "border-green-500/50 bg-green-500/5"
+                        : job.status === "failed"
+                        ? "border-destructive/50 bg-destructive/5"
+                        : "border-border bg-secondary"
+                    }`}
+                  >
+                    <div className="flex items-center gap-3">
+                      <span className="text-muted-foreground">
+                        {job.status === "processing" && "⚡"}
+                        {job.status === "pending" && "⏳"}
+                        {job.status === "completed" && "✓"}
+                        {job.status === "failed" && "✗"}
+                      </span>
+                      <span className="text-foreground">
+                        {job.query} @ {job.zipCode}
+                        {job.status === "completed" && job.results && (
+                          <span className="ml-2 text-muted-foreground">
+                            ({job.results.length} results)
+                          </span>
+                        )}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      {job.queuePosition && job.status === "pending" && (
+                        <span className="text-muted-foreground">#{job.queuePosition}</span>
+                      )}
+                      {job.status === "completed" && (
+                        <button
+                          onClick={() => deleteJob(job.id)}
+                          className="border border-border bg-secondary px-2 py-1 text-xs uppercase text-muted-foreground transition-all hover:bg-destructive/10 hover:text-destructive"
+                        >
+                          Delete
+                        </button>
+                      )}
+                      <span
+                        className={`uppercase ${
+                          job.status === "processing"
+                            ? "text-primary font-bold"
+                            : job.status === "completed"
+                            ? "text-green-500"
+                            : job.status === "failed"
+                            ? "text-destructive"
+                            : "text-muted-foreground"
+                        }`}
+                      >
+                        {job.status}
+                      </span>
+                    </div>
+                  </div>
+                  {/* Show results for completed jobs */}
+                  {job.status === "completed" && job.results && job.results.length > 0 && (
+                    <div className="ml-4 border-l-2 border-green-500/30 pl-4">
+                      <div className="max-h-[40vh] overflow-auto border border-border bg-secondary">
+                        <table className="w-full border-collapse font-mono text-xs">
+                          <thead className="sticky top-0 bg-secondary">
+                            <tr className="border-b border-border text-left">
+                              <th className="px-2 py-1 text-muted-foreground">TITLE</th>
+                              <th className="px-2 py-1 text-muted-foreground">PRICE</th>
+                              <th className="px-2 py-1 text-muted-foreground">LOCATION</th>
+                              <th className="px-2 py-1 text-muted-foreground">DEAL %</th>
+                              <th className="px-2 py-1 text-muted-foreground">LINK</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {job.results.map((listing: Listing, index: number) => (
+                              <tr 
+                                key={index} 
+                                className="border-b border-border/50 hover:bg-secondary/50 transition-colors"
+                              >
+                                <td className="px-2 py-1 max-w-[200px] truncate" title={listing.title}>
+                                  {listing.title}
+                                </td>
+                                <td className="px-2 py-1 text-primary font-bold">
+                                  ${listing.price.toFixed(2)}
+                                </td>
+                                <td className="px-2 py-1 text-muted-foreground max-w-[100px] truncate" title={listing.location}>
+                                  {listing.location}
+                                </td>
+                                <td className="px-2 py-1">
+                                  {listing.dealScore > 0 ? (
+                                    <span className={`font-bold ${listing.dealScore >= 20 ? 'text-green-500' : listing.dealScore >= 10 ? 'text-accent' : 'text-muted-foreground'}`}>
+                                      {listing.dealScore}%
+                                    </span>
+                                  ) : (
+                                    <span className="text-muted-foreground/50">--</span>
+                                  )}
+                                </td>
+                                <td className="px-2 py-1">
+                                  <a 
+                                    href={listing.url} 
+                                    target="_blank" 
+                                    rel="noopener noreferrer"
+                                    className="text-primary hover:underline"
+                                  >
+                                    VIEW →
+                                  </a>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : null}
+
         {/* Main Card */}
         <div className="border-2 border-border bg-card shadow-[4px_4px_0_0] shadow-primary/20">
           {/* Terminal Header */}
@@ -214,8 +598,8 @@ export default function Home() {
 
           <div className="p-6">
             {/* Search Form */}
-            {appState === "form" && (
-              <form onSubmit={handleSubmit} className="space-y-5">
+            {appState !== "done" && (
+              <form className="space-y-5">
                 <div className="mb-4 font-mono text-xs text-muted-foreground">
                   <span className="text-primary">{">"}</span> Enter target parameters, matey...
                 </div>
@@ -226,7 +610,7 @@ export default function Home() {
                   type="text"
                   placeholder="e.g. iPhone 13 Pro"
                   value={formData.query}
-                  onChange={(v) => setFormData((p) => ({ ...p, query: v }))}
+                  onChange={(v) => setFormData((p: FormData) => ({ ...p, query: v }))}
                   required
                   icon={<TreasureIcon className="text-accent" />}
                 />
@@ -237,7 +621,7 @@ export default function Home() {
                   type="text"
                   placeholder="e.g. 10001"
                   value={formData.zipCode}
-                  onChange={(v) => setFormData((p) => ({ ...p, zipCode: v }))}
+                  onChange={(v) => setFormData((p: FormData) => ({ ...p, zipCode: v }))}
                   pattern="[0-9]{5}"
                   required
                   icon={<span className="text-accent">@</span>}
@@ -250,7 +634,7 @@ export default function Home() {
                     type="number"
                     placeholder="25"
                     value={formData.radius}
-                    onChange={(v) => setFormData((p) => ({ ...p, radius: Number(v) }))}
+                    onChange={(v) => setFormData((p: FormData) => ({ ...p, radius: Number(v) }))}
                     min={1}
                     max={500}
                     required
@@ -263,7 +647,7 @@ export default function Home() {
                     type="number"
                     placeholder="20"
                     value={formData.threshold}
-                    onChange={(v) => setFormData((p) => ({ ...p, threshold: Number(v) }))}
+                    onChange={(v) => setFormData((p: FormData) => ({ ...p, threshold: Number(v) }))}
                     min={1}
                     max={90}
                     required
@@ -271,14 +655,26 @@ export default function Home() {
                   />
                 </div>
 
-                <button
-                  type="submit"
-                  className="group mt-2 w-full border-2 border-primary bg-primary px-4 py-3 font-mono text-sm font-bold uppercase tracking-wide text-primary-foreground transition-all hover:bg-transparent hover:text-primary"
-                >
-                  <span className="inline-block transition-transform group-hover:translate-x-1">
-                    {">>>"} BEGIN HEIST {"<<<"}
-                  </span>
-                </button>
+                <div className="mt-2 grid grid-cols-2 gap-3">
+                  <button
+                    type="button"
+                    onClick={handleBeginHeist}
+                    className="group border-2 border-primary bg-primary px-4 py-3 font-mono text-sm font-bold uppercase tracking-wide text-primary-foreground transition-all hover:bg-transparent hover:text-primary"
+                  >
+                    <span className="inline-block transition-transform group-hover:translate-x-1">
+                      {">>>"} BEGIN HEIST {"<<<"}
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleAddToQueue}
+                    className="group border-2 border-accent bg-accent px-4 py-3 font-mono text-sm font-bold uppercase tracking-wide text-accent-foreground transition-all hover:bg-transparent hover:text-accent"
+                  >
+                    <span className="inline-block transition-transform group-hover:translate-x-1">
+                      {"+++"} ADD TO QUEUE {"+++"}
+                    </span>
+                  </button>
+                </div>
               </form>
             )}
 
@@ -369,7 +765,7 @@ export default function Home() {
                         </tr>
                       </thead>
                       <tbody>
-                        {listings.map((listing, index) => (
+                        {listings.map((listing: Listing, index: number) => (
                           <tr 
                             key={index} 
                             className="border-b border-border/50 hover:bg-secondary/50 transition-colors"
@@ -494,7 +890,7 @@ function FormField({
           type={type}
           placeholder={placeholder}
           value={value}
-          onChange={(e) => onChange(e.target.value)}
+          onChange={(e: React.ChangeEvent<HTMLInputElement>) => onChange(e.target.value)}
           required={required}
           pattern={pattern}
           min={min}
@@ -554,7 +950,7 @@ function TypewriterText({ texts }: { texts: string[] }) {
 
   useEffect(() => {
     const interval = setInterval(() => {
-      setCurrentIndex((prev) => (prev + 1) % texts.length);
+      setCurrentIndex((prev: number) => (prev + 1) % texts.length);
     }, 1500);
     return () => clearInterval(interval);
   }, [texts.length]);

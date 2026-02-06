@@ -1,6 +1,8 @@
 # Sensitive files - NEVER commit
 cookies/*.json
 .env
+*.db
+heist_results.db
 
 # Python
 __pycache__/
