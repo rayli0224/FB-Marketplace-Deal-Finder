@@ -126,7 +126,6 @@ class FBMarketplaceScraper:
                 "--disable-dev-shm-usage",
                 "--no-sandbox",
                 "--window-size=1920,1080",
-                "--disable-features=Autofill,AutofillServerCommunication",
             ]
         )
         
