@@ -34,7 +34,7 @@ class SearchRequest(BaseModel):
     query: str
     zipCode: str
     radius: int = 25
-    threshold: float = 20.0
+    threshold: float = 80.0
 
 
 class ListingResponse(BaseModel):
@@ -114,7 +114,7 @@ def search_deals(request: SearchRequest):
     except Exception as e:
         logger.warning(f"eBay scraping failed: {e}")
     
-    # If eBay stats available, filter by deal score
+    # If eBay stats available, filter listings by price threshold and score them
     if ebay_stats:
         scored_listings = filter_and_score_listings(
             fb_listings=fb_listings,
@@ -122,7 +122,7 @@ def search_deals(request: SearchRequest):
             threshold=request.threshold
         )
         evaluated_count = len(scored_listings)
-        logger.info(f"Found {evaluated_count} deals above {request.threshold}% threshold")
+        logger.info(f"Found {evaluated_count} deals at or below {request.threshold}% of eBay average price")
         
         return SearchResponse(
             listings=[ListingResponse(**listing) for listing in scored_listings],
