@@ -57,6 +57,14 @@
 - It's acceptable to trade some performance for more robust, understandable code
 - Document significant performance trade-offs when they're made
 
+## Import Paths
+
+### Absolute Imports Only
+- **Always use absolute import paths** with the `@/` prefix
+- Never use relative imports (e.g., `./Component`, `../Component`)
+- This makes imports consistent, easier to refactor, and clearer about where components come from
+- Example: Use `@/components/search-form/MarketplaceSearchForm` instead of `./MarketplaceSearchForm` or `../search-form/MarketplaceSearchForm`
+
 ## General Principles
 
 - **Clarity over cleverness**: Write code that's easy to understand
