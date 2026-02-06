@@ -35,6 +35,7 @@ export default function Home() {
   const [listings, setListings] = useState<Listing[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [phase, setPhase] = useState<SearchPhase>("scraping");
+  const [threshold, setThreshold] = useState<number>(0);
 
   /**
    * Generates a CSV blob from listings data with pirate-themed column headers.
@@ -93,10 +94,11 @@ export default function Home() {
    * Handles SSE completion events by setting final results and transitioning to done state.
    * Processes the final listings data, generates CSV blob, and updates all final counts.
    */
-  const handleCompletion = useCallback((data: { scannedCount: number; evaluatedCount: number; listings: Listing[] }) => {
+  const handleCompletion = useCallback((data: { scannedCount: number; evaluatedCount: number; listings: Listing[]; threshold?: number }) => {
     setScannedCount(data.scannedCount);
     setEvaluatedCount(data.evaluatedCount);
     setListings(data.listings);
+    setThreshold(data.threshold || 0);
 
     const blob = generateCSV(data.listings);
     setCsvBlob(blob);
@@ -247,6 +249,7 @@ export default function Home() {
               <SearchResultsTable
                 listings={listings}
                 scannedCount={scannedCount}
+                threshold={threshold}
                 onDownloadCSV={downloadCSV}
                 onReset={handleReset}
               />

@@ -14,7 +14,7 @@ from typing import List, Optional
 
 from src.scrapers.fb_marketplace_scraper import search_marketplace as search_fb_marketplace
 from src.scrapers.ebay_scraper import get_market_price
-from src.api.deal_calculator import filter_and_score_listings
+from src.api.deal_calculator import score_listings
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -119,7 +119,7 @@ def search_deals(request: SearchRequest):
     # If eBay stats available, filter listings by price threshold and score them
     if ebay_stats:
         logger.info("▶️  Step 4: Calculating deal scores")
-        scored_listings = filter_and_score_listings(
+        scored_listings = score_listings(
             fb_listings=fb_listings,
             ebay_stats=ebay_stats,
             threshold=request.threshold
@@ -236,7 +236,7 @@ def search_deals_stream(request: SearchRequest):
                     logger.info("▶️  Step 4: Calculating deal scores")
                     yield f"data: {json.dumps({'type': 'phase', 'phase': 'calculating'})}\n\n"
                     
-                    scored_listings = filter_and_score_listings(
+                    scored_listings = score_listings(
                         fb_listings=fb_listings,
                         ebay_stats=ebay_stats,
                         threshold=request.threshold
@@ -255,7 +255,8 @@ def search_deals_stream(request: SearchRequest):
             "type": "done",
             "scannedCount": len(fb_listings),
             "evaluatedCount": len(scored_listings),
-            "listings": scored_listings
+            "listings": scored_listings,
+            "threshold": request.threshold
         }
         yield f"data: {json.dumps(done_event)}\n\n"
     

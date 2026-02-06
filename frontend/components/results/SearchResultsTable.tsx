@@ -1,5 +1,8 @@
 "use client";
 
+import { useState } from "react";
+import { ToggleSwitch } from "@/components/ui/ToggleSwitch";
+
 export interface Listing {
   title: string;
   price: number;
@@ -11,35 +14,53 @@ export interface Listing {
 export interface SearchResultsTableProps {
   listings: Listing[];
   scannedCount: number;
+  threshold: number;
   onDownloadCSV: () => void;
   onReset: () => void;
 }
 
 /**
- * Determines the color class for a deal score based on its value.
- * Returns green for excellent deals (20%+), accent for good deals (10-19%), and muted for others.
+ * Determines if a listing is a good deal based on threshold comparison.
+ * A good deal has a dealScore > 0 and dealScore >= threshold.
  */
-function getDealScoreColorClass(dealScore: number): string {
-  if (dealScore >= 20) return "text-green-500";
-  if (dealScore >= 10) return "text-accent";
-  return "text-muted-foreground";
+function isGoodDeal(dealScore: number, threshold: number): boolean {
+  return dealScore > 0 && dealScore >= threshold;
+}
+
+/**
+ * Determines if a listing is a bad deal based on threshold comparison.
+ * A bad deal has a dealScore > 0 and dealScore < threshold.
+ */
+function isBadDeal(dealScore: number, threshold: number): boolean {
+  return dealScore > 0 && dealScore < threshold;
 }
 
 /**
  * Results table component displaying search results in a scrollable table.
  * Shows listing details including title, price, location, deal score, and link.
- * Includes header with result counts and action buttons for CSV export and new search.
+ * Includes header with result counts, filter toggle, and action buttons for CSV export and new search.
+ * Color-codes listings based on threshold: green for good deals, red for bad deals.
  */
-export function SearchResultsTable({ listings, scannedCount, onDownloadCSV, onReset }: SearchResultsTableProps) {
+export function SearchResultsTable({ listings, scannedCount, threshold, onDownloadCSV, onReset }: SearchResultsTableProps) {
+  const [showBadDeals, setShowBadDeals] = useState<boolean>(true);
+  const [isFiltersExpanded, setIsFiltersExpanded] = useState<boolean>(false);
+
+  const filteredListings = listings.filter((listing) => {
+    if (showBadDeals) return true;
+    return !isBadDeal(listing.dealScore, threshold);
+  });
+
+  const filteredCount = filteredListings.length;
+
   return (
-    <div className="space-y-6">
+    <div className="space-y-3">
       <div className="flex items-center justify-between">
         <div>
           <h2 className="font-mono text-lg font-bold text-foreground">
             HEIST COMPLETE!
           </h2>
           <p className="font-mono text-xs text-muted-foreground">
-            Found {listings.length} treasures from {scannedCount} scanned
+            Showing {filteredCount} of {listings.length} treasures from {scannedCount} scanned
           </p>
         </div>
         <div className="flex gap-2">
@@ -60,6 +81,31 @@ export function SearchResultsTable({ listings, scannedCount, onDownloadCSV, onRe
         </div>
       </div>
 
+      {/* Filters Section */}
+      <div className="border-2 border-border bg-secondary">
+        <button
+          type="button"
+          onClick={() => setIsFiltersExpanded(!isFiltersExpanded)}
+          className="w-full flex items-center justify-between px-4 py-2 border-b border-border hover:bg-secondary/80 transition-colors"
+        >
+          <h3 className="font-mono text-xs font-bold text-muted-foreground">
+            <span className="text-primary">{"$"}</span> FILTERS
+          </h3>
+          <span className="font-mono text-xs text-primary transition-transform" style={{ transform: isFiltersExpanded ? 'rotate(180deg)' : 'rotate(0deg)' }}>
+            ▼
+          </span>
+        </button>
+        {isFiltersExpanded && (
+          <div className="p-4">
+            <ToggleSwitch
+              checked={showBadDeals}
+              onChange={setShowBadDeals}
+              label="Show bad deals"
+            />
+          </div>
+        )}
+      </div>
+
       {listings.length > 0 ? (
         <div className="max-h-[60vh] overflow-auto border border-border">
           <table className="w-full border-collapse font-mono text-sm">
@@ -73,10 +119,19 @@ export function SearchResultsTable({ listings, scannedCount, onDownloadCSV, onRe
               </tr>
             </thead>
             <tbody>
-              {listings.map((listing, index) => (
+              {filteredListings.map((listing, index) => {
+                const goodDeal = isGoodDeal(listing.dealScore, threshold);
+                const badDeal = isBadDeal(listing.dealScore, threshold);
+                const rowBgClass = goodDeal 
+                  ? "bg-green-500/10 hover:bg-green-500/20" 
+                  : badDeal 
+                  ? "bg-red-500/10 hover:bg-red-500/20"
+                  : "hover:bg-secondary/50";
+                
+                return (
                 <tr 
                   key={index} 
-                  className="border-b border-border/50 hover:bg-secondary/50 transition-colors"
+                  className={`border-b border-border/50 transition-colors ${rowBgClass}`}
                 >
                   <td className="px-3 py-2 max-w-[300px] truncate" title={listing.title}>
                     {listing.title}
@@ -89,7 +144,7 @@ export function SearchResultsTable({ listings, scannedCount, onDownloadCSV, onRe
                   </td>
                   <td className="px-3 py-2">
                     {listing.dealScore > 0 ? (
-                      <span className={`font-bold ${getDealScoreColorClass(listing.dealScore)}`}>
+                      <span className={`font-bold ${goodDeal ? 'text-green-500' : badDeal ? 'text-red-500' : 'text-muted-foreground'}`}>
                         {listing.dealScore}%
                       </span>
                     ) : (
@@ -107,7 +162,8 @@ export function SearchResultsTable({ listings, scannedCount, onDownloadCSV, onRe
                     </a>
                   </td>
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
           </table>
         </div>
