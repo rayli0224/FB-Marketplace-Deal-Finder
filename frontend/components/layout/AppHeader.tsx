@@ -9,6 +9,20 @@ export interface AppHeaderProps {
 }
 
 /**
+ * Returns the status message text for a given app state.
+ * Provides pirate-themed status messages that match the current application state.
+ */
+function getStatusMessage(appState: AppState): string {
+  const messages = {
+    form: "AWAITING ORDERS",
+    loading: "RAIDING...",
+    done: "TREASURE ACQUIRED",
+    error: "MISSION FAILED",
+  };
+  return messages[appState];
+}
+
+/**
  * Header component displaying the application title, icon, and current status.
  * Shows pirate-themed branding with a status badge that reflects the current app state.
  */
@@ -27,10 +41,7 @@ export function AppHeader({ appState }: AppHeaderProps) {
       <div className="mt-4 inline-block border border-border bg-card px-3 py-1">
         <span className="font-mono text-xs text-accent">STATUS: </span>
         <span className="font-mono text-xs text-primary">
-          {appState === "form" && "AWAITING ORDERS"}
-          {appState === "loading" && "RAIDING..."}
-          {appState === "done" && "TREASURE ACQUIRED"}
-          {appState === "error" && "MISSION FAILED"}
+          {getStatusMessage(appState)}
         </span>
       </div>
     </header>

@@ -11,11 +11,35 @@ export interface SearchLoadingStateProps {
 }
 
 /**
+ * Returns the main message and description for a given search phase.
+ * Provides pirate-themed messaging that matches the current phase of the search process.
+ */
+function getPhaseMessages(phase: SearchPhase): { main: string; description: string } {
+  const messages = {
+    scraping: {
+      main: "🔍 Searching Facebook Marketplace...",
+      description: "Infiltrating the marketplace for treasures...",
+    },
+    ebay: {
+      main: "📊 Fetching eBay prices...",
+      description: "Checking market values on eBay...",
+    },
+    calculating: {
+      main: "🧮 Calculating deals...",
+      description: "Crunching numbers to find the best deals...",
+    },
+  };
+  return messages[phase];
+}
+
+/**
  * Loading state component displaying progress during marketplace search.
  * Shows current phase with animated dots, phase description, and progress bars
  * for scanned and evaluated listings.
  */
 export function SearchLoadingState({ phase, scannedCount, evaluatedCount }: SearchLoadingStateProps) {
+  const phaseMessages = getPhaseMessages(phase);
+
   return (
     <div className="space-y-6">
       <div className="border border-border bg-secondary p-4">
@@ -26,15 +50,11 @@ export function SearchLoadingState({ phase, scannedCount, evaluatedCount }: Sear
             <span className="inline-block h-2 w-2 animate-bounce bg-primary" style={{ animationDelay: "300ms" }} />
           </div>
           <span className="font-mono text-sm text-muted-foreground">
-            {phase === "scraping" && "🔍 Searching Facebook Marketplace..."}
-            {phase === "ebay" && "📊 Fetching eBay prices..."}
-            {phase === "calculating" && "🧮 Calculating deals..."}
+            {phaseMessages.main}
           </span>
         </div>
         <div className="mt-3 font-mono text-xs text-muted-foreground/60">
-          {phase === "scraping" && "Infiltrating the marketplace for treasures..."}
-          {phase === "ebay" && "Checking market values on eBay..."}
-          {phase === "calculating" && "Crunching numbers to find the best deals..."}
+          {phaseMessages.description}
         </div>
       </div>
 

@@ -19,10 +19,6 @@ export interface SearchResultsTableProps {
  * Determines the color class for a deal score based on its value.
  * Returns green for excellent deals (20%+), accent for good deals (10-19%), and muted for others.
  */
-/**
- * Determines the color class for a deal score based on its value.
- * Returns green for excellent deals (20%+), accent for good deals (10-19%), and muted for others.
- */
 function getDealScoreColorClass(dealScore: number): string {
   if (dealScore >= 20) return "text-green-500";
   if (dealScore >= 10) return "text-accent";

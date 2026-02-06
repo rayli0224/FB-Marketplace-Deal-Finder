@@ -174,7 +174,7 @@ export default function Home() {
       setError(err instanceof Error ? err.message : "Failed to search marketplace");
       setAppState("error");
     }
-  }, [formData, parseSSEStream, setError, setAppState]);
+  }, [formData, parseSSEStream]);
 
   useEffect(() => {
     if (appState !== "loading") return;
