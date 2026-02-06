@@ -276,13 +276,14 @@ export default function Home() {
                     label="STEAL_THRESHOLD"
                     id="threshold"
                     type="number"
-                    placeholder="20"
+                    placeholder="80"
                     register={register}
                     min={0}
                     max={100}
                     required
                     error={errors.threshold?.message}
                     suffix="%"
+                    tooltip="Max % of eBay average price. Example: 80% = only show listings priced at 80% of eBay market value or less"
                   />
                 </div>
 
@@ -487,6 +488,7 @@ interface FormFieldProps {
   icon?: ReactNode;
   suffix?: string;
   error?: string;
+  tooltip?: string;
   register?: (name: keyof ValidationFormData) => {
     name: string;
     onChange: (e: ChangeEvent<HTMLInputElement>) => void;
@@ -515,6 +517,7 @@ function FormField({
   icon,
   suffix,
   error,
+  tooltip,
   register,
 }: FormFieldProps) {
   return (
@@ -522,6 +525,27 @@ function FormField({
       <label htmlFor={id} className="mb-2 flex items-center gap-2 font-mono text-xs text-muted-foreground">
         <span className="text-primary">$</span>
         {label}
+        {tooltip && (
+          <div className="group relative ml-1 inline-flex cursor-help">
+            <span className="flex h-4 w-4 items-center justify-center rounded-full border border-accent/40 bg-accent/10 text-[10px] font-bold text-accent transition-all hover:border-accent hover:bg-accent/20 hover:scale-110">
+              i
+            </span>
+            <div className="invisible absolute bottom-full left-1/2 mb-3 w-72 -translate-x-1/2 rounded-lg border-2 border-accent/30 bg-gradient-to-br from-card to-secondary/80 px-4 py-3 font-mono text-xs text-foreground shadow-[0_4px_12px_rgba(0,0,0,0.15)] backdrop-blur-sm group-hover:visible z-20">
+              <div className="absolute -bottom-1 left-1/2 h-2 w-2 -translate-x-1/2 rotate-45 border-r-2 border-b-2 border-accent/30 bg-gradient-to-br from-card to-secondary/80"></div>
+              <div className="relative">
+                <span className="text-primary font-bold">{"//"}</span>{" "}
+                <span className="text-foreground">{tooltip.split(". Example:")[0]}.</span>
+                {tooltip.includes("Example:") && (
+                  <>
+                    {" "}
+                    <span className="text-accent font-semibold">Example:</span>{" "}
+                    <span className="text-foreground">{tooltip.split("Example:")[1]}</span>
+                  </>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
         {icon && <span className="ml-auto">{icon}</span>}
       </label>
       <div className="relative">
