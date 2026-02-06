@@ -210,10 +210,9 @@ def search_deals_stream(request: SearchRequest):
         scored_listings = []
         if fb_listings:
             try:
-                ebay_stats = get_sold_item_stats(
+                ebay_stats = get_market_price(
                     search_term=request.query,
                     n_items=50,
-                    headless=True
                 )
                 
                 # Phase 3: Calculating deals
