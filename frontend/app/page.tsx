@@ -1,8 +1,10 @@
 "use client";
 
-import React from "react"
-
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, type FormEvent, type ReactNode, type Ref, type ChangeEvent, type FocusEvent } from "react";
+import { useForm } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { formSchema, type FormData as ValidationFormData } from "@/lib/validation";
+import { SkullIcon, TreasureIcon } from "@/lib/icons";
 
 type AppState = "form" | "loading" | "done" | "error";
 
@@ -14,41 +16,21 @@ interface Listing {
   dealScore: number;
 }
 
-interface FormData {
-  query: string;
-  zipCode: string;
-  radius: number;
-  threshold: number;
-}
-
-// Cute skull ASCII art
-function SkullIcon({ className = "" }: { className?: string }) {
-  return (
-    <span className={`inline-block ${className}`} aria-hidden="true">
-      {"(^.^)"}
-    </span>
-  );
-}
-
-// Treasure chest ASCII
-function TreasureIcon({ className = "" }: { className?: string }) {
-  return (
-    <span className={`inline-block ${className}`} aria-hidden="true">
-      {"[*]"}
-    </span>
-  );
-}
-
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
 export default function Home() {
   const [appState, setAppState] = useState<AppState>("form");
-  const [formData, setFormData] = useState<FormData>({
-    query: "",
-    zipCode: "",
-    radius: 25,
-    threshold: 20,
+  const {
+    register,
+    handleSubmit: handleFormSubmit,
+    watch,
+    formState: { errors, isValid },
+  } = useForm<ValidationFormData>({
+    resolver: zodResolver(formSchema),
+    defaultValues: { query: "", zipCode: "", radius: "", threshold: "" },
+    mode: "onChange",
   });
+  const formData = watch();
   const [scannedCount, setScannedCount] = useState(0);
   const [evaluatedCount, setEvaluatedCount] = useState(0);
   const [csvBlob, setCsvBlob] = useState<Blob | null>(null);
@@ -56,6 +38,11 @@ export default function Home() {
   const [error, setError] = useState<string | null>(null);
   const [phase, setPhase] = useState<string>("scraping");
 
+  /**
+   * Generates a CSV blob from listings data with pirate-themed column headers.
+   * Formats each listing row with quoted strings for text fields and formatted numbers.
+   * Returns a Blob object with CSV MIME type for download.
+   */
   const generateCSV = useCallback((listingsData: Listing[]) => {
     const headers = ["Treasure", "Doubloons", "Location", "Steal Score (%)", "Loot URL"];
     const rows = listingsData.map((item) => [
@@ -70,6 +57,11 @@ export default function Home() {
     return new Blob([csvContent], { type: "text/csv" });
   }, []);
 
+  /**
+   * Triggers browser download of the CSV file using a temporary anchor element.
+   * Creates object URL from blob, creates anchor with download attribute, programmatically clicks it,
+   * then cleans up by removing anchor and revoking object URL.
+   */
   const downloadCSV = useCallback(() => {
     if (!csvBlob) return;
 
@@ -83,79 +75,96 @@ export default function Home() {
     URL.revokeObjectURL(url);
   }, [csvBlob, formData.query]);
 
-  useEffect(() => {
-    if (appState !== "loading") return;
+  /**
+   * Parses Server-Sent Events (SSE) stream data and updates UI state accordingly.
+   * Reads chunks from the stream reader, decodes text, and processes each line.
+   * Handles three event types: phase updates (sets phase state), progress updates (sets scanned count),
+   * and completion (sets all final counts, listings, CSV blob, and transitions to done state).
+   */
+  const parseSSEStream = useCallback(
+    async (reader: ReadableStreamDefaultReader<Uint8Array>) => {
+      const decoder = new TextDecoder();
 
-    const searchAPI = async () => {
-      try {
-        setError(null);
-        const response = await fetch(`${API_URL}/api/search/stream`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            query: formData.query,
-            zipCode: formData.zipCode,
-            radius: formData.radius,
-            threshold: formData.threshold,
-          }),
-        });
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
 
-        if (!response.ok) {
-          throw new Error(`HTTP error! status: ${response.status}`);
-        }
+        const text = decoder.decode(value);
+        const lines = text.split("\n");
 
-        // Read the SSE stream
-        const reader = response.body?.getReader();
-        const decoder = new TextDecoder();
+        for (const line of lines) {
+          if (line.startsWith("data: ")) {
+            const data = JSON.parse(line.slice(6));
 
-        if (!reader) {
-          throw new Error("No response body");
-        }
+            if (data.type === "phase") {
+              setPhase(data.phase);
+            } else if (data.type === "progress") {
+              setScannedCount(data.scannedCount);
+            } else if (data.type === "done") {
+              setScannedCount(data.scannedCount);
+              setEvaluatedCount(data.evaluatedCount);
+              setListings(data.listings);
 
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
+              const blob = generateCSV(data.listings);
+              setCsvBlob(blob);
 
-          const text = decoder.decode(value);
-          const lines = text.split("\n");
-
-          for (const line of lines) {
-            if (line.startsWith("data: ")) {
-              const data = JSON.parse(line.slice(6));
-
-              if (data.type === "phase") {
-                setPhase(data.phase);
-              } else if (data.type === "progress") {
-                setScannedCount(data.scannedCount);
-              } else if (data.type === "done") {
-                setScannedCount(data.scannedCount);
-                setEvaluatedCount(data.evaluatedCount);
-                setListings(data.listings);
-
-                const blob = generateCSV(data.listings);
-                setCsvBlob(blob);
-
-                setAppState("done");
-              }
+              setAppState("done");
             }
           }
         }
-      } catch (err) {
-        console.error("Search error:", err);
-        setError(err instanceof Error ? err.message : "Failed to search marketplace");
-        setAppState("error");
       }
-    };
+    },
+    [generateCSV, setPhase, setScannedCount, setEvaluatedCount, setListings, setCsvBlob, setAppState]
+  );
 
-    searchAPI();
-  }, [appState, formData, generateCSV]);
+  /**
+   * Performs the marketplace search API call and processes the SSE response stream.
+   * Sends form data as JSON POST request, reads the streaming response using ReadableStream,
+   * and delegates stream parsing to parseSSEStream. Handles errors by logging and setting error state.
+   */
+  const performSearch = useCallback(async () => {
+    try {
+      setError(null);
+      const response = await fetch(`${API_URL}/api/search/stream`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          query: formData.query,
+          zipCode: formData.zipCode,
+          radius: formData.radius,
+          threshold: formData.threshold,
+        }),
+      });
 
-  // Removed auto-download - now showing results in UI instead
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
+      const reader = response.body?.getReader();
+      if (!reader) {
+        throw new Error("No response body");
+      }
+
+      await parseSSEStream(reader);
+    } catch (err) {
+      console.error("Search error:", err);
+      setError(err instanceof Error ? err.message : "Failed to search marketplace");
+      setAppState("error");
+    }
+  }, [formData, parseSSEStream, setError, setAppState]);
+
+  useEffect(() => {
+    if (appState !== "loading") return;
+    performSearch();
+  }, [appState, performSearch]);
+
+  /**
+   * Handles form submission by resetting all state to initial values and transitioning to loading state.
+   * Called by react-hook-form after validation passes. Clears previous results and starts new search.
+   */
+  const onSubmit = (data: ValidationFormData) => {
     setScannedCount(0);
     setEvaluatedCount(0);
     setCsvBlob(null);
@@ -165,6 +174,12 @@ export default function Home() {
     setAppState("loading");
   };
 
+  const handleSubmit = handleFormSubmit(onSubmit);
+
+  /**
+   * Resets the application state back to the form view.
+   * Clears all search results, counts, and error state to allow a new search.
+   */
   const handleReset = () => {
     setAppState("form");
     setScannedCount(0);
@@ -225,9 +240,9 @@ export default function Home() {
                   id="query"
                   type="text"
                   placeholder="e.g. iPhone 13 Pro"
-                  value={formData.query}
-                  onChange={(v) => setFormData((p) => ({ ...p, query: v }))}
+                  register={register}
                   required
+                  error={errors.query?.message}
                   icon={<TreasureIcon className="text-accent" />}
                 />
 
@@ -236,10 +251,10 @@ export default function Home() {
                   id="zipCode"
                   type="text"
                   placeholder="e.g. 10001"
-                  value={formData.zipCode}
-                  onChange={(v) => setFormData((p) => ({ ...p, zipCode: v }))}
+                  register={register}
                   pattern="[0-9]{5}"
                   required
+                  error={errors.zipCode?.message}
                   icon={<span className="text-accent">@</span>}
                 />
 
@@ -249,11 +264,11 @@ export default function Home() {
                     id="radius"
                     type="number"
                     placeholder="25"
-                    value={formData.radius}
-                    onChange={(v) => setFormData((p) => ({ ...p, radius: Number(v) }))}
+                    register={register}
                     min={1}
                     max={500}
                     required
+                    error={errors.radius?.message}
                     suffix="mi"
                   />
 
@@ -262,20 +277,25 @@ export default function Home() {
                     id="threshold"
                     type="number"
                     placeholder="20"
-                    value={formData.threshold}
-                    onChange={(v) => setFormData((p) => ({ ...p, threshold: Number(v) }))}
-                    min={1}
-                    max={90}
+                    register={register}
+                    min={0}
+                    max={100}
                     required
+                    error={errors.threshold?.message}
                     suffix="%"
                   />
                 </div>
 
                 <button
                   type="submit"
-                  className="group mt-2 w-full border-2 border-primary bg-primary px-4 py-3 font-mono text-sm font-bold uppercase tracking-wide text-primary-foreground transition-all hover:bg-transparent hover:text-primary"
+                  disabled={!isValid}
+                  className={`group mt-2 w-full border-2 px-4 py-3 font-mono text-sm font-bold uppercase tracking-wide transition-all ${
+                    isValid
+                      ? "border-primary bg-primary text-primary-foreground hover:bg-transparent hover:text-primary cursor-pointer"
+                      : "border-muted bg-muted text-muted-foreground cursor-not-allowed opacity-50"
+                  }`}
                 >
-                  <span className="inline-block transition-transform group-hover:translate-x-1">
+                  <span className={`inline-block transition-transform ${isValid ? "group-hover:translate-x-1" : ""}`}>
                     {">>>"} BEGIN HEIST {"<<<"}
                   </span>
                 </button>
@@ -453,7 +473,34 @@ export default function Home() {
   );
 }
 
-// Form field component with pirate styling
+interface FormFieldProps {
+  label: string;
+  id: string;
+  type: string;
+  placeholder: string;
+  value?: string | number;
+  onChange?: (value: string) => void;
+  required?: boolean;
+  pattern?: string;
+  min?: number;
+  max?: number;
+  icon?: ReactNode;
+  suffix?: string;
+  error?: string;
+  register?: (name: keyof ValidationFormData) => {
+    name: string;
+    onChange: (e: ChangeEvent<HTMLInputElement>) => void;
+    onBlur: (e: FocusEvent<HTMLInputElement>) => void;
+    ref: Ref<HTMLInputElement>;
+  };
+}
+
+/**
+ * Reusable form field component with pirate-themed styling.
+ * Supports both controlled (value/onChange) and uncontrolled (react-hook-form register) modes.
+ * When register is provided, uses react-hook-form for form state management. Otherwise uses controlled mode.
+ * Displays validation errors below the input with red border styling when invalid.
+ */
 function FormField({
   label,
   id,
@@ -467,20 +514,9 @@ function FormField({
   max,
   icon,
   suffix,
-}: {
-  label: string;
-  id: string;
-  type: string;
-  placeholder: string;
-  value: string | number;
-  onChange: (value: string) => void;
-  required?: boolean;
-  pattern?: string;
-  min?: number;
-  max?: number;
-  icon?: React.ReactNode;
-  suffix?: string;
-}) {
+  error,
+  register,
+}: FormFieldProps) {
   return (
     <div>
       <label htmlFor={id} className="mb-2 flex items-center gap-2 font-mono text-xs text-muted-foreground">
@@ -493,13 +529,23 @@ function FormField({
           id={id}
           type={type}
           placeholder={placeholder}
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
+          {...(register
+            ? register(id as keyof ValidationFormData)
+            : {
+                value,
+                onChange: (e) => onChange?.(e.target.value),
+              })}
           required={required}
           pattern={pattern}
           min={min}
           max={max}
-          className="w-full border-2 border-border bg-secondary px-3 py-2.5 font-mono text-sm text-foreground placeholder:text-muted-foreground/50 focus:border-primary focus:outline-none"
+          className={`w-full border-2 bg-secondary px-3 py-2.5 font-mono text-sm text-foreground placeholder:text-muted-foreground/50 focus:outline-none ${
+            type === "number" ? "[appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none" : ""
+          } ${
+            error
+              ? "border-destructive focus:border-destructive"
+              : "border-border focus:border-primary"
+          }`}
         />
         {suffix && (
           <span className="absolute right-3 top-1/2 -translate-y-1/2 font-mono text-xs text-muted-foreground">
@@ -507,24 +553,33 @@ function FormField({
           </span>
         )}
       </div>
+      {error && (
+        <p className="mt-1 font-mono text-xs text-destructive">{error}</p>
+      )}
     </div>
   );
 }
 
-// Loading bar component
+interface LoadingBarProps {
+  label: string;
+  count: number;
+  maxCount: number;
+  suffix: string;
+  icon: string;
+}
+
+/**
+ * Progress bar component displaying loading progress with pirate-themed styling.
+ * Calculates percentage from count and maxCount, then renders a visual progress bar.
+ * Shows label with icon prefix, current count with suffix, and animated progress bar.
+ */
 function LoadingBar({ 
   label, 
   count, 
   maxCount,
   suffix,
   icon 
-}: { 
-  label: string; 
-  count: number;
-  maxCount: number;
-  suffix: string;
-  icon: string;
-}) {
+}: LoadingBarProps) {
   const percentage = maxCount > 0 ? Math.min((count / maxCount) * 100, 100) : 0;
   
   return (
@@ -545,24 +600,5 @@ function LoadingBar({
         />
       </div>
     </div>
-  );
-}
-
-// Typewriter effect component
-function TypewriterText({ texts }: { texts: string[] }) {
-  const [currentIndex, setCurrentIndex] = useState(0);
-
-  useEffect(() => {
-    const interval = setInterval(() => {
-      setCurrentIndex((prev) => (prev + 1) % texts.length);
-    }, 1500);
-    return () => clearInterval(interval);
-  }, [texts.length]);
-
-  return (
-    <span className="inline-block">
-      <span className="text-primary">{">"}</span> {texts[currentIndex]}
-      <span className="animate-pulse">_</span>
-    </span>
   );
 }
