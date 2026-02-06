@@ -88,7 +88,7 @@ def _convert_listing_to_scored_dict(listing: Listing, deal_score: float) -> dict
 def filter_and_score_listings(
     fb_listings: List[Listing],
     ebay_stats: Optional[PriceStats],
-    threshold: float = 80.0
+    threshold: float
 ) -> List[dict]:
     """
     Filter listings by threshold as percentage of eBay average price and return scored results.

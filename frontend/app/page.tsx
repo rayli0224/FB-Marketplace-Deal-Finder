@@ -27,7 +27,7 @@ export default function Home() {
     formState: { errors, isValid },
   } = useForm<ValidationFormData>({
     resolver: zodResolver(formSchema),
-    defaultValues: { query: "", zipCode: "", radius: "", threshold: "80" },
+    defaultValues: { query: "", zipCode: "", radius: "", threshold: "" },
     mode: "onChange",
   });
   const formData = watch();

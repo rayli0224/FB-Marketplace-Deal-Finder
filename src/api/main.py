@@ -34,7 +34,7 @@ class SearchRequest(BaseModel):
     query: str
     zipCode: str
     radius: int = 25
-    threshold: float = 80.0
+    threshold: float
 
 
 class ListingResponse(BaseModel):
