@@ -6,7 +6,7 @@ import logging
 import json
 import queue
 import threading
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -261,13 +261,13 @@ def ebay_active_listings(request: EbayStatsRequest):
         return EbayStatsResponse(stats=None)
 
     if not stats:
-        return EbayStatsResponse(stats=None)    
+        return EbayStatsResponse(stats=None)
     else:
         return EbayStatsResponse(
-        stats=EbayStats(
-            searchTerm=stats.search_term,
-            sampleSize=stats.sample_size,
-            average=stats.average,
-            rawPrices=stats.raw_prices,
+            stats=EbayStats(
+                searchTerm=stats.search_term,
+                sampleSize=stats.sample_size,
+                average=stats.average,
+                rawPrices=stats.raw_prices,
+            )
         )
-    )
