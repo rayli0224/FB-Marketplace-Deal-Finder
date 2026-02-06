@@ -15,9 +15,10 @@ echo "  🔌 API:       http://localhost:8000"
 echo "  📊 API Docs:  http://localhost:8000/docs"
 echo ""
 
-# Start containers (will build if needed, but uses cache if nothing changed)
+# Start containers with --build to ensure dependencies are up-to-date
+# This rebuilds the image if requirements.txt or Dockerfile changed
 echo "Starting services..."
-docker compose up -d
+docker compose up -d --build
 
 echo ""
 echo "✅ Containers started successfully!"
