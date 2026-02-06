@@ -1,680 +1,358 @@
 """
-eBay Sold Items Price Analyzer
+eBay Price Analyzer
 
-Fetches recently sold items from eBay and calculates price statistics
+Fetches active listings from eBay using the Browse API and calculates price statistics
 to help determine fair market value and identify good deals.
 
-Author: Auto-generated
+Uses eBay Browse API (OAuth 2.0) - returns active listings only, not sold items.
 """
 
-import re
-import random
 import statistics
+import os
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, List
 import logging
-from src.scrapers.utils import random_delay
+import time
 
-# Third-party imports
 import requests
-import numpy as np
-from selenium import webdriver
-from selenium.webdriver.common.by import By
-from selenium.webdriver.common.keys import Keys
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import TimeoutException, NoSuchElementException
-from webdriver_manager.chrome import ChromeDriverManager
-
-# Try to import selenium-stealth for anti-detection
-try:
-    from selenium_stealth import stealth
-    STEALTH_AVAILABLE = True
-except ImportError:
-    STEALTH_AVAILABLE = False
-    print("Warning: selenium-stealth not installed. Run: pip install selenium-stealth")
-
-# Try to import undetected-chromedriver (best anti-detection)
-try:
-    import undetected_chromedriver as uc
-    UC_AVAILABLE = True
-except ImportError:
-    UC_AVAILABLE = False
-    print("Warning: undetected-chromedriver not installed. Run: pip install undetected-chromedriver")
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# eBay API credentials (get from developer.ebay.com)
+EBAY_APP_ID = os.environ.get("EBAY_APP_ID", "")
+EBAY_CLIENT_SECRET = os.environ.get("EBAY_CLIENT_SECRET", "")
+
+# Debug: Log if credentials are loaded (but don't log the actual secret)
+if EBAY_APP_ID:
+    logger.debug(f"eBay App ID loaded: {EBAY_APP_ID[:20]}...")
+else:
+    logger.warning("EBAY_APP_ID not found in environment variables")
+if EBAY_CLIENT_SECRET:
+    logger.debug("eBay Client Secret loaded (hidden)")
+else:
+    logger.warning("EBAY_CLIENT_SECRET not found in environment variables")
+
 
 @dataclass
 class PriceStats:
-    """Container for price statistics results."""
+    """Container for price statistics results from active listings."""
     search_term: str
     sample_size: int
     average: float
-    median: float
-    min_price: float
-    max_price: float
-    std_dev: float
-    percentile_25: float
-    percentile_75: float
     raw_prices: list[float]
-    
-    def get_deal_assessment(self, price: float) -> str:
-        """
-        Assess if a given price is a good deal.
-        
-        Args:
-            price: The price to assess
-            
-        Returns:
-            String describing the deal quality
-        """
-        if price <= self.percentile_25:
-            return "🔥 GREAT DEAL - Below 25th percentile"
-        elif price <= self.median:
-            return "✅ GOOD DEAL - Below median"
-        elif price <= self.percentile_75:
-            return "⚠️ FAIR PRICE - Above median but reasonable"
-        else:
-            return "❌ OVERPRICED - Above 75th percentile"
     
     def __str__(self) -> str:
         return f"""
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-📊 eBay Sold Items Price Analysis
+📊 eBay Price Analysis (Active Listings)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Search Term: {self.search_term}
-Sample Size: {self.sample_size} sold items
+Sample Size: {self.sample_size} active listings
 
-💰 Price Statistics:
-   Average:     ${self.average:.2f}
-   Median:      ${self.median:.2f}
-   Min:         ${self.min_price:.2f}
-   Max:         ${self.max_price:.2f}
-   Std Dev:     ${self.std_dev:.2f}
-
-📈 Deal Thresholds:
-   Great Deal (≤25%):  ${self.percentile_25:.2f}
-   Fair Price (≤50%):  ${self.median:.2f}
-   Max Fair (≤75%):    ${self.percentile_75:.2f}
+💰 Average Price: ${self.average:.2f}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 """
 
 
-class EbayScraper:
+class EbayBrowseAPIClient:
     """
-    Scrapes eBay sold listings to analyze pricing data.
+    eBay Browse API client for fetching active listings.
     
-    Uses Selenium with stealth techniques to avoid detection.
+    Note: This returns ACTIVE listings only (not sold items), but provides current
+    market prices which can be useful for price comparison. Uses OAuth 2.0 Client
+    Credentials flow for authentication.
     """
     
-    # Common user agents for rotation
-    USER_AGENTS = [
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Safari/605.1.15",
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0",
-    ]
+    TOKEN_URL = "https://api.ebay.com/identity/v1/oauth2/token"
+    BASE_URL = "https://api.ebay.com/buy/browse/v1/item_summary/search"
     
-    def __init__(self, headless: bool = None):
+    def __init__(self, app_id: str = None, client_secret: str = None):
         """
-        Initialize the eBay scraper.
+        Initialize the eBay Browse API client.
         
         Args:
-            headless: Run browser in headless mode (invisible).
-                      If None, auto-detects: uses non-headless if DISPLAY is set (Xvfb).
+            app_id: eBay App ID (Client ID) from developer.ebay.com
+            client_secret: eBay Client Secret from developer.ebay.com
         """
-        import os
-        if headless is None:
-            # Auto-detect: if DISPLAY is set (Xvfb), use non-headless for better stealth
-            self.headless = os.environ.get("DISPLAY") is None
-        else:
-            self.headless = headless
-        self.driver = None
+        self.app_id = app_id or EBAY_APP_ID
+        self.client_secret = client_secret or EBAY_CLIENT_SECRET
+        self._access_token = None
+        self._token_expiry = 0
+        
+        if not self.app_id or not self.client_secret:
+            logger.warning("eBay App ID or Client Secret not configured. Browse API calls will fail.")
     
-    def _create_driver(self):
-        """Create a Chrome WebDriver with undetected-chromedriver."""
+    def _get_access_token(self) -> Optional[str]:
+        """Get or refresh OAuth 2.0 access token using Client Credentials flow."""
+        import base64
         
-        # === USE UNDETECTED-CHROMEDRIVER (best anti-detection) ===
-        if UC_AVAILABLE:
-            logger.info("Using undetected-chromedriver")
-            
-            options = uc.ChromeOptions()
-            options.add_argument("--disable-popup-blocking")
-            options.add_argument("--disable-dev-shm-usage")
-            options.add_argument("--no-sandbox")
-            options.add_argument("--window-size=1920,1080")
-            
-            # Let undetected-chromedriver download and manage Chrome automatically
-            driver = uc.Chrome(
-                options=options,
-                headless=self.headless,
-            )
-            return driver
+        # Check if token is still valid
+        if self._access_token and time.time() < self._token_expiry:
+            return self._access_token
         
-        # === FALLBACK: Regular Selenium ===
-        logger.warning("undetected-chromedriver not available, using regular Selenium (may get blocked)")
+        if not self.app_id or not self.client_secret:
+            logger.error("Cannot get access token: App ID or Client Secret missing")
+            return None
         
-        import os
-        chrome_options = Options()
-        
-        if self.headless:
-            chrome_options.add_argument("--headless=new")
-        
-        chrome_options.add_argument("--disable-blink-features=AutomationControlled")
-        chrome_options.add_argument("--disable-dev-shm-usage")
-        chrome_options.add_argument("--no-sandbox")
-        chrome_options.add_argument("--window-size=1920,1080")
-        chrome_options.add_argument(f"--user-agent={random.choice(self.USER_AGENTS)}")
-        
-        chrome_options.add_experimental_option("excludeSwitches", ["enable-automation", "enable-logging"])
-        chrome_options.add_experimental_option("useAutomationExtension", False)
-        
-        chrome_bin = os.environ.get("CHROME_BIN")
-        chromedriver_path = os.environ.get("CHROMEDRIVER_PATH")
-        
-        if chrome_bin:
-            chrome_options.binary_location = chrome_bin
-        
-        if chromedriver_path:
-            service = Service(chromedriver_path)
-        else:
-            service = Service(ChromeDriverManager().install())
-        
-        driver = webdriver.Chrome(service=service, options=chrome_options)
-        
-        if STEALTH_AVAILABLE:
-            stealth(driver, languages=["en-US", "en"], vendor="Google Inc.",
-                    platform="Win32", webgl_vendor="Intel Inc.",
-                    renderer="Intel Iris OpenGL Engine", fix_hairline=True)
-        
-        return driver
-    
-    def _parse_price(self, price_text: str) -> Optional[float]:
-        """
-        Parse a price string into a float.
-        
-        Handles formats like:
-        - "$123.45"
-        - "$100.00 to $200.00" (returns average)
-        - "£123.45" (other currencies)
-        
-        Args:
-            price_text: The price string to parse
-            
-        Returns:
-            Parsed price as float, or None if parsing fails
-        """
         try:
-            # Find all price values in the string
-            pattern = r'[\d,]+\.?\d*'
-            matches = re.findall(pattern, price_text.replace(',', ''))
+            # Create Basic auth header
+            credentials = f"{self.app_id}:{self.client_secret}"
+            encoded_credentials = base64.b64encode(credentials.encode()).decode()
             
-            if not matches:
-                return None
+            headers = {
+                "Content-Type": "application/x-www-form-urlencoded",
+                "Authorization": f"Basic {encoded_credentials}",
+            }
             
-            prices = [float(m) for m in matches if m and float(m) > 0]
+            data = {
+                "grant_type": "client_credentials",
+                "scope": "https://api.ebay.com/oauth/api_scope",  # Public data scope
+            }
             
-            if not prices:
-                return None
+            logger.debug("Requesting OAuth access token...")
+            response = requests.post(self.TOKEN_URL, headers=headers, data=data, timeout=10)
+            response.raise_for_status()
             
-            # If range (e.g., "$10 to $20"), return average
-            if len(prices) >= 2:
-                return sum(prices) / len(prices)
+            token_data = response.json()
+            self._access_token = token_data["access_token"]
+            expires_in = token_data.get("expires_in", 7200)
+            self._token_expiry = time.time() + expires_in - 60  # Refresh 1 min early
             
-            return prices[0]
+            logger.debug("OAuth access token obtained successfully")
+            return self._access_token
             
-        except (ValueError, IndexError):
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Failed to get OAuth access token: {e}")
+            if hasattr(e, 'response') and e.response is not None:
+                logger.error(f"Response: {e.response.text[:200]}")
             return None
     
-    def _extract_prices_from_page(self, driver: webdriver.Chrome, max_items: int) -> list[float]:
-        """
-        Extract prices from the current eBay search results page.
-        
-        Args:
-            driver: Selenium WebDriver instance
-            max_items: Maximum number of items to extract
-            
-        Returns:
-            List of extracted prices
-        """
-        prices = []
-        
-        try:
-            # Wait for listings to load
-            WebDriverWait(driver, 10).until(
-                EC.presence_of_element_located((By.CSS_SELECTOR, "li.s-item"))
-            )
-            
-            # Find all listing items
-            items = driver.find_elements(By.CSS_SELECTOR, "li.s-item")
-            
-            for item in items[:max_items + 5]:  # Get a few extra in case some fail
-                if len(prices) >= max_items:
-                    break
-                    
-                try:
-                    # Try to find the price element
-                    price_elem = item.find_element(By.CSS_SELECTOR, "span.s-item__price")
-                    price_text = price_elem.text
-                    
-                    # Skip "Shop on eBay" placeholder items
-                    title_elem = item.find_elements(By.CSS_SELECTOR, "div.s-item__title span")
-                    if title_elem and "Shop on eBay" in title_elem[0].text:
-                        continue
-                    
-                    price = self._parse_price(price_text)
-                    if price and price > 0:
-                        prices.append(price)
-                        
-                except NoSuchElementException:
-                    continue
-                    
-        except TimeoutException:
-            logger.warning("Timeout waiting for listings to load")
-            
-        return prices
-    
-    def get_sold_item_stats(
+    def search_active_listings(
         self,
-        search_term: str,
-        n_items: int = 100,
-        excluded_keywords: Optional[list[str]] = None,
+        keywords: str,
+        max_items: int = 100,
+        excluded_keywords: Optional[List[str]] = None,
         min_price: Optional[float] = None,
         max_price: Optional[float] = None,
-    ) -> Optional[PriceStats]:
+    ) -> Optional[List[dict]]:
         """
-        Search eBay for sold items and calculate price statistics.
+        Search for active eBay listings using Browse API.
+        
+        Note: Returns ACTIVE listings only, not sold items. Useful for current market prices.
         
         Args:
-            search_term: The item to search for
-            n_items: Target number of sold items to analyze (50-100 recommended)
-            excluded_keywords: Words to exclude from search (e.g., ["broken", "parts"])
+            keywords: Search keywords
+            max_items: Maximum number of items to return (API limit: 200 per page)
+            excluded_keywords: Keywords to exclude from search
             min_price: Minimum price filter
             max_price: Maximum price filter
             
         Returns:
-            PriceStats object with calculated statistics, or None if failed
+            List of item dictionaries with price data, or None if failed
         """
-        logger.info(f"Searching eBay for sold items: '{search_term}'")
+        token = self._get_access_token()
+        if not token:
+            return None
         
-        try:
-            self.driver = self._create_driver()
+        all_items = []
+        offset = 0
+        
+        # Build search query with exclusions
+        search_query = keywords
+        if excluded_keywords:
+            search_query += " -" + " -".join(excluded_keywords)
+        
+        while len(all_items) < max_items:
+            # Calculate how many items we still need
+            remaining = max_items - len(all_items)
+            limit = min(200, remaining)  # API max is 200 per page
             
-            # Build the search URL with sold items filter
-            search_query = search_term
-            if excluded_keywords:
-                search_query += " -" + " -".join(excluded_keywords)
+            params = {
+                "q": search_query,
+                "limit": str(limit),
+                "offset": str(offset),
+                # No explicit sort -> eBay default (Best Match)
+            }
             
-            # URL encode the search query
-            encoded_query = requests.utils.quote(search_query)
-            
-            # Build URL with filters:
-            # LH_Sold=1 - Sold items only
-            # LH_Complete=1 - Completed listings
-            # _sop=13 - Sort by end date (most recent first)
-            # _ipg=240 - Items per page (max)
-            url = f"https://www.ebay.com/sch/i.html?_nkw={encoded_query}&LH_Sold=1&LH_Complete=1&_sop=13&_ipg=240"
+            # Build filter list:
+            # - Fixed price only (no auctions)
+            # - All conditions except FOR_PARTS_OR_NOT_WORKING (whitelist common good conditions)
+            filters: List[str] = [
+                "buyingOptions:{FIXED_PRICE}",
+                "itemCondition:{NEW|NEW_OTHER|NEW_WITH_DEFECTS|CERTIFIED_REFURBISHED|EXCELLENT_REFURBISHED|VERY_GOOD_REFURBISHED|USED}",
+            ]
             
             # Add price filters if specified
             if min_price is not None:
-                url += f"&_udlo={min_price}"
+                filters.append(f"price:[{min_price}..]")
             if max_price is not None:
-                url += f"&_udhi={max_price}"
+                filters.append(f"price:[..{max_price}]")
             
-            logger.info(f"Fetching URL: {url}")
+            if filters:
+                params["filter"] = ",".join(filters)
             
-            # First visit eBay homepage to establish session (helps avoid detection)
-            self.driver.get("https://www.ebay.com")
-            random_delay(2, 4)
+            headers = {
+                "Authorization": f"Bearer {token}",
+                "X-EBAY-C-MARKETPLACE-ID": "EBAY_US",
+            }
             
-            # Now navigate to search results
-            self.driver.get(url)
-            random_delay(3, 5)
-            
-            # Check for CAPTCHA or blocking
-            page_source_lower = self.driver.page_source.lower()
-            if any(term in page_source_lower for term in ["captcha", "robot", "verify you're human", "blocked"]):
-                logger.error("CAPTCHA/block detected! Try again later or use non-headless mode.")
-                logger.info("Tip: Wait a few minutes, or try a different search term.")
-                return None
-            
-            # Extract prices from results
-            all_prices = []
-            pages_fetched = 0
-            max_pages = (n_items // 60) + 2  # Calculate how many pages we might need
-            
-            while len(all_prices) < n_items and pages_fetched < max_pages:
-                page_prices = self._extract_prices_from_page(self.driver, n_items - len(all_prices))
+            try:
+                logger.info(f"Fetching eBay Browse API (offset {offset})...")
+                response = requests.get(self.BASE_URL, params=params, headers=headers, timeout=30)
                 
-                if not page_prices:
-                    logger.warning("No prices found on page")
+                if response.status_code == 401:
+                    # Token expired, refresh and retry once
+                    logger.debug("Token expired, refreshing...")
+                    self._access_token = None
+                    token = self._get_access_token()
+                    if token:
+                        headers["Authorization"] = f"Bearer {token}"
+                        response = requests.get(self.BASE_URL, params=params, headers=headers, timeout=30)
+                
+                response.raise_for_status()
+                data = response.json()
+                
+                # Extract items
+                items = data.get("itemSummaries", [])
+                if not items:
+                    logger.info("No more items found")
                     break
                 
-                all_prices.extend(page_prices)
-                pages_fetched += 1
-                logger.info(f"Page {pages_fetched}: Found {len(page_prices)} prices (Total: {len(all_prices)})")
-                
-                # Check if we need more pages
-                if len(all_prices) < n_items:
+                # Parse items and extract prices
+                for item in items:
                     try:
-                        # Try to click "Next" button
-                        next_button = self.driver.find_element(
-                            By.CSS_SELECTOR, 
-                            "a.pagination__next"
-                        )
-                        if next_button:
-                            next_button.click()
-                            random_delay(2, 4)
+                        price_obj = item.get("price", {})
+                        if isinstance(price_obj, dict):
+                            price_value = float(price_obj.get("value", 0))
+                            currency = price_obj.get("currency", "USD")
                         else:
-                            break
-                    except NoSuchElementException:
-                        logger.info("No more pages available")
-                        break
-            
-            # Trim to requested number
-            all_prices = all_prices[:n_items]
-            
-            if len(all_prices) < 3:
-                logger.error(f"Not enough data: only found {len(all_prices)} prices")
-                return None
-            
-            # Calculate statistics
-            stats = PriceStats(
-                search_term=search_term,
-                sample_size=len(all_prices),
-                average=statistics.mean(all_prices),
-                median=statistics.median(all_prices),
-                min_price=min(all_prices),
-                max_price=max(all_prices),
-                std_dev=statistics.stdev(all_prices) if len(all_prices) > 1 else 0,
-                percentile_25=float(np.percentile(all_prices, 25)),
-                percentile_75=float(np.percentile(all_prices, 75)),
-                raw_prices=sorted(all_prices),
-            )
-            
-            logger.info(f"Successfully analyzed {stats.sample_size} sold items")
-            return stats
-            
-        except Exception as e:
-            logger.error(f"Error scraping eBay: {e}")
-            return None
-            
-        finally:
-            if self.driver:
-                self.driver.quit()
-                self.driver = None
-
-
-class EbayAPIClient:
-    """
-    Alternative client using eBay's official Browse API.
+                            continue
+                        
+                        # Only process USD for now
+                        if currency != "USD":
+                            continue
+                        
+                        if price_value > 0:
+                            all_items.append({
+                                "title": item.get("title", ""),
+                                "price": price_value,
+                                "url": item.get("itemWebUrl", ""),
+                            })
+                    except (KeyError, ValueError, TypeError) as e:
+                        logger.debug(f"Error parsing item: {e}")
+                        continue
+                
+                logger.info(f"Found {len(items)} active listings (Total: {len(all_items)})")
+                
+                # Check if there are more pages
+                total = data.get("total", 0)
+                if offset + len(items) >= total or len(all_items) >= max_items:
+                    break
+                
+                offset += len(items)
+                
+                # Rate limiting: be nice to the API
+                time.sleep(0.5)
+                
+            except requests.exceptions.RequestException as e:
+                logger.error(f"eBay Browse API request failed: {e}")
+                if hasattr(e, 'response') and e.response is not None:
+                    logger.error(f"Response: {e.response.text[:500]}")
+                break
+        
+        return all_items[:max_items] if all_items else None
     
-    Note: Requires API credentials from developer.ebay.com
-    The Browse API doesn't directly support sold items, so this is 
-    primarily for active listings comparison.
-    """
-    
-    TOKEN_URL = "https://api.ebay.com/identity/v1/oauth2/token"
-    BROWSE_API_URL = "https://api.ebay.com/buy/browse/v1/item_summary/search"
-    
-    def __init__(self, client_id: str, client_secret: str):
+    def get_active_listing_stats(
+        self,
+        search_term: str,
+        n_items: int = 100,
+        excluded_keywords: Optional[List[str]] = None,
+        min_price: Optional[float] = None,
+        max_price: Optional[float] = None,
+    ) -> Optional[PriceStats]:
         """
-        Initialize the eBay API client.
+        Get average price from active listings using Browse API.
         
-        Args:
-            client_id: eBay API client ID (App ID)
-            client_secret: eBay API client secret (Cert ID)
-        """
-        self.client_id = client_id
-        self.client_secret = client_secret
-        self._access_token = None
-        self._token_expiry = 0
-    
-    def _get_access_token(self) -> str:
-        """Get or refresh the OAuth access token."""
-        import base64
-        
-        if self._access_token and time.time() < self._token_expiry:
-            return self._access_token
-        
-        # Create Basic auth header
-        credentials = f"{self.client_id}:{self.client_secret}"
-        encoded_credentials = base64.b64encode(credentials.encode()).decode()
-        
-        headers = {
-            "Content-Type": "application/x-www-form-urlencoded",
-            "Authorization": f"Basic {encoded_credentials}",
-        }
-        
-        data = {
-            "grant_type": "client_credentials",
-            "scope": "https://api.ebay.com/oauth/api_scope",
-        }
-        
-        response = requests.post(self.TOKEN_URL, headers=headers, data=data)
-        response.raise_for_status()
-        
-        token_data = response.json()
-        self._access_token = token_data["access_token"]
-        self._token_expiry = time.time() + token_data.get("expires_in", 7200) - 60
-        
-        return self._access_token
-    
-    def search_items(self, search_term: str, limit: int = 50) -> list[dict]:
-        """
-        Search for active listings (not sold items).
-        
-        Note: The Browse API doesn't support sold items directly.
-        Use EbayScraper for sold items data.
+        Note: These are ACTIVE listings, not sold items. Useful for current market comparison.
         
         Args:
             search_term: The item to search for
-            limit: Maximum number of results
+            n_items: Target number of listings to analyze
+            excluded_keywords: Words to exclude from search
+            min_price: Minimum price filter
+            max_price: Maximum price filter
             
         Returns:
-            List of item dictionaries
+            PriceStats object with average price and raw prices, or None if failed
         """
-        token = self._get_access_token()
+        logger.info(f"Using eBay Browse API for ACTIVE listings: '{search_term}'")
+        logger.warning("⚠️ Note: Browse API returns ACTIVE listings only, not sold items")
         
-        headers = {
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json",
-            "X-EBAY-C-MARKETPLACE-ID": "EBAY_US",
-        }
-        
-        params = {
-            "q": search_term,
-            "limit": min(limit, 200),
-        }
-        
-        response = requests.get(
-            self.BROWSE_API_URL,
-            headers=headers,
-            params=params,
+        items = self.search_active_listings(
+            keywords=search_term,
+            max_items=n_items,
+            excluded_keywords=excluded_keywords,
+            min_price=min_price,
+            max_price=max_price,
         )
-        response.raise_for_status()
         
-        data = response.json()
-        return data.get("itemSummaries", [])
+        if not items or len(items) < 3:
+            logger.error(f"Not enough data from Browse API: only found {len(items) if items else 0} items")
+            return None
+        
+        # Extract prices
+        prices = [item["price"] for item in items if item.get("price", 0) > 0]
+        
+        if len(prices) < 3:
+            logger.error(f"Not enough valid prices: {len(prices)}")
+            return None
+        
+        # Calculate average price
+        stats = PriceStats(
+            search_term=search_term,
+            sample_size=len(prices),
+            average=statistics.mean(prices),
+            raw_prices=sorted(prices),
+        )
+        
+        logger.info(f"Successfully analyzed {stats.sample_size} ACTIVE listings via Browse API")
+        return stats
 
 
-def get_sold_item_stats(
+def get_market_price(
     search_term: str,
     n_items: int = 100,
     excluded_keywords: Optional[list[str]] = None,
-    headless: bool = None,
+    headless: bool = None,  # Deprecated, kept for backwards compatibility
 ) -> Optional[PriceStats]:
     """
-    Convenience function to get sold item statistics.
+    Get average price from eBay active listings using Browse API.
     
-    This is the main entry point for the module.
+    Note: This function returns ACTIVE listings (current market prices), not sold items.
     
     Args:
         search_term: The item to search for (e.g., "iPhone 13 Pro 128GB")
-        n_items: Number of sold items to analyze (50-100 recommended)
+        n_items: Number of listings to analyze (50-100 recommended)
         excluded_keywords: Words to exclude (e.g., ["broken", "parts", "locked"])
-        headless: Run browser invisibly (True) or visibly (False)
+        headless: Deprecated parameter, kept for backwards compatibility
         
     Returns:
-        PriceStats object with price analysis, or None if failed
+        PriceStats object with average price and raw prices, or None if failed
         
     Example:
-        >>> stats = get_sold_item_stats("Nintendo Switch OLED", n_items=50)
+        >>> stats = get_market_price("Nintendo Switch OLED", n_items=50)
         >>> print(stats)
-        >>> print(stats.get_deal_assessment(280.00))
+        >>> print(f"Average price: ${stats.average:.2f}")
     """
-    scraper = EbayScraper(headless=headless)
-    return scraper.get_sold_item_stats(
+    if not EBAY_APP_ID or not EBAY_CLIENT_SECRET:
+        logger.error("eBay credentials not configured. Set EBAY_APP_ID and EBAY_CLIENT_SECRET in .env file")
+        return None
+    
+    browse_client = EbayBrowseAPIClient()
+    return browse_client.get_active_listing_stats(
         search_term=search_term,
         n_items=n_items,
         excluded_keywords=excluded_keywords,
     )
-
-
-# =============================================================================
-# Interactive CLI
-# =============================================================================
-
-def interactive_mode():
-    """Run the scraper in interactive command-line mode."""
-    print("\n" + "=" * 55)
-    print("  eBay Sold Items Price Analyzer - Interactive Mode")
-    print("=" * 55)
-    
-    while True:
-        print("\nOptions:")
-        print("  1. Search for an item")
-        print("  2. Exit")
-        
-        choice = input("\nEnter choice (1-2): ").strip()
-        
-        if choice == "2":
-            print("\nGoodbye! 👋\n")
-            break
-        elif choice != "1":
-            print("Invalid choice. Please enter 1 or 2.")
-            continue
-        
-        # Get search term
-        search_term = input("\n🔍 Enter item to search (e.g., 'iPhone 13 Pro 128GB'): ").strip()
-        if not search_term:
-            print("Search term cannot be empty.")
-            continue
-        
-        # Get number of items
-        n_items_str = input("📊 Number of items to analyze [default: 100]: ").strip()
-        n_items = 100
-        if n_items_str:
-            try:
-                n_items = int(n_items_str)
-                if n_items < 10:
-                    print("Minimum 10 items required. Using 10.")
-                    n_items = 10
-                elif n_items > 240:
-                    print("Maximum 240 items. Using 240.")
-                    n_items = 240
-            except ValueError:
-                print("Invalid number. Using default (100).")
-                n_items = 100
-        
-        # Get excluded keywords
-        exclude_str = input("🚫 Keywords to exclude (space-separated, or press Enter to skip): ").strip()
-        excluded_keywords = exclude_str.split() if exclude_str else None
-        
-        # Run the search
-        print(f"\n⏳ Searching eBay for '{search_term}'...")
-        print(f"   Analyzing {n_items} most recently sold items...\n")
-        
-        stats = get_sold_item_stats(
-            search_term=search_term,
-            n_items=n_items,
-            excluded_keywords=excluded_keywords,
-            headless=True,
-        )
-        
-        if stats:
-            print(stats)
-            
-            # Ask if user wants to evaluate a price
-            while True:
-                price_str = input("\n💵 Enter a price to evaluate (or press Enter to skip): $").strip()
-                if not price_str:
-                    break
-                try:
-                    price = float(price_str)
-                    assessment = stats.get_deal_assessment(price)
-                    print(f"\n   {assessment}")
-                except ValueError:
-                    print("Invalid price. Please enter a number.")
-        else:
-            print("❌ Failed to retrieve data. eBay may be blocking requests.")
-            print("   Try again in a few minutes.\n")
-
-
-if __name__ == "__main__":
-    import sys
-    
-    # If arguments provided, use CLI mode; otherwise interactive
-    if len(sys.argv) > 1:
-        import argparse
-        
-        parser = argparse.ArgumentParser(
-            description="Analyze eBay sold items to find fair market prices"
-        )
-        parser.add_argument(
-            "search_term",
-            type=str,
-            help="Item to search for (e.g., 'iPhone 13 Pro 128GB')",
-        )
-        parser.add_argument(
-            "-n", "--num-items",
-            type=int,
-            default=100,
-            help="Number of sold items to analyze (default: 100)",
-        )
-        parser.add_argument(
-            "-e", "--exclude",
-            type=str,
-            nargs="*",
-            help="Keywords to exclude (e.g., -e broken parts locked)",
-        )
-        parser.add_argument(
-            "--visible",
-            action="store_true",
-            help="Show browser window (default: headless)",
-        )
-        parser.add_argument(
-            "-p", "--price",
-            type=float,
-            help="Price to evaluate as a deal",
-        )
-        
-        args = parser.parse_args()
-        
-        print(f"\n🔍 Searching eBay for: {args.search_term}")
-        print(f"   Analyzing {args.num_items} most recently sold items...\n")
-        
-        stats = get_sold_item_stats(
-            search_term=args.search_term,
-            n_items=args.num_items,
-            excluded_keywords=args.exclude,
-            headless=not args.visible,
-        )
-        
-        if stats:
-            print(stats)
-            
-            if args.price:
-                assessment = stats.get_deal_assessment(args.price)
-                print(f"\n💵 Price Evaluation for ${args.price:.2f}:")
-                print(f"   {assessment}\n")
-        else:
-            print("❌ Failed to retrieve data. Try again or use --visible to debug.")
-    else:
-        # No arguments - run interactive mode
-        interactive_mode()

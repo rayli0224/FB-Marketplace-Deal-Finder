@@ -1,23 +1,16 @@
-# eBay Sold Items Price Analyzer - Dependencies
+# FB Marketplace Deal Finder - Dependencies
 # Install with: pip install -r requirements.txt
 
 # Core dependencies
-selenium>=4.15.0
-webdriver-manager>=4.0.0      # Auto-manages ChromeDriver
-numpy>=1.24.0                  # For percentile calculations
 requests>=2.31.0               # HTTP requests
 
-# Anti-detection
-selenium-stealth>=1.0.6        # Makes Selenium undetectable
-undetected-chromedriver>=3.5.0 # Best anti-detection driver
-
-# Facebook Marketplace scraper
-playwright>=1.40.0             # Browser automation for Facebook Marketplace
+# Browser automation (Facebook Marketplace scraper uses Playwright)
+playwright>=1.40.0             # Browser automation with stealth support
 
 # API
-fastapi>=0.104.0                # FastAPI web framework
-uvicorn[standard]>=0.24.0       # ASGI server
-pydantic>=2.0.0                 # Data validation
+fastapi>=0.104.0               # FastAPI web framework
+uvicorn[standard]>=0.24.0      # ASGI server
+pydantic>=2.0.0                # Data validation
 
 # Optional: For Jupyter notebook usage
 # jupyter>=1.0.0
