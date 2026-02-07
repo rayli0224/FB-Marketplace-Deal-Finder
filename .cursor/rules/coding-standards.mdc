@@ -1,0 +1,51 @@
+---
+description: Core coding standards — naming, structure, documentation, and general principles
+alwaysApply: true
+---
+
+# Coding Standards
+
+## Function Naming
+
+- Function names must clearly communicate what the function does, even without context
+- Names should be descriptive enough that a reader understands the function's purpose
+- Avoid vague or ambiguous names
+- Functions that attempt an operation that may fail should use prefixes like `try_`
+- For extraction functions, follow the pattern: `_try_extract_<what>_<how>`
+  - Example: `_try_extract_title_with_selectors`, `_try_extract_title_by_dom_structure`
+
+## Function Size and Structure
+
+- When functions become large or complex, break them into smaller helper functions
+- Each function should have a single, focused responsibility
+- Keep related functions together
+- Main functions should orchestrate helpers rather than contain all logic
+
+## Documentation
+
+### Docstrings
+- All functions should have docstrings explaining **what** it does and **how** it does it
+- Do not assume the reader has context — docstrings should be understandable on their own
+- Include implementation details that aren't obvious from reading the code
+- Explain technical decisions or non-obvious patterns
+- Be clear and comprehensive, prioritizing understanding over brevity
+
+### Comments
+- Remove comments that don't add value
+- Comments should explain "why" or provide context, not restate what the code does
+- Keep comments that explain non-obvious logic, important context, or design decisions
+
+## Code Organization
+
+- Prefer robust, maintainable solutions over fragile, clever code
+- Use layered fallback strategies when dealing with unreliable external data
+- Design for failure: assume things will go wrong and handle gracefully
+- When choosing between performance and reliability/maintainability, prefer the latter
+- Document significant performance trade-offs when they're made
+
+## General Principles
+
+- **Clarity over cleverness**: Write code that's easy to understand
+- **Explicit over implicit**: Make intentions clear through naming and structure
+- **Fail gracefully**: Handle errors and edge cases appropriately
+- **Consistency**: Follow established patterns within the codebase

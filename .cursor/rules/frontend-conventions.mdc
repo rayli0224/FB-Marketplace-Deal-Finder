@@ -1,0 +1,37 @@
+---
+description: Frontend conventions — imports, component abstraction, and React patterns
+globs: frontend/**/*.{ts,tsx}
+alwaysApply: false
+---
+
+# Frontend Conventions
+
+## Import Paths
+
+- **Always use absolute import paths** with the `@/` prefix
+- Never use relative imports (e.g., `./Component`, `../Component`)
+- Example: `@/components/search-form/MarketplaceSearchForm` instead of `./MarketplaceSearchForm`
+
+## Component Abstraction
+
+### When to Extract
+- **Reusable UI patterns**: UI elements that appear in multiple places
+- **Complex UI structures**: JSX sections over 20 lines with a clear purpose
+- **Reusable interactions**: Components with their own state/behavior
+- **UI primitives**: Buttons, modals, toggles, inputs
+
+### Organization
+- Reusable UI components go in `@/components/ui/`
+- Domain-specific components go in subdirectories (e.g., `@/components/results/`, `@/components/search-form/`)
+- Each component should have a single, focused responsibility
+
+### Structure
+- All components must have TypeScript interfaces for props
+- Include docstrings explaining what the component does and how to use it
+- Export both the component and its props interface
+
+### Naming
+- Use semantically clear names that describe what the component does or represents
+- Avoid technical jargon or ambiguous terms (e.g., `OverlayPanel` instead of `Modal`)
+- Names should be self-explanatory without needing to read the implementation
+- Prefer descriptive names over generic ones (e.g., `SearchResultsTable` over `Table`)
