@@ -1,6 +1,6 @@
 "use client";
 
-import { type ReactNode, type Ref, type ChangeEvent, type FocusEvent } from "react";
+import { type ReactNode, type Ref, type ChangeEvent, type FocusEvent, type KeyboardEvent, type ClipboardEvent } from "react";
 import { type FormData as ValidationFormData } from "@/lib/validation";
 
 export interface FormInputFieldProps {
@@ -18,6 +18,8 @@ export interface FormInputFieldProps {
   suffix?: string;
   error?: string;
   tooltip?: string;
+  digitsOnly?: boolean;
+  inputMode?: "numeric" | "text";
   register?: (name: keyof ValidationFormData) => {
     name: string;
     onChange: (e: ChangeEvent<HTMLInputElement>) => void;
@@ -59,8 +61,48 @@ export function FormInputField({
   suffix,
   error,
   tooltip,
+  digitsOnly,
+  inputMode,
   register,
 }: FormInputFieldProps) {
+  /**
+   * Blocks non-digit keypresses when digitsOnly is enabled.
+   * Allows control keys (Backspace, Delete, Tab, Arrow keys, Home, End) and
+   * clipboard shortcuts (Ctrl/Cmd + A/C/V/X) so the input remains usable.
+   */
+  function handleKeyDown(e: KeyboardEvent<HTMLInputElement>) {
+    if (!digitsOnly) return;
+
+    const allowedKeys = ["Backspace", "Delete", "Tab", "ArrowLeft", "ArrowRight", "Home", "End"];
+    if (allowedKeys.includes(e.key)) return;
+    if ((e.metaKey || e.ctrlKey) && ["a", "c", "v", "x"].includes(e.key)) return;
+    if (!/^\d$/.test(e.key)) {
+      e.preventDefault();
+    }
+  }
+
+  /**
+   * Intercepts paste events when digitsOnly is enabled.
+   * Strips all non-digit characters from the pasted text and inserts only the digits
+   * at the current cursor position, preserving any existing selection behavior.
+   */
+  function handlePaste(e: ClipboardEvent<HTMLInputElement>) {
+    if (!digitsOnly) return;
+
+    e.preventDefault();
+    const digitsOnlyText = e.clipboardData.getData("text").replace(/\D/g, "");
+    const input = e.currentTarget;
+    const start = input.selectionStart ?? 0;
+    const end = input.selectionEnd ?? 0;
+    const currentValue = input.value;
+    const newValue = currentValue.slice(0, start) + digitsOnlyText + currentValue.slice(end);
+
+    const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")?.set;
+    nativeInputValueSetter?.call(input, newValue);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    input.setSelectionRange(start + digitsOnlyText.length, start + digitsOnlyText.length);
+  }
+
   return (
     <div>
       <label htmlFor={id} className="mb-2 flex items-center gap-2 font-mono text-xs text-muted-foreground">
@@ -98,6 +140,9 @@ export function FormInputField({
           type={type}
           placeholder={placeholder}
           autoComplete="off"
+          onKeyDown={handleKeyDown}
+          onPaste={handlePaste}
+          inputMode={inputMode}
           {...(register
             ? register(id as keyof ValidationFormData)
             : {

@@ -43,6 +43,8 @@ export function MarketplaceSearchForm({ register, errors, isValid, handleSubmit 
         register={register}
         pattern="[0-9]{5}"
         required
+        digitsOnly
+        inputMode="numeric"
         error={errors.zipCode?.message}
         icon={<span className="text-accent">@</span>}
       />
@@ -51,12 +53,14 @@ export function MarketplaceSearchForm({ register, errors, isValid, handleSubmit 
         <FormInputField
           label="RAID_RADIUS"
           id="radius"
-          type="number"
+          type="text"
           placeholder="25"
           register={register}
           min={1}
           max={500}
           required
+          digitsOnly
+          inputMode="numeric"
           error={errors.radius?.message}
           suffix="mi"
         />
@@ -64,12 +68,14 @@ export function MarketplaceSearchForm({ register, errors, isValid, handleSubmit 
         <FormInputField
           label="STEAL_THRESHOLD"
           id="threshold"
-          type="number"
+          type="text"
           placeholder="80"
           register={register}
           min={0}
           max={100}
           required
+          digitsOnly
+          inputMode="numeric"
           error={errors.threshold?.message}
           suffix="%"
           tooltip="Max % of eBay average price. Example: 80% = only show listings priced at 80% of eBay market value or less"

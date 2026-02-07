@@ -109,9 +109,10 @@ export default function Home() {
   }, [generateCSV]);
 
   /**
-   * Parses Server-Sent Events (SSE) stream data and updates UI state accordingly.
-   * Reads chunks from the stream reader, decodes text, and processes each line.
-   * Delegates to specific handlers for phase updates, progress updates, and completion events.
+   * Parses a Server-Sent Events (SSE) stream from a ReadableStream reader.
+   * Continuously reads chunks, decodes them as text, and processes lines prefixed with "data: ".
+   * Updates the UI based on event type: "phase" updates the search phase, "progress" updates
+   * the scanned listing count, and "done" sets the final results and transitions to the results view.
    */
   const parseSSEStream = useCallback(
     async (reader: ReadableStreamDefaultReader<Uint8Array>) => {
