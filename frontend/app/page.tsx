@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useCallback } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { formSchema, type FormData as ValidationFormData } from "@/lib/validation";
@@ -107,9 +107,10 @@ export default function Home() {
   }, [generateCSV]);
 
   /**
-   * Parses Server-Sent Events (SSE) stream data and updates UI state accordingly.
-   * Reads chunks from the stream reader, decodes text, and processes each line.
-   * Delegates to specific handlers for phase updates, progress updates, and completion events.
+   * Parses a Server-Sent Events (SSE) stream from a ReadableStream reader.
+   * Continuously reads chunks, decodes them as text, and processes lines prefixed with "data: ".
+   * Updates the UI based on event type: "phase" updates the search phase, "progress" updates
+   * the scanned listing count, and "done" sets the final results and transitions to the results view.
    */
   const parseSSEStream = useCallback(
     async (reader: ReadableStreamDefaultReader<Uint8Array>) => {
@@ -141,11 +142,12 @@ export default function Home() {
   );
 
   /**
-   * Performs the marketplace search API call and processes the SSE response stream.
-   * Sends form data as JSON POST request, reads the streaming response using ReadableStream,
-   * and delegates stream parsing to parseSSEStream. Handles errors by logging and setting error state.
+   * Sends search parameters to the backend API and streams back real-time results.
+   * Makes a POST request to the /api/search/stream endpoint with query, zip code, radius,
+   * and threshold, then reads the response as a Server-Sent Events stream to update the UI
+   * incrementally. On failure, sets the error state and transitions to the error view.
    */
-  const performSearch = useCallback(async () => {
+  const performSearch = useCallback(async (searchParams: ValidationFormData) => {
     try {
       setError(null);
       const response = await fetch(`${API_URL}/api/search/stream`, {
@@ -154,10 +156,10 @@ export default function Home() {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          query: formData.query,
-          zipCode: formData.zipCode,
-          radius: formData.radius,
-          threshold: formData.threshold,
+          query: searchParams.query,
+          zipCode: searchParams.zipCode,
+          radius: searchParams.radius,
+          threshold: searchParams.threshold,
         }),
       });
 
@@ -176,16 +178,12 @@ export default function Home() {
       setError(err instanceof Error ? err.message : "Failed to search marketplace");
       setAppState("error");
     }
-  }, [formData, parseSSEStream]);
-
-  useEffect(() => {
-    if (appState !== "loading") return;
-    performSearch();
-  }, [appState, performSearch]);
+  }, [parseSSEStream]);
 
   /**
-   * Handles form submission by resetting all state to initial values and transitioning to loading state.
-   * Called by react-hook-form after validation passes. Clears previous results and starts new search.
+   * Handles search form submission by resetting all UI state and initiating a new search.
+   * Clears previous results, counts, errors, and CSV data, sets the app to loading state,
+   * then triggers the search with the validated form data.
    */
   const onSubmit = (data: ValidationFormData) => {
     setScannedCount(0);
@@ -195,6 +193,7 @@ export default function Home() {
     setError(null);
     setPhase("scraping");
     setAppState("loading");
+    performSearch(data);
   };
 
   const handleSubmit = handleFormSubmit(onSubmit);
