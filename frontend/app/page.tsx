@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { formSchema, type FormData as ValidationFormData } from "@/lib/validation";
@@ -36,6 +36,8 @@ export default function Home() {
   const [error, setError] = useState<string | null>(null);
   const [phase, setPhase] = useState<SearchPhase>("scraping");
   const [threshold, setThreshold] = useState<number>(0);
+  const [isSearching, setIsSearching] = useState<boolean>(false);
+  const isSearchingRef = useRef<boolean>(false);
 
   /**
    * Generates a CSV blob from listings data with pirate-themed column headers.
@@ -131,6 +133,8 @@ export default function Home() {
               handlePhaseUpdate(data.phase);
             } else if (data.type === "progress") {
               handleProgressUpdate(data.scannedCount);
+            } else if (data.type === "listing_processed") {
+              setEvaluatedCount(data.evaluatedCount);
             } else if (data.type === "done") {
               handleCompletion(data);
             }
@@ -142,12 +146,24 @@ export default function Home() {
   );
 
   /**
-   * Sends search parameters to the backend API and streams back real-time results.
-   * Makes a POST request to the /api/search/stream endpoint with query, zip code, radius,
-   * and threshold, then reads the response as a Server-Sent Events stream to update the UI
-   * incrementally. On failure, sets the error state and transitions to the error view.
+   * Performs the marketplace search API call and processes the SSE response stream.
+   * Sends form data as JSON POST request, reads the streaming response using ReadableStream,
+   * and delegates stream parsing to parseSSEStream. Handles errors by logging and setting error state.
+   * 
+   * Accepts form data as parameter to avoid dependency on formData state, preventing unnecessary
+   * callback recreations that could trigger duplicate requests.
    */
-  const performSearch = useCallback(async (searchParams: ValidationFormData) => {
+  const performSearch = useCallback(async (formData: ValidationFormData) => {
+    if (isSearchingRef.current) {
+      console.log("⚠️ performSearch: Search already in progress, skipping duplicate request");
+      return;
+    }
+    
+    console.log("✅ performSearch: Starting search request");
+    console.log(`📍 API URL: ${API_URL}`);
+    isSearchingRef.current = true;
+    setIsSearching(true);
+    
     try {
       setError(null);
       const response = await fetch(`${API_URL}/api/search/stream`, {
@@ -156,10 +172,10 @@ export default function Home() {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          query: searchParams.query,
-          zipCode: searchParams.zipCode,
-          radius: searchParams.radius,
-          threshold: searchParams.threshold,
+          query: formData.query,
+          zipCode: formData.zipCode,
+          radius: formData.radius,
+          threshold: formData.threshold,
         }),
       });
 
@@ -175,17 +191,38 @@ export default function Home() {
       await parseSSEStream(reader);
     } catch (err) {
       console.error("Search error:", err);
-      setError(err instanceof Error ? err.message : "Failed to search marketplace");
+      
+      // Provide more helpful error messages
+      let errorMessage = "Failed to search marketplace";
+      if (err instanceof TypeError && err.message === "Failed to fetch") {
+        errorMessage = `Cannot connect to API server at ${API_URL}. Please ensure the backend server is running on port 8000.`;
+      } else if (err instanceof Error) {
+        errorMessage = err.message;
+      }
+      
+      setError(errorMessage);
       setAppState("error");
+    } finally {
+      isSearchingRef.current = false;
+      setIsSearching(false);
     }
   }, [parseSSEStream]);
 
   /**
-   * Handles search form submission by resetting all UI state and initiating a new search.
-   * Clears previous results, counts, errors, and CSV data, sets the app to loading state,
-   * then triggers the search with the validated form data.
+   * Handles form submission by resetting all state to initial values and starting the search.
+   * Called by react-hook-form after validation passes. Clears previous results and immediately
+   * starts the search by calling performSearch directly, avoiding the useEffect dependency chain
+   * that was causing duplicate requests.
    */
   const onSubmit = (data: ValidationFormData) => {
+    if (isSearchingRef.current) {
+      console.log("⚠️ onSubmit: Search already in progress, preventing duplicate submission");
+      return;
+    }
+    
+    console.log("✅ onSubmit: Form submitted, starting search");
+    
+    // Reset state
     setScannedCount(0);
     setEvaluatedCount(0);
     setCsvBlob(null);
@@ -193,6 +230,8 @@ export default function Home() {
     setError(null);
     setPhase("scraping");
     setAppState("loading");
+    
+    // Start search directly - no useEffect needed
     performSearch(data);
   };
 
@@ -209,6 +248,8 @@ export default function Home() {
     setCsvBlob(null);
     setListings([]);
     setError(null);
+    isSearchingRef.current = false;
+    setIsSearching(false);
   };
 
   return (

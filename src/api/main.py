@@ -15,9 +15,11 @@ from typing import List, Optional
 from src.scrapers.fb_marketplace_scraper import search_marketplace as search_fb_marketplace
 from src.scrapers.ebay_scraper import get_market_price
 from src.api.deal_calculator import score_listings
+from src.utils.listing_processor import process_single_listing
+from src.utils.colored_logger import setup_colored_logger
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+# Configure colored logging with module prefix
+logger = setup_colored_logger("api", level=logging.INFO)
 
 app = FastAPI(title="FB Marketplace Deal Finder API")
 
@@ -164,6 +166,9 @@ def search_deals_stream(request: SearchRequest):
     """
     Search Facebook Marketplace and stream real-time progress to the frontend.
     
+    Note: This endpoint processes listings individually, making OpenAI and eBay API calls
+    for each FB listing found. This can be slow but provides accurate per-listing comparisons.
+    
     This endpoint allows the frontend to show a live counter of listings found,
     rather than waiting for the entire search to complete before showing results.
     
@@ -177,6 +182,8 @@ def search_deals_stream(request: SearchRequest):
     a callback for each listing found, but SSE requires a generator. A queue bridges
     the two: the callback pushes events to the queue, the generator reads from it.
     """
+    logger.info(f"🔍 Received search request: query='{request.query}', zip={request.zipCode}, radius={request.radius}mi")
+    
     event_queue = queue.Queue()
     fb_listings = []
     
@@ -217,35 +224,56 @@ def search_deals_stream(request: SearchRequest):
         thread.join()
         logger.info(f"✅ Step 2 complete: Found {len(fb_listings)} listings")
         
+        # Phase 2: Processing each listing individually
+        yield f"data: {json.dumps({'type': 'phase', 'phase': 'evaluating'})}\n\n"
+        
         scored_listings = []
-        if not fb_listings:
-            logger.warning("⚠️  Step 2: No listings found - login may be required")
-        else:
-            # Phase 2: Fetching eBay prices
-            logger.info("▶️  Step 3: Fetching eBay prices")
-            yield f"data: {json.dumps({'type': 'phase', 'phase': 'ebay'})}\n\n"
+        evaluated_count = 0
+        
+        if fb_listings:
+            logger.info("")
+            logger.info("╔" + "═" * 78 + "╗")
+            logger.info(f"║  Processing {len(fb_listings)} FB listings individually...")
+            logger.info("╚" + "═" * 78 + "╝")
+            logger.info("")
             
-            try:
-                ebay_stats = get_market_price(
-                    search_term=request.query,
-                    n_items=50,
-                )
-                
-                if ebay_stats:
-                    # Phase 3: Calculating deals
-                    logger.info("▶️  Step 4: Calculating deal scores")
-                    yield f"data: {json.dumps({'type': 'phase', 'phase': 'calculating'})}\n\n"
-                    
-                    scored_listings = score_listings(
-                        fb_listings=fb_listings,
-                        ebay_stats=ebay_stats,
-                        threshold=request.threshold
+            for idx, listing in enumerate(fb_listings, 1):
+                try:
+                    # Process single listing: OpenAI → eBay → deal score
+                    result = process_single_listing(
+                        listing=listing,
+                        original_query=request.query,
+                        threshold=request.threshold,
+                        n_items=50,
+                        listing_index=idx,
+                        total_listings=len(fb_listings)
                     )
-                    logger.info(f"✅ Step 4 complete: Found {len(scored_listings)} deals")
-                else:
-                    logger.warning("⚠️  Step 3: No eBay stats available - skipping deal scoring")
-            except Exception as e:
-                logger.error(f"❌ Step 3 failed: {str(e)[:100]}")
+                    
+                    evaluated_count += 1
+                    
+                    # Stream progress after each listing is processed
+                    yield f"data: {json.dumps({
+                        'type': 'listing_processed',
+                        'evaluatedCount': evaluated_count,
+                        'currentListing': listing.title
+                    })}\n\n"
+                    
+                    # If listing meets threshold, add to results
+                    if result:
+                        scored_listings.append(result)
+                        # Deal found logging is handled in listing_processor.py
+                        
+                except Exception as e:
+                    logger.warning(f"Error processing listing '{listing.title}': {e}")
+                    evaluated_count += 1
+                    # Stream progress even if processing failed
+                    yield f"data: {json.dumps({
+                        'type': 'listing_processed',
+                        'evaluatedCount': evaluated_count,
+                        'currentListing': listing.title
+                    })}\n\n"
+        else:
+            logger.warning("⚠️  Step 2: No listings found - login may be required")
         
         # Send completion event
         logger.info(f"{'='*60}")
@@ -254,7 +282,7 @@ def search_deals_stream(request: SearchRequest):
         done_event = {
             "type": "done",
             "scannedCount": len(fb_listings),
-            "evaluatedCount": len(scored_listings),
+            "evaluatedCount": evaluated_count,
             "listings": scored_listings,
             "threshold": request.threshold
         }
