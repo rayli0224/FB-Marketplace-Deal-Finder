@@ -47,15 +47,21 @@ RUN pip install --no-cache-dir -r requirements.txt
 RUN playwright install chromium
 RUN playwright install-deps chromium
 
-# Install Frontend dependencies
+# Copy frontend package files first
 COPY frontend/package.json frontend/pnpm-lock.yaml* ./frontend/
+
+# Install Frontend dependencies
 WORKDIR /app/frontend
 RUN pnpm install
 
-# Copy application code
+# Copy rest of frontend code (this won't overwrite node_modules if it doesn't exist locally)
 WORKDIR /app
 COPY src/ ./src/
 COPY frontend/ ./frontend/
+
+# Verify critical dependencies are installed
+WORKDIR /app/frontend
+RUN ls -la node_modules/@hookform 2>/dev/null || (echo "⚠️  @hookform/resolvers not found, reinstalling..." && pnpm install @hookform/resolvers react-hook-form zod)
 
 # Set PYTHONPATH
 ENV PYTHONPATH=/app
