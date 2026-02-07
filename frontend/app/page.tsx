@@ -26,7 +26,7 @@ export default function Home() {
   } = useForm<ValidationFormData>({
     resolver: zodResolver(formSchema),
     defaultValues: { query: "", zipCode: "", radius: "", threshold: "" },
-    mode: "onChange",
+    mode: "onTouched",
   });
   const formData = watch();
   const [scannedCount, setScannedCount] = useState(0);
