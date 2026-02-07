@@ -16,9 +16,10 @@ from src.scrapers.fb_marketplace_scraper import search_marketplace as search_fb_
 from src.scrapers.ebay_scraper import get_market_price
 from src.api.deal_calculator import filter_and_score_listings
 from src.utils.listing_processor import process_single_listing
+from src.utils.colored_logger import setup_colored_logger
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+# Configure colored logging with module prefix
+logger = setup_colored_logger("api", level=logging.INFO)
 
 app = FastAPI(title="FB Marketplace Deal Finder API")
 
@@ -216,16 +217,22 @@ def search_deals_stream(request: SearchRequest):
         evaluated_count = 0
         
         if fb_listings:
-            logger.info(f"Processing {len(fb_listings)} FB listings individually...")
+            logger.info("")
+            logger.info("╔" + "═" * 78 + "╗")
+            logger.info(f"║  Processing {len(fb_listings)} FB listings individually...")
+            logger.info("╚" + "═" * 78 + "╝")
+            logger.info("")
             
-            for listing in fb_listings:
+            for idx, listing in enumerate(fb_listings, 1):
                 try:
                     # Process single listing: OpenAI → eBay → deal score
                     result = process_single_listing(
                         listing=listing,
                         original_query=request.query,
                         threshold=request.threshold,
-                        n_items=50
+                        n_items=50,
+                        listing_index=idx,
+                        total_listings=len(fb_listings)
                     )
                     
                     evaluated_count += 1
@@ -240,7 +247,7 @@ def search_deals_stream(request: SearchRequest):
                     # If listing meets threshold, add to results
                     if result:
                         scored_listings.append(result)
-                        logger.info(f"Found deal: {result['title']} - {result['dealScore']}% savings")
+                        # Deal found logging is handled in listing_processor.py
                         
                 except Exception as e:
                     logger.warning(f"Error processing listing '{listing.title}': {e}")

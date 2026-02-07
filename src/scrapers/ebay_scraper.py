@@ -16,9 +16,10 @@ import time
 
 import requests
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+from src.utils.colored_logger import setup_colored_logger
+
+# Configure colored logging with module prefix
+logger = setup_colored_logger("ebay_scraper", level=logging.INFO)
 
 # eBay API credentials (get from developer.ebay.com)
 EBAY_APP_ID = os.environ.get("EBAY_APP_ID", "")
@@ -199,7 +200,7 @@ class EbayBrowseAPIClient:
             }
             
             try:
-                logger.info(f"Fetching eBay Browse API (offset {offset})...")
+                logger.debug(f"Fetching eBay Browse API (offset {offset})...")
                 response = requests.get(self.BASE_URL, params=params, headers=headers, timeout=30)
                 
                 if response.status_code == 401:
@@ -244,7 +245,7 @@ class EbayBrowseAPIClient:
                         logger.debug(f"Error parsing item: {e}")
                         continue
                 
-                logger.info(f"Found {len(items)} active listings (Total: {len(all_items)})")
+                logger.debug(f"Found {len(items)} active listings (Total: {len(all_items)}) for query: '{keywords}'")
                 
                 # Check if there are more pages
                 total = data.get("total", 0)
@@ -287,8 +288,8 @@ class EbayBrowseAPIClient:
         Returns:
             PriceStats object with average price and raw prices, or None if failed
         """
-        logger.info(f"Using eBay Browse API for ACTIVE listings: '{search_term}'")
-        logger.warning("⚠️ Note: Browse API returns ACTIVE listings only, not sold items")
+        logger.info(f"🔍 Searching eBay for: '{search_term}'")
+        logger.debug("Note: Browse API returns ACTIVE listings only, not sold items")
         
         items = self.search_active_listings(
             keywords=search_term,
@@ -299,7 +300,7 @@ class EbayBrowseAPIClient:
         )
         
         if not items or len(items) < 3:
-            logger.error(f"Not enough data from Browse API: only found {len(items) if items else 0} items")
+            logger.warning(f"Not enough data from Browse API: only found {len(items) if items else 0} items (minimum 3 required for statistical significance)")
             return None
         
         # Extract prices
@@ -317,7 +318,7 @@ class EbayBrowseAPIClient:
             raw_prices=sorted(prices),
         )
         
-        logger.info(f"Successfully analyzed {stats.sample_size} ACTIVE listings via Browse API")
+        logger.info(f"✅ Found {stats.sample_size} eBay listings | Avg: ${stats.average:.2f}")
         return stats
 
 

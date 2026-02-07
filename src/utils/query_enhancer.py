@@ -17,9 +17,10 @@ except ImportError:
     OpenAI = None
 
 from src.scrapers.fb_marketplace_scraper import Listing
+from src.utils.colored_logger import setup_colored_logger
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+# Configure colored logging with module prefix
+logger = setup_colored_logger("query_enhancer", level=logging.INFO)
 
 # OpenAI API key from environment
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
@@ -76,18 +77,45 @@ Facebook Marketplace listing:
 - Location: {listing.location}
 
 Your task:
-1. Generate an optimized eBay search query that will find similar items to this listing
-2. Provide exclusion keywords to filter out any unrelated listing such as accessories, broken items, or parts-only items
+1. Generate an optimized eBay search query that will find similar items to this listing.
+2. Provide exclusion keywords to filter out unrelated listings (accessories, incompatible items, etc).
 
-Focus on finding the MAIN PRODUCT, not accessories (unless specifically requested in the original query). For example:
-- If listing is "Nintendo DS Lite Pink", search for the console itself, not cases or pens
-- If listing is "iPhone 13 Pro", search for the phone, not cases or chargers
-- Exclude keywords like: "case", "pen", "stylus", "charger", "broken", "for parts", "not working"
+Abstraction rules:
 
-Return your response as a JSON object with this exact structure:
+PRESERVE (always include if present):
+- Brand
+- Product type
+- Model / product line
+- Functional condition (e.g. "for parts", "broken", "not working", "refurbished", "new")
+
+INCLUDE ONLY IF THEY MATERIALLY AFFECT PRICE:
+- Storage / capacity (e.g. 128GB, 1TB)
+- Pro/Max/Ultra variants
+- Generation / year
+
+IGNORE OR GENERALIZE:
+- Color
+- Cosmetic descriptors
+- Seller adjectives (rare, amazing, mint)
+- Minor accessories
+- Bundle details unless they dominate value
+
+Important:
+- The goal is to find many comparable items, not exact matches.
+- Do NOT make the query overly specific.
+- However, if the listing is for parts / broken, the query MUST reflect that.
+- The enhanced_query should typically be 3–6 tokens long, unless functional condition requires more.
+
+Focus on the MAIN PRODUCT, not accessories.
+Examples:
+- "Nintendo DS Lite Pink" → "Nintendo DS Lite"
+- "iPhone 13 Pro 256GB cracked screen" → "iPhone 13 Pro for parts"
+- "MacBook Pro 2019 16 inch i9" → "MacBook Pro 2019"
+
+Return your response as a JSON object with exactly this structure:
 {{
-    "enhanced_query": "optimized search query for eBay",
-    "exclusion_keywords": ["keyword1", "keyword2", "keyword3"]
+  "enhanced_query": "optimized eBay search query",
+  "exclusion_keywords": ["keyword1", "keyword2", "keyword3"]
 }}
 
 Only return the JSON object, no other text."""
@@ -105,7 +133,7 @@ Only return the JSON object, no other text."""
                     "content": prompt
                 }
             ],
-            temperature=0.3,  # Lower temperature for more consistent results
+            temperature=0.4,  # Slightly higher temperature to encourage broader queries
             max_tokens=200,
         )
         
@@ -130,7 +158,7 @@ Only return the JSON object, no other text."""
         if not isinstance(exclusion_keywords, list):
             exclusion_keywords = []
         
-        logger.debug(f"Generated eBay query: '{enhanced_query}' with exclusions: {exclusion_keywords}")
+        logger.info(f"Generated eBay query: '{enhanced_query}' | Exclusions: {exclusion_keywords}")
         
         return (enhanced_query, exclusion_keywords)
         
