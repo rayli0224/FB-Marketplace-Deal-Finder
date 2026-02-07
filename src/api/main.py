@@ -154,7 +154,6 @@ def search_deals(request: SearchRequest):
 
 @app.post("/api/search/stream")
 def search_deals_stream(request: SearchRequest):
-    logger.info(f"🔍 Received search request: query='{request.query}', zip={request.zipCode}, radius={request.radius}mi")
     """
     Search Facebook Marketplace and stream real-time progress to the frontend.
     
@@ -174,6 +173,8 @@ def search_deals_stream(request: SearchRequest):
     a callback for each listing found, but SSE requires a generator. A queue bridges
     the two: the callback pushes events to the queue, the generator reads from it.
     """
+    logger.info(f"🔍 Received search request: query='{request.query}', zip={request.zipCode}, radius={request.radius}mi")
+    
     event_queue = queue.Queue()
     fb_listings = []
     

@@ -31,15 +31,14 @@ def process_single_listing(
     """
     Process a single FB listing to determine if it's a good deal.
     
-    This function orchestrates the full evaluation process for one listing:
+    Orchestrates the full evaluation process:
     1. Generates an optimized eBay search query using OpenAI
     2. Fetches comparable prices from eBay using the generated query
     3. Calculates deal score (percentage savings vs eBay average)
     4. Returns listing dict with dealScore if it meets threshold, None otherwise
     
-    If any step fails (OpenAI call, eBay search, insufficient data), the function
-    returns None and logs the error. This ensures robust error handling without
-    breaking the entire search process.
+    If any step fails, returns None and logs the error. This ensures robust error
+    handling without breaking the entire search process.
     
     Args:
         listing: Facebook Marketplace listing to evaluate
@@ -72,7 +71,6 @@ def process_single_listing(
         ... else:
         ...     print("Listing doesn't meet threshold or processing failed")
     """
-    # Step 1: Generate optimized eBay query using OpenAI
     progress_info = ""
     if listing_index is not None and total_listings is not None:
         progress_info = f"[{listing_index}/{total_listings}] "
@@ -83,7 +81,6 @@ def process_single_listing(
     logger.info(f"   💰 Price: ${listing.price:.2f} | 📍 Location: {listing.location}")
     logger.info("=" * 80)
     
-    # Step 1: Generate optimized eBay query using OpenAI
     logger.info("🔍 Step 1: Generating eBay search query with OpenAI...")
     query_result = generate_ebay_query_for_listing(listing, original_query)
     if not query_result:
@@ -92,12 +89,10 @@ def process_single_listing(
         return None
     
     enhanced_query, exclusion_keywords = query_result
-    # Query logging is now handled in query_enhancer.py
     
-    # Small delay for rate limiting (OpenAI API)
+    # Rate limiting delay for OpenAI API
     time.sleep(0.5)
     
-    # Step 2: Fetch eBay price statistics
     logger.info(f"🔍 Step 2: Fetching eBay price data for query: '{enhanced_query}'...")
     ebay_stats = get_market_price(
         search_term=enhanced_query,
@@ -112,10 +107,9 @@ def process_single_listing(
     
     logger.info(f"   ✓ Found {ebay_stats.sample_size} eBay listings | Avg price: ${ebay_stats.average:.2f}")
     
-    # Small delay for rate limiting (eBay API)
+    # Rate limiting delay for eBay API
     time.sleep(0.3)
     
-    # Step 3: Calculate deal score
     logger.info("🔍 Step 3: Calculating deal score...")
     deal_score = calculate_deal_score(listing.price, ebay_stats)
     
@@ -126,7 +120,7 @@ def process_single_listing(
     
     logger.info(f"   ✓ Deal score: {deal_score:.1f}% savings vs eBay average")
     
-    # Step 4: Check if meets threshold
+    # Check if meets threshold
     if deal_score < threshold:
         logger.info(f"⏭️  Deal score {deal_score:.1f}% below threshold {threshold}% - skipping")
         logger.info("")

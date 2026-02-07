@@ -14,7 +14,7 @@ class ColoredFormatter(logging.Formatter):
     Custom logging formatter that adds colors and module prefixes.
     
     Colors:
-    - DEBUG: Gray
+    - DEBUG: Cyan
     - INFO: Green
     - WARNING: Yellow
     - ERROR: Red

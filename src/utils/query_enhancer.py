@@ -43,7 +43,7 @@ def generate_ebay_query_for_listing(
         
     Returns:
         Tuple of (enhanced_ebay_query, exclusion_keywords) if successful, None if failed.
-        Example: ("nintendo ds lite pink console", ["case", "pen", "stylus", "broken"])
+        Example: ("nintendo ds lite", ["case", "pen", "stylus", "broken"])
         
     Example:
         >>> listing = Listing(
@@ -54,7 +54,7 @@ def generate_ebay_query_for_listing(
         ... )
         >>> result = generate_ebay_query_for_listing(listing, "nintendo ds")
         >>> enhanced_query, exclusions = result
-        >>> print(enhanced_query)  # "nintendo ds lite pink console"
+        >>> print(enhanced_query)  # "nintendo ds lite"
         >>> print(exclusions)  # ["case", "pen", "stylus", "broken", "for parts"]
     """
     if not OpenAI:
