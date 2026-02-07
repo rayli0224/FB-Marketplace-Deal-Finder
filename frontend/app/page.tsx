@@ -159,6 +159,7 @@ export default function Home() {
     }
     
     console.log("✅ performSearch: Starting search request");
+    console.log(`📍 API URL: ${API_URL}`);
     isSearchingRef.current = true;
     setIsSearching(true);
     
@@ -189,7 +190,17 @@ export default function Home() {
       await parseSSEStream(reader);
     } catch (err) {
       console.error("Search error:", err);
-      setError(err instanceof Error ? err.message : "Failed to search marketplace");
+      
+      // Provide more helpful error messages
+      let errorMessage = "Failed to search marketplace";
+      if (err instanceof TypeError && err.message === "Failed to fetch") {
+        errorMessage = `Cannot connect to API server at ${API_URL}. Please ensure the backend server is running on port 8000.`;
+      } else if (err instanceof Error) {
+        errorMessage = err.message;
+      }
+      
+      setError(errorMessage);
+      setAppState("error");
     } finally {
       isSearchingRef.current = false;
       setIsSearching(false);
