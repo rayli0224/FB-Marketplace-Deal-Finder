@@ -2,7 +2,7 @@
 
 import { ProgressBar } from "@/components/loading/ProgressBar";
 
-export type SearchPhase = "scraping" | "ebay" | "calculating";
+export type SearchPhase = "scraping" | "ebay" | "calculating" | "evaluating";
 
 export interface SearchLoadingStateProps {
   phase: SearchPhase;
@@ -15,7 +15,7 @@ export interface SearchLoadingStateProps {
  * Provides pirate-themed messaging that matches the current phase of the search process.
  */
 function getPhaseMessages(phase: SearchPhase): { main: string; description: string } {
-  const messages = {
+  const messages: Record<SearchPhase, { main: string; description: string }> = {
     scraping: {
       main: "🔍 Searching Facebook Marketplace...",
       description: "Infiltrating the marketplace for treasures...",
@@ -28,8 +28,12 @@ function getPhaseMessages(phase: SearchPhase): { main: string; description: stri
       main: "🧮 Calculating deals...",
       description: "Crunching numbers to find the best deals...",
     },
+    evaluating: {
+      main: "🤖 Evaluating listings with AI...",
+      description: "Using AI to find accurate price comparisons...",
+    },
   };
-  return messages[phase];
+  return messages[phase] || messages.scraping; // Fallback to scraping if phase is invalid
 }
 
 /**
@@ -38,7 +42,10 @@ function getPhaseMessages(phase: SearchPhase): { main: string; description: stri
  * for scanned and evaluated listings.
  */
 export function SearchLoadingState({ phase, scannedCount, evaluatedCount }: SearchLoadingStateProps) {
-  const phaseMessages = getPhaseMessages(phase);
+  const phaseMessages = getPhaseMessages(phase) || {
+    main: "🔄 Processing...",
+    description: "Working on your request...",
+  };
 
   return (
     <div className="space-y-6">
