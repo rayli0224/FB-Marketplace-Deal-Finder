@@ -25,15 +25,7 @@ logger = setup_colored_logger("ebay_scraper", level=logging.INFO)
 EBAY_APP_ID = os.environ.get("EBAY_APP_ID", "")
 EBAY_CLIENT_SECRET = os.environ.get("EBAY_CLIENT_SECRET", "")
 
-# Debug: Log if credentials are loaded (but don't log the actual secret)
-if EBAY_APP_ID:
-    logger.debug(f"eBay App ID loaded: {EBAY_APP_ID[:20]}...")
-else:
-    logger.warning("EBAY_APP_ID not found in environment variables")
-if EBAY_CLIENT_SECRET:
-    logger.debug("eBay Client Secret loaded (hidden)")
-else:
-    logger.warning("EBAY_CLIENT_SECRET not found in environment variables")
+# Check credentials (only log when actually needed)
 
 
 @dataclass
@@ -83,7 +75,7 @@ class EbayBrowseAPIClient:
         self._token_expiry = 0
         
         if not self.app_id or not self.client_secret:
-            logger.warning("eBay App ID or Client Secret not configured. Browse API calls will fail.")
+            pass
     
     def _get_access_token(self) -> Optional[str]:
         """Get or refresh OAuth 2.0 access token using Client Credentials flow."""
@@ -94,7 +86,7 @@ class EbayBrowseAPIClient:
             return self._access_token
         
         if not self.app_id or not self.client_secret:
-            logger.error("Cannot get access token: App ID or Client Secret missing")
+            logger.error("❌ eBay credentials missing")
             return None
         
         try:
@@ -112,7 +104,6 @@ class EbayBrowseAPIClient:
                 "scope": "https://api.ebay.com/oauth/api_scope",  # Public data scope
             }
             
-            logger.debug("Requesting OAuth access token...")
             response = requests.post(self.TOKEN_URL, headers=headers, data=data, timeout=10)
             response.raise_for_status()
             
@@ -121,13 +112,10 @@ class EbayBrowseAPIClient:
             expires_in = token_data.get("expires_in", 7200)
             self._token_expiry = time.time() + expires_in - 60  # Refresh 1 min early
             
-            logger.debug("OAuth access token obtained successfully")
             return self._access_token
             
         except requests.exceptions.RequestException as e:
-            logger.error(f"Failed to get OAuth access token: {e}")
-            if hasattr(e, 'response') and e.response is not None:
-                logger.error(f"Response: {e.response.text[:200]}")
+            pass
             return None
     
     def search_active_listings(
@@ -205,7 +193,6 @@ class EbayBrowseAPIClient:
                 
                 if response.status_code == 401:
                     # Token expired, refresh and retry once
-                    logger.debug("Token expired, refreshing...")
                     self._access_token = None
                     token = self._get_access_token()
                     if token:
@@ -218,7 +205,6 @@ class EbayBrowseAPIClient:
                 # Extract items
                 items = data.get("itemSummaries", [])
                 if not items:
-                    logger.info("No more items found")
                     break
                 
                 # Parse items and extract prices
@@ -241,8 +227,7 @@ class EbayBrowseAPIClient:
                                 "price": price_value,
                                 "url": item.get("itemWebUrl", ""),
                             })
-                    except (KeyError, ValueError, TypeError) as e:
-                        logger.debug(f"Error parsing item: {e}")
+                    except (KeyError, ValueError, TypeError):
                         continue
                 
                 logger.debug(f"Found {len(items)} active listings (Total: {len(all_items)}) for query: '{keywords}'")
@@ -258,9 +243,7 @@ class EbayBrowseAPIClient:
                 time.sleep(0.5)
                 
             except requests.exceptions.RequestException as e:
-                logger.error(f"eBay Browse API request failed: {e}")
-                if hasattr(e, 'response') and e.response is not None:
-                    logger.error(f"Response: {e.response.text[:500]}")
+                pass
                 break
         
         return all_items[:max_items] if all_items else None
@@ -307,7 +290,7 @@ class EbayBrowseAPIClient:
         prices = [item["price"] for item in items if item.get("price", 0) > 0]
         
         if len(prices) < 3:
-            logger.error(f"Not enough valid prices: {len(prices)}")
+            logger.error(f"⚠️  Insufficient prices - {len(prices)} valid")
             return None
         
         # Calculate average price
@@ -348,7 +331,7 @@ def get_market_price(
         >>> print(f"Average price: ${stats.average:.2f}")
     """
     if not EBAY_APP_ID or not EBAY_CLIENT_SECRET:
-        logger.error("eBay credentials not configured. Set EBAY_APP_ID and EBAY_CLIENT_SECRET in .env file")
+        logger.error("❌ eBay credentials not configured")
         return None
     
     browse_client = EbayBrowseAPIClient()

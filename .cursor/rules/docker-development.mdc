@@ -1,0 +1,21 @@
+---
+description: All dependencies and services run inside Docker — never install locally
+alwaysApply: true
+---
+
+# Docker-Only Development
+
+This project runs entirely inside Docker. **Never install dependencies locally.**
+
+## Rules
+
+- **Do not run `npm install`, `pnpm install`, `pip install`, or any package manager locally.** All dependencies are installed inside the Docker container via the Dockerfile.
+- When adding a new dependency, add it to the appropriate manifest file (`frontend/package.json`, `requirements.txt`) and rebuild the Docker image with `docker compose up --build`.
+- The Docker Compose volume mounts handle hot-reloading for source code — `node_modules` and `.next` live only inside the container via anonymous volumes.
+- All commands (dev server, linting, tests) should be run inside the container, not on the host machine.
+
+## Adding a Dependency
+
+1. Add the package to `frontend/package.json` (JS) or `requirements.txt` (Python)
+2. Rebuild: `docker compose up --build`
+3. Do **not** run install commands on the host

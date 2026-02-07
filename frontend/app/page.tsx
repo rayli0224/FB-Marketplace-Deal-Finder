@@ -1,20 +1,18 @@
 "use client";
 
-import { useState, useCallback, useRef, type FormEvent, type ReactNode, type Ref, type ChangeEvent, type FocusEvent } from "react";
+import { useState, useCallback, useRef } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { formSchema, type FormData as ValidationFormData } from "@/lib/validation";
-import { SkullIcon, TreasureIcon } from "@/lib/icons";
+import { AppHeader } from "@/components/layout/AppHeader";
+import { AppFooter } from "@/components/layout/AppFooter";
+import { MarketplaceSearchForm } from "@/components/search-form/MarketplaceSearchForm";
+import { SearchLoadingState, type SearchPhase } from "@/components/loading/SearchLoadingState";
+import { SearchErrorState } from "@/components/results/SearchErrorState";
+import { SearchResultsTable } from "@/components/results/SearchResultsTable";
+import type { Listing } from "@/components/results/SearchResultsTable";
 
 type AppState = "form" | "loading" | "done" | "error";
-
-interface Listing {
-  title: string;
-  price: number;
-  location: string;
-  url: string;
-  dealScore: number;
-}
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
@@ -28,7 +26,7 @@ export default function Home() {
   } = useForm<ValidationFormData>({
     resolver: zodResolver(formSchema),
     defaultValues: { query: "", zipCode: "", radius: "", threshold: "" },
-    mode: "onChange",
+    mode: "onTouched",
   });
   const formData = watch();
   const [scannedCount, setScannedCount] = useState(0);
@@ -36,7 +34,8 @@ export default function Home() {
   const [csvBlob, setCsvBlob] = useState<Blob | null>(null);
   const [listings, setListings] = useState<Listing[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [phase, setPhase] = useState<string>("scraping");
+  const [phase, setPhase] = useState<SearchPhase>("scraping");
+  const [threshold, setThreshold] = useState<number>(0);
   const [isSearching, setIsSearching] = useState<boolean>(false);
   const isSearchingRef = useRef<boolean>(false);
 
@@ -78,10 +77,41 @@ export default function Home() {
   }, [csvBlob, formData.query]);
 
   /**
+   * Handles SSE phase update events by updating the current search phase state.
+   * Called when the server sends a phase change notification (scraping, ebay, calculating).
+   */
+  const handlePhaseUpdate = useCallback((phase: SearchPhase) => {
+    setPhase(phase);
+  }, []);
+
+  /**
+   * Handles SSE progress update events by updating the scanned count.
+   * Called periodically as listings are scanned during the search process.
+   */
+  const handleProgressUpdate = useCallback((scannedCount: number) => {
+    setScannedCount(scannedCount);
+  }, []);
+
+  /**
+   * Handles SSE completion events by setting final results and transitioning to done state.
+   * Processes the final listings data, generates CSV blob, and updates all final counts.
+   */
+  const handleCompletion = useCallback((data: { scannedCount: number; evaluatedCount: number; listings: Listing[]; threshold?: number }) => {
+    setScannedCount(data.scannedCount);
+    setEvaluatedCount(data.evaluatedCount);
+    setListings(data.listings);
+    setThreshold(data.threshold || 0);
+
+    const blob = generateCSV(data.listings);
+    setCsvBlob(blob);
+
+    setAppState("done");
+  }, [generateCSV]);
+
+  /**
    * Parses Server-Sent Events (SSE) stream data and updates UI state accordingly.
    * Reads chunks from the stream reader, decodes text, and processes each line.
-   * Handles three event types: phase updates (sets phase state), progress updates (sets scanned count),
-   * and completion (sets all final counts, listings, CSV blob, and transitions to done state).
+   * Delegates to specific handlers for phase updates, progress updates, and completion events.
    */
   const parseSSEStream = useCallback(
     async (reader: ReadableStreamDefaultReader<Uint8Array>) => {
@@ -99,26 +129,19 @@ export default function Home() {
             const data = JSON.parse(line.slice(6));
 
             if (data.type === "phase") {
-              setPhase(data.phase);
+              handlePhaseUpdate(data.phase);
             } else if (data.type === "progress") {
-              setScannedCount(data.scannedCount);
+              handleProgressUpdate(data.scannedCount);
             } else if (data.type === "listing_processed") {
               setEvaluatedCount(data.evaluatedCount);
             } else if (data.type === "done") {
-              setScannedCount(data.scannedCount);
-              setEvaluatedCount(data.evaluatedCount);
-              setListings(data.listings);
-
-              const blob = generateCSV(data.listings);
-              setCsvBlob(blob);
-
-              setAppState("done");
+              handleCompletion(data);
             }
           }
         }
       }
     },
-    [generateCSV, setPhase, setScannedCount, setEvaluatedCount, setListings, setCsvBlob, setAppState]
+    [handlePhaseUpdate, handleProgressUpdate, handleCompletion]
   );
 
   /**
@@ -167,7 +190,6 @@ export default function Home() {
     } catch (err) {
       console.error("Search error:", err);
       setError(err instanceof Error ? err.message : "Failed to search marketplace");
-      setAppState("error");
     } finally {
       isSearchingRef.current = false;
       setIsSearching(false);
@@ -220,35 +242,12 @@ export default function Home() {
 
   return (
     <main className="min-h-screen bg-background p-4 md:p-8">
-      {/* Scanlines overlay */}
       <div className="pointer-events-none fixed inset-0 bg-[repeating-linear-gradient(0deg,transparent,transparent_2px,rgba(0,0,0,0.1)_2px,rgba(0,0,0,0.1)_4px)] opacity-30" />
       
       <div className="relative mx-auto max-w-4xl">
-        {/* Header */}
-        <header className="mb-8 text-center">
-          <div className="mb-4 text-4xl">
-            <SkullIcon className="text-accent" />
-          </div>
-          <h1 className="mb-2 font-mono text-2xl font-bold tracking-tight text-foreground md:text-3xl">
-            <span className="text-primary">{">"}</span> LOOT FINDER <span className="text-primary">{"<"}</span>
-          </h1>
-          <p className="font-mono text-sm text-muted-foreground">
-            {"// hack the marketplace, steal the deals ~"}
-          </p>
-          <div className="mt-4 inline-block border border-border bg-card px-3 py-1">
-            <span className="font-mono text-xs text-accent">STATUS: </span>
-            <span className="font-mono text-xs text-primary">
-              {appState === "form" && "AWAITING ORDERS"}
-              {appState === "loading" && "RAIDING..."}
-              {appState === "done" && "TREASURE ACQUIRED"}
-              {appState === "error" && "MISSION FAILED"}
-            </span>
-          </div>
-        </header>
+        <AppHeader appState={appState} />
 
-        {/* Main Card */}
         <div className="border-2 border-border bg-card shadow-[4px_4px_0_0] shadow-primary/20">
-          {/* Terminal Header */}
           <div className="flex items-center gap-2 border-b border-border bg-secondary px-4 py-2">
             <span className="h-3 w-3 rounded-full bg-destructive" />
             <span className="h-3 w-3 rounded-full bg-accent" />
@@ -257,378 +256,42 @@ export default function Home() {
           </div>
 
           <div className="p-6">
-            {/* Search Form */}
             {appState === "form" && (
-              <form onSubmit={handleSubmit} className="space-y-5">
-                <div className="mb-4 font-mono text-xs text-muted-foreground">
-                  <span className="text-primary">{">"}</span> Enter target parameters, matey...
-                </div>
-
-                <FormField
-                  label="TARGET_QUERY"
-                  id="query"
-                  type="text"
-                  placeholder="e.g. iPhone 13 Pro"
-                  register={register}
-                  required
-                  error={errors.query?.message}
-                  icon={<TreasureIcon className="text-accent" />}
-                />
-
-                <FormField
-                  label="PORT_CODE"
-                  id="zipCode"
-                  type="text"
-                  placeholder="e.g. 10001"
-                  register={register}
-                  pattern="[0-9]{5}"
-                  required
-                  error={errors.zipCode?.message}
-                  icon={<span className="text-accent">@</span>}
-                />
-
-                <div className="grid grid-cols-2 gap-4">
-                  <FormField
-                    label="RAID_RADIUS"
-                    id="radius"
-                    type="number"
-                    placeholder="25"
-                    register={register}
-                    min={1}
-                    max={500}
-                    required
-                    error={errors.radius?.message}
-                    suffix="mi"
-                  />
-
-                  <FormField
-                    label="STEAL_THRESHOLD"
-                    id="threshold"
-                    type="number"
-                    placeholder="20"
-                    register={register}
-                    min={0}
-                    max={100}
-                    required
-                    error={errors.threshold?.message}
-                    suffix="%"
-                  />
-                </div>
-
-                <button
-                  type="submit"
-                  disabled={!isValid}
-                  className={`group mt-2 w-full border-2 px-4 py-3 font-mono text-sm font-bold uppercase tracking-wide transition-all ${
-                    isValid
-                      ? "border-primary bg-primary text-primary-foreground hover:bg-transparent hover:text-primary cursor-pointer"
-                      : "border-muted bg-muted text-muted-foreground cursor-not-allowed opacity-50"
-                  }`}
-                >
-                  <span className={`inline-block transition-transform ${isValid ? "group-hover:translate-x-1" : ""}`}>
-                    {">>>"} BEGIN HEIST {"<<<"}
-                  </span>
-                </button>
-              </form>
+              <MarketplaceSearchForm
+                register={register}
+                errors={errors}
+                isValid={isValid}
+                handleSubmit={handleSubmit}
+              />
             )}
 
-            {/* Loading State */}
             {appState === "loading" && (
-              <div className="space-y-6">
-                <div className="border border-border bg-secondary p-4">
-                  <div className="flex items-center gap-3">
-                    <div className="flex gap-1">
-                      <span className="inline-block h-2 w-2 animate-bounce bg-primary" style={{ animationDelay: "0ms" }} />
-                      <span className="inline-block h-2 w-2 animate-bounce bg-primary" style={{ animationDelay: "150ms" }} />
-                      <span className="inline-block h-2 w-2 animate-bounce bg-primary" style={{ animationDelay: "300ms" }} />
-                    </div>
-                    <span className="font-mono text-sm text-muted-foreground">
-                      {phase === "scraping" && "🔍 Searching Facebook Marketplace..."}
-                      {phase === "ebay" && "📊 Fetching eBay prices..."}
-                      {phase === "calculating" && "🧮 Calculating deals..."}
-                    </span>
-                  </div>
-                  <div className="mt-3 font-mono text-xs text-muted-foreground/60">
-                    {phase === "scraping" && "Infiltrating the marketplace for treasures..."}
-                    {phase === "evaluating" && "Using AI to find accurate price comparisons..."}
-                    {phase === "calculating" && "Crunching numbers to find the best deals..."}
-                  </div>
-                </div>
-
-                <div className="space-y-4">
-                  <LoadingBar 
-                    label="Infiltrating listings" 
-                    count={scannedCount}
-                    maxCount={scannedCount || 100}
-                    suffix="scanned" 
-                    icon="~"
-                  />
-                  <LoadingBar 
-                    label="Evaluating loot value" 
-                    count={evaluatedCount}
-                    maxCount={scannedCount || 100}
-                    suffix="assessed" 
-                    icon="*"
-                  />
-                </div>
-              </div>
+              <SearchLoadingState
+                phase={phase}
+                scannedCount={scannedCount}
+                evaluatedCount={evaluatedCount}
+              />
             )}
 
-            {/* Done State - Results List */}
             {appState === "done" && (
-              <div className="space-y-6">
-                {/* Header */}
-                <div className="flex items-center justify-between">
-                  <div>
-                    <h2 className="font-mono text-lg font-bold text-foreground">
-                      HEIST COMPLETE!
-                    </h2>
-                    <p className="font-mono text-xs text-muted-foreground">
-                      Found {listings.length} treasures from {scannedCount} scanned
-                    </p>
-                  </div>
-                  <div className="flex gap-2">
-                    <button
-                      type="button"
-                      onClick={downloadCSV}
-                      className="border-2 border-primary bg-transparent px-3 py-2 font-mono text-xs font-bold text-primary transition-all hover:bg-primary hover:text-primary-foreground"
-                    >
-                      EXPORT CSV
-                    </button>
-                    <button
-                      type="button"
-                      onClick={handleReset}
-                      className="border-2 border-accent bg-accent px-3 py-2 font-mono text-xs font-bold text-accent-foreground transition-all hover:bg-transparent hover:text-accent"
-                    >
-                      NEW SEARCH
-                    </button>
-                  </div>
-                </div>
-
-                {/* Results Table */}
-                {listings.length > 0 ? (
-                  <div className="max-h-[60vh] overflow-auto border border-border">
-                    <table className="w-full border-collapse font-mono text-sm">
-                      <thead className="sticky top-0 bg-secondary">
-                        <tr className="border-b border-border text-left">
-                          <th className="px-3 py-2 text-xs text-muted-foreground">TITLE</th>
-                          <th className="px-3 py-2 text-xs text-muted-foreground">PRICE</th>
-                          <th className="px-3 py-2 text-xs text-muted-foreground">LOCATION</th>
-                          <th className="px-3 py-2 text-xs text-muted-foreground">DEAL %</th>
-                          <th className="px-3 py-2 text-xs text-muted-foreground">LINK</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {listings.map((listing, index) => (
-                          <tr 
-                            key={index} 
-                            className="border-b border-border/50 hover:bg-secondary/50 transition-colors"
-                          >
-                            <td className="px-3 py-2 max-w-[300px] truncate" title={listing.title}>
-                              {listing.title}
-                            </td>
-                            <td className="px-3 py-2 text-primary font-bold">
-                              ${listing.price.toFixed(2)}
-                            </td>
-                            <td className="px-3 py-2 text-muted-foreground max-w-[150px] truncate" title={listing.location}>
-                              {listing.location}
-                            </td>
-                            <td className="px-3 py-2">
-                              {listing.dealScore > 0 ? (
-                                <span className={`font-bold ${listing.dealScore >= 20 ? 'text-green-500' : listing.dealScore >= 10 ? 'text-accent' : 'text-muted-foreground'}`}>
-                                  {listing.dealScore}%
-                                </span>
-                              ) : (
-                                <span className="text-muted-foreground/50">--</span>
-                              )}
-                            </td>
-                            <td className="px-3 py-2">
-                              <a 
-                                href={listing.url} 
-                                target="_blank" 
-                                rel="noopener noreferrer"
-                                className="text-primary hover:underline"
-                              >
-                                VIEW →
-                              </a>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                ) : (
-                  <div className="border border-border bg-secondary p-8 text-center">
-                    <p className="font-mono text-muted-foreground">No listings found matching your criteria.</p>
-                  </div>
-                )}
-              </div>
+              <SearchResultsTable
+                listings={listings}
+                scannedCount={scannedCount}
+                threshold={threshold}
+                onDownloadCSV={downloadCSV}
+                onReset={handleReset}
+              />
             )}
 
-            {/* Error State */}
             {appState === "error" && (
-              <div className="space-y-6">
-                <div className="text-center">
-                  <div className="mb-4 text-5xl">⚠️</div>
-                  <h2 className="mb-2 font-mono text-xl font-bold text-destructive">
-                    HEIST FAILED!
-                  </h2>
-                  <p className="font-mono text-sm text-muted-foreground mb-4">
-                    {error || "An unknown error occurred"}
-                  </p>
-                  <button
-                    type="button"
-                    onClick={handleReset}
-                    className="border-2 border-accent bg-accent px-4 py-3 font-mono text-sm font-bold text-accent-foreground transition-all hover:bg-transparent hover:text-accent"
-                  >
-                    TRY AGAIN
-                  </button>
-                </div>
-              </div>
+              <SearchErrorState error={error} onReset={handleReset} />
             )}
           </div>
         </div>
 
-        {/* Footer */}
-        <footer className="mt-8 text-center">
-          <p className="font-mono text-xs text-muted-foreground">
-            {"/* "} frontend only - no actual piracy involved {" */"}
-          </p>
-          <p className="mt-2 font-mono text-xs text-muted-foreground/50">
-            made with {"<3"} by digital pirates
-          </p>
-        </footer>
+        <AppFooter />
       </div>
     </main>
   );
 }
 
-interface FormFieldProps {
-  label: string;
-  id: string;
-  type: string;
-  placeholder: string;
-  value?: string | number;
-  onChange?: (value: string) => void;
-  required?: boolean;
-  pattern?: string;
-  min?: number;
-  max?: number;
-  icon?: ReactNode;
-  suffix?: string;
-  error?: string;
-  register?: (name: keyof ValidationFormData) => {
-    name: string;
-    onChange: (e: ChangeEvent<HTMLInputElement>) => void;
-    onBlur: (e: FocusEvent<HTMLInputElement>) => void;
-    ref: Ref<HTMLInputElement>;
-  };
-}
-
-/**
- * Reusable form field component with pirate-themed styling.
- * Supports both controlled (value/onChange) and uncontrolled (react-hook-form register) modes.
- * When register is provided, uses react-hook-form for form state management. Otherwise uses controlled mode.
- * Displays validation errors below the input with red border styling when invalid.
- */
-function FormField({
-  label,
-  id,
-  type,
-  placeholder,
-  value,
-  onChange,
-  required,
-  pattern,
-  min,
-  max,
-  icon,
-  suffix,
-  error,
-  register,
-}: FormFieldProps) {
-  return (
-    <div>
-      <label htmlFor={id} className="mb-2 flex items-center gap-2 font-mono text-xs text-muted-foreground">
-        <span className="text-primary">$</span>
-        {label}
-        {icon && <span className="ml-auto">{icon}</span>}
-      </label>
-      <div className="relative">
-        <input
-          id={id}
-          type={type}
-          placeholder={placeholder}
-          autoComplete="off"
-          {...(register
-            ? register(id as keyof ValidationFormData)
-            : {
-                value,
-                onChange: (e) => onChange?.(e.target.value),
-              })}
-          required={required}
-          pattern={pattern}
-          min={min}
-          max={max}
-          className={`w-full border-2 bg-secondary px-3 py-2.5 font-mono text-sm text-foreground placeholder:text-muted-foreground/50 focus:outline-none ${
-            type === "number" ? "[appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none" : ""
-          } ${
-            error
-              ? "border-destructive focus:border-destructive"
-              : "border-border focus:border-primary"
-          }`}
-        />
-        {suffix && (
-          <span className="absolute right-3 top-1/2 -translate-y-1/2 font-mono text-xs text-muted-foreground">
-            {suffix}
-          </span>
-        )}
-      </div>
-      {error && (
-        <p className="mt-1 font-mono text-xs text-destructive">{error}</p>
-      )}
-    </div>
-  );
-}
-
-interface LoadingBarProps {
-  label: string;
-  count: number;
-  maxCount: number;
-  suffix: string;
-  icon: string;
-}
-
-/**
- * Progress bar component displaying loading progress with pirate-themed styling.
- * Calculates percentage from count and maxCount, then renders a visual progress bar.
- * Shows label with icon prefix, current count with suffix, and animated progress bar.
- */
-function LoadingBar({ 
-  label, 
-  count, 
-  maxCount,
-  suffix,
-  icon 
-}: LoadingBarProps) {
-  const percentage = maxCount > 0 ? Math.min((count / maxCount) * 100, 100) : 0;
-  
-  return (
-    <div className="space-y-2">
-      <div className="flex items-baseline justify-between">
-        <span className="font-mono text-xs text-muted-foreground">
-          <span className="text-accent">{icon}</span> {label}
-        </span>
-        <span className="font-mono text-sm font-bold tabular-nums text-foreground">
-          {count.toLocaleString()}
-          <span className="ml-1 text-xs font-normal text-muted-foreground">{suffix}</span>
-        </span>
-      </div>
-      <div className="h-1.5 w-full overflow-hidden bg-secondary">
-        <div 
-          className="h-full bg-primary transition-all duration-100"
-          style={{ width: `${percentage}%` }}
-        />
-      </div>
-    </div>
-  );
-}

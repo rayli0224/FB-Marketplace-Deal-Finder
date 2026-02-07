@@ -1,5 +1,9 @@
 """
 Deal score calculator for comparing Facebook Marketplace prices to eBay market data.
+
+This module calculates deal scores (percentage savings) for all listings by comparing
+their prices to eBay average prices. All listings are returned with their scores,
+allowing the frontend to filter and color-code based on threshold.
 """
 
 from typing import List, Optional
@@ -11,9 +15,17 @@ def calculate_deal_score(fb_price: float, ebay_stats: Optional[PriceStats]) -> O
     """
     Calculate deal score as percentage savings compared to eBay average price.
     
+    Computes how much cheaper a Facebook Marketplace listing is compared to the eBay
+    average price, expressed as a percentage. For example, if eBay average is $100
+    and FB price is $80, the deal score is 20% (20% savings).
+    
+    Args:
+        fb_price: Facebook Marketplace listing price
+        ebay_stats: eBay price statistics containing average price
+        
     Returns:
-        Deal score as percentage (e.g., 25.0 means 25% below market value)
-        None if eBay stats are not available
+        Deal score as percentage (e.g., 25.0 means 25% below market value).
+        Returns None if eBay stats are unavailable or average price is zero.
     """
     if not ebay_stats or ebay_stats.average == 0:
         return None
@@ -23,35 +35,45 @@ def calculate_deal_score(fb_price: float, ebay_stats: Optional[PriceStats]) -> O
     return round(score, 1)
 
 
-def filter_and_score_listings(
+def score_listings(
     fb_listings: List[Listing],
     ebay_stats: Optional[PriceStats],
-    threshold: float = 20.0
+    threshold: float
 ) -> List[dict]:
     """
-    Filter listings by deal score threshold and return scored results.
+    Score all listings with deal scores and return all results.
+    
+    Calculates deal scores for all Facebook Marketplace listings by comparing
+    their prices to eBay market data. Returns all listings regardless of score,
+    allowing the frontend to filter and color-code based on threshold.
+    
+    The function handles the case where eBay stats are unavailable by returning
+    all listings with dealScore set to 0.0, ensuring robust behavior when external
+    data is missing.
     
     Args:
-        fb_listings: List of Facebook Marketplace listings
-        ebay_stats: eBay price statistics for comparison
-        threshold: Minimum deal score percentage to include
+        fb_listings: List of Facebook Marketplace listings to score
+        ebay_stats: eBay price statistics containing average price for comparison
+        threshold: Not used for filtering (kept for API compatibility)
         
     Returns:
-        List of dictionaries with listing data and deal scores
+        List of dictionaries containing all listings with their deal scores.
+        Each dictionary includes title, price, location, url, and dealScore fields.
+        Deal scores are percentages (e.g., 25.0 means 25% below market value).
+        Returns all listings with dealScore=0.0 if eBay stats are unavailable.
     """
     scored_listings = []
     
     for listing in fb_listings:
         deal_score = calculate_deal_score(listing.price, ebay_stats)
         
-        if deal_score is not None and deal_score >= threshold:
-            scored_listings.append({
-                "title": listing.title,
-                "price": listing.price,
-                "location": listing.location,
-                "url": listing.url,
-                "dealScore": deal_score,
-            })
+        scored_listings.append({
+            "title": listing.title,
+            "price": listing.price,
+            "location": listing.location,
+            "url": listing.url,
+            "dealScore": deal_score if deal_score is not None else 0.0,
+        })
     
     return scored_listings
 

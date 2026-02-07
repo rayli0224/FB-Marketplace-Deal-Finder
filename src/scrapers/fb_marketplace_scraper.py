@@ -72,8 +72,6 @@ class FBMarketplaceScraper:
     def _load_cookies(self) -> List[dict]:
         """Load cookies from JSON file."""
         if not os.path.exists(self.cookies_file):
-            logger.warning(f"Cookies file not found: {self.cookies_file}")
-            logger.info("To authenticate, export your Facebook cookies to this file.")
             return []
         
         try:
@@ -104,20 +102,13 @@ class FBMarketplaceScraper:
                 
                 playwright_cookies.append(pc)
             
-            logger.info(f"Loaded {len(playwright_cookies)} cookies from {self.cookies_file}")
             return playwright_cookies
             
-        except json.JSONDecodeError as e:
-            logger.error(f"Invalid JSON in cookies file: {e}")
-            return []
-        except Exception as e:
-            logger.error(f"Error loading cookies: {e}")
+        except (json.JSONDecodeError, Exception):
             return []
     
     def _create_browser(self):
         """Create a Playwright browser with stealth settings and load cookies."""
-        logger.info("Initializing Playwright browser")
-        
         self.playwright = sync_playwright().start()
         
         self.browser = self.playwright.chromium.launch(
@@ -147,18 +138,11 @@ class FBMarketplaceScraper:
         cookies = self._load_cookies()
         if cookies:
             self.context.add_cookies(cookies)
-            logger.info("Cookies loaded into browser context")
-        else:
-            logger.warning("No cookies loaded - Facebook will likely require login!")
         
         self.page = self.context.new_page()
-        
-        logger.info("Browser initialized successfully")
     
     def _set_location(self, zip_code: str, radius: int):
         """Navigate to Facebook Marketplace and set location via zip code."""
-        logger.info(f"Setting location to zip code {zip_code} with radius {radius} miles")
-        
         try:
             self.page.goto(self.MARKETPLACE_URL, wait_until="networkidle", timeout=30000)
             random_delay(2, 4)
@@ -166,7 +150,7 @@ class FBMarketplaceScraper:
             try:
                 self.page.wait_for_selector("h1", timeout=10000)
             except PlaywrightTimeoutError:
-                logger.warning("Page load timeout, continuing anyway")
+                pass
             
             location_selectors = [
                 "div[aria-label*='location']",
@@ -187,12 +171,10 @@ class FBMarketplaceScraper:
                         random_delay(1, 2)
                         location_clicked = True
                         break
-                except (PlaywrightTimeoutError, Exception) as e:
-                    logger.debug(f"Location selector {selector} failed: {e}")
+                except (PlaywrightTimeoutError, Exception):
                     continue
             
             if not location_clicked:
-                logger.warning("Could not find location button, trying alternative method")
                 try:
                     location_input = self.page.locator("input[placeholder*='zip'], input[placeholder*='Zip'], input[type='text']").first
                     if location_input.is_visible(timeout=5000):
@@ -201,7 +183,7 @@ class FBMarketplaceScraper:
                         location_input.press("Enter")
                         random_delay(1, 2)
                 except PlaywrightTimeoutError:
-                    logger.warning("Could not set location via input field")
+                    pass
             
             if location_clicked:
                 try:
@@ -226,17 +208,13 @@ class FBMarketplaceScraper:
                             except PlaywrightTimeoutError:
                                 continue
                 except PlaywrightTimeoutError:
-                    logger.warning("Could not enter zip code in location picker")
+                    pass
             
-            logger.info("Location setting completed")
-            
-        except Exception as e:
-            logger.error(f"Error setting location: {e}")
+        except Exception:
+            pass
     
     def _search(self, query: str):
         """Enter search query and wait for results."""
-        logger.info(f"Searching for: '{query}'")
-        
         try:
             search_selectors = [
                 "input[aria-label='Search Marketplace']",
@@ -275,13 +253,10 @@ class FBMarketplaceScraper:
                         break
                     except PlaywrightTimeoutError:
                         continue
-            except Exception as e:
-                logger.warning(f"Could not confirm results loaded: {e}")
+            except Exception:
+                pass
             
-            logger.info("Search completed")
-            
-        except Exception as e:
-            logger.error(f"Error during search: {e}")
+        except Exception:
             raise
     
     def _extract_price(self, element) -> Optional[float]:
@@ -467,14 +442,11 @@ class FBMarketplaceScraper:
                 elements = self.page.locator(selector).all()
                 if elements:
                     listing_elements = elements
-                    logger.info(f"Found {len(elements)} listings using selector: {selector}")
                     break
-            except Exception as e:
-                logger.debug(f"Selector {selector} failed: {e}")
+            except Exception:
                 continue
         
         if not listing_elements:
-            logger.warning("No listing elements found with standard selectors, trying alternative approach")
             listing_elements = self.page.locator("a[href*='/marketplace/item/']").all()
         
         return listing_elements
@@ -504,7 +476,6 @@ class FBMarketplaceScraper:
             
             # Final validation: only skip if title is EXACTLY a price format (no letters)
             if title and re.match(r'^[\$0-9.\s]+$', title):
-                logger.debug(f"Title '{title}' appears to be a price format, clearing")
                 title = ""
             
             location = self._extract_location(element)
@@ -519,8 +490,7 @@ class FBMarketplaceScraper:
             
             return None
             
-        except Exception as e:
-            logger.debug(f"Error extracting listing: {e}")
+        except Exception:
             return None
     
     def _extract_listings(self, on_listing_found=None) -> List[Listing]:
@@ -531,8 +501,6 @@ class FBMarketplaceScraper:
         data from each element using helper functions. Optionally calls a callback
         each time a listing is found. Returns list of successfully extracted listings.
         """
-        logger.info("Extracting listings from page")
-        
         listings = []
         
         try:
@@ -546,10 +514,8 @@ class FBMarketplaceScraper:
                     if on_listing_found:
                         on_listing_found(listing, len(listings))
             
-            logger.info(f"Successfully extracted {len(listings)} listings")
-            
-        except Exception as e:
-            logger.error(f"Error extracting listings: {e}")
+        except Exception:
+            pass
         
         return listings
     
@@ -575,8 +541,7 @@ class FBMarketplaceScraper:
             logger.info("")
             return listings
             
-        except Exception as e:
-            logger.error(f"Error during marketplace search: {e}")
+        except Exception:
             raise
     
     def close(self):
@@ -587,7 +552,6 @@ class FBMarketplaceScraper:
             self.browser.close()
         if self.playwright:
             self.playwright.stop()
-        logger.info("Browser closed and resources cleaned up")
 
 
 def search_marketplace(
