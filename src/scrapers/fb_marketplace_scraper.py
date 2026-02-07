@@ -26,9 +26,10 @@ from dataclasses import dataclass
 from typing import Optional, List
 from playwright.sync_api import sync_playwright, Browser, Page, BrowserContext, TimeoutError as PlaywrightTimeoutError
 from src.scrapers.utils import random_delay, parse_price, is_valid_listing_price
+from src.utils.colored_logger import setup_colored_logger
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+# Configure colored logging with module prefix
+logger = setup_colored_logger("fb_scraper", level=logging.INFO)
 
 # Default cookie file path
 COOKIES_FILE = os.environ.get("FB_COOKIES_FILE", "/app/cookies/facebook_cookies.json")
@@ -520,6 +521,13 @@ class FBMarketplaceScraper:
     
     def search_marketplace(self, query: str, zip_code: str, radius: int = 25, on_listing_found=None) -> List[Listing]:
         """Search Facebook Marketplace for listings matching the query."""
+        logger.info("")
+        logger.info("╔" + "═" * 78 + "╗")
+        logger.info(f"║  🔍 Starting FB Marketplace Search")
+        logger.info(f"║  Query: '{query}' | Zip: {zip_code} | Radius: {radius}mi")
+        logger.info("╚" + "═" * 78 + "╝")
+        logger.info("")
+        
         try:
             if not self.browser:
                 self._create_browser()
@@ -528,6 +536,9 @@ class FBMarketplaceScraper:
             self._search(query)
             listings = self._extract_listings(on_listing_found=on_listing_found)
             
+            logger.info("")
+            logger.info(f"✅ Search completed. Found {len(listings)} listings")
+            logger.info("")
             return listings
             
         except Exception:
