@@ -1,34 +1,11 @@
-# Facebook Cookies for Authentication
+# Facebook Login Data
 
-Facebook Marketplace requires login. To use the scraper, export your cookies:
+The app stores your Facebook login data here so it can search Marketplace on your behalf.
 
-## Steps
+**Setup:** Open the app in your browser and follow the on-screen guide. You only need to do this once (or again if your session expires).
 
-1. **Install a cookie export extension** in your browser:
-   - Chrome: [EditThisCookie](https://chrome.google.com/webstore/detail/editthiscookie/fngmhnnpilhplaeedifhccceomclgfbg) or [Cookie-Editor](https://chrome.google.com/webstore/detail/cookie-editor/hlkenndednhfkekhgcdicdfddnkalmdm)
-   - Firefox: [Cookie-Editor](https://addons.mozilla.org/en-US/firefox/addon/cookie-editor/)
+## Security
 
-2. **Log into Facebook** in your browser
-
-3. **Export cookies**:
-   - Click the cookie extension icon
-   - Click "Export" (choose JSON format)
-   - Save as `facebook_cookies.json` in this directory
-
-4. **Restart the API container**:
-   ```bash
-   docker compose restart api
-   ```
-
-## Important Cookies
-
-The most important cookies for Facebook auth are:
-- `c_user` - Your user ID
-- `xs` - Session token
-- `datr` - Browser identifier
-
-## Security Warning
-
-- **Never commit** `facebook_cookies.json` to git (it's in .gitignore)
-- These cookies give full access to your Facebook account
-- Regenerate if you suspect they've been compromised (log out of Facebook)
+- **Never share** the saved login file — it gives full access to your Facebook account
+- The file is in `.gitignore` and won't be committed
+- If you think it's been compromised, log out of Facebook to invalidate it

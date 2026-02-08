@@ -2,7 +2,7 @@
 
 import { SkullIcon } from "@/lib/icons";
 
-type AppState = "form" | "loading" | "done" | "error";
+type AppState = "setup" | "form" | "loading" | "done" | "error";
 
 export interface AppHeaderProps {
   appState: AppState;
@@ -13,7 +13,8 @@ export interface AppHeaderProps {
  * Provides pirate-themed status messages that match the current application state.
  */
 function getStatusMessage(appState: AppState): string {
-  const messages = {
+  const messages: Record<AppState, string> = {
+    setup: "SETTING SAIL",
     form: "AWAITING ORDERS",
     loading: "RAIDING...",
     done: "TREASURE ACQUIRED",

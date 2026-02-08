@@ -4,15 +4,16 @@ FastAPI application for FB Marketplace Deal Finder.
 
 import logging
 import json
+import os
 import queue
 import threading
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, JSONResponse
 from pydantic import BaseModel
 from typing import List, Optional
 
-from src.scrapers.fb_marketplace_scraper import search_marketplace as search_fb_marketplace
+from src.scrapers.fb_marketplace_scraper import search_marketplace as search_fb_marketplace, FacebookNotLoggedInError
 from src.scrapers.ebay_scraper import get_market_price
 from src.api.deal_calculator import score_listings
 from src.utils.listing_processor import process_single_listing
@@ -88,6 +89,84 @@ def health_check():
     return {"status": "healthy"}
 
 
+@app.get("/api/cookies/status")
+def cookies_status():
+    """
+    Check whether Facebook login data is configured and looks valid.
+
+    Reads the cookies file path from the FB_COOKIES_FILE env var (or the default),
+    parses it as JSON, and checks for the two essential Facebook session cookies
+    (c_user and xs). Returns a status object the frontend can use to decide whether
+    to show the search form or the cookie setup screen.
+    """
+    cookies_file = os.environ.get("FB_COOKIES_FILE", "/app/cookies/facebook_cookies.json")
+
+    if not os.path.exists(cookies_file):
+        return {"configured": False, "reason": "no_file"}
+
+    try:
+        with open(cookies_file, "r") as f:
+            cookies = json.load(f)
+    except (json.JSONDecodeError, Exception):
+        return {"configured": False, "reason": "invalid_file"}
+
+    if not isinstance(cookies, list) or len(cookies) == 0:
+        return {"configured": False, "reason": "empty"}
+
+    cookie_names = {c.get("name") for c in cookies if isinstance(c, dict)}
+    has_critical = "c_user" in cookie_names and "xs" in cookie_names
+
+    if not has_critical:
+        return {"configured": False, "reason": "missing_critical_cookies"}
+
+    return {"configured": True}
+
+
+class SaveCookiesRequest(BaseModel):
+    cookies: str  # Raw JSON string pasted by the user
+
+
+@app.post("/api/cookies")
+def save_cookies(request: SaveCookiesRequest):
+    """
+    Accept pasted Facebook login data from the frontend and save it to disk.
+
+    Parses the raw JSON string the user pasted from a cookie-export browser extension,
+    validates that it's a non-empty array containing the two essential Facebook session
+    cookies (c_user and xs), then writes the file to the configured cookies path.
+    Returns success or a descriptive error the frontend can display.
+    """
+    cookies_file = os.environ.get("FB_COOKIES_FILE", "/app/cookies/facebook_cookies.json")
+
+    # Parse the pasted JSON
+    try:
+        cookies = json.loads(request.cookies)
+    except json.JSONDecodeError:
+        return {"success": False, "error": "That doesn't look like valid login data. Make sure you copied the full export from the extension."}
+
+    if not isinstance(cookies, list) or len(cookies) == 0:
+        return {"success": False, "error": "The pasted data should be a list of entries. Try exporting again from the extension."}
+
+    # Validate critical cookies are present
+    cookie_names = {c.get("name") for c in cookies if isinstance(c, dict)}
+    if "c_user" not in cookie_names or "xs" not in cookie_names:
+        return {
+            "success": False,
+            "error": "Missing essential Facebook login entries. Make sure you're exporting cookies while logged into facebook.com.",
+        }
+
+    # Ensure directory exists and write the file
+    try:
+        os.makedirs(os.path.dirname(cookies_file), exist_ok=True)
+        with open(cookies_file, "w") as f:
+            json.dump(cookies, f, indent=2)
+        logger.info(f"✅ Facebook login data saved ({len(cookies)} entries)")
+        return {"success": True}
+    except Exception as e:
+        logger.error(f"❌ Failed to save cookies: {e}")
+        return {"success": False, "error": "Couldn't save login data. Please try again."}
+
+
 @app.post("/api/search", response_model=SearchResponse)
 def search_deals(request: SearchRequest):
     """
@@ -108,6 +187,12 @@ def search_deals(request: SearchRequest):
             extract_descriptions=request.extractDescriptions
         )
         logger.info(f"✅ Step 2 complete: Found {len(fb_listings)} listings")
+    except FacebookNotLoggedInError:
+        logger.warning("🔒 Facebook session expired during non-streaming search")
+        return JSONResponse(
+            status_code=401,
+            content={"error": "auth_error", "message": "Facebook session expired"}
+        )
     except Exception as e:
         logger.error(f"❌ Step 2 failed: {str(e)[:100]}")
         # Continue without FB listings - will return empty results
@@ -212,6 +297,7 @@ def search_deals_stream(request: SearchRequest):
         event_queue.put({"type": "progress", "scannedCount": count})
     
     def scrape_worker():
+        auth_failed = False
         try:
             if cancelled.is_set():
                 return
@@ -224,11 +310,16 @@ def search_deals_stream(request: SearchRequest):
                 on_listing_found=on_listing_found,
                 extract_descriptions=request.extractDescriptions
             )
+        except FacebookNotLoggedInError:
+            auth_failed = True
+            if not cancelled.is_set():
+                logger.warning("🔒 Facebook session expired — notifying client")
+                event_queue.put({"type": "auth_error"})
         except Exception as e:
             if not cancelled.is_set():
                 logger.error(f"❌ Step 2 failed: {str(e)[:100]}")
         finally:
-            if not cancelled.is_set():
+            if not cancelled.is_set() and not auth_failed:
                 event_queue.put({"type": "scrape_done"})
     
     def event_generator():
@@ -259,6 +350,11 @@ def search_deals_stream(request: SearchRequest):
                         logger.info("⚠️  Search cancelled by client - stopping event stream")
                         break
                     
+                    if event["type"] == "auth_error":
+                        logger.warning("🔒 Sending auth_error to client")
+                        yield f"data: {json.dumps({'type': 'auth_error'})}\n\n"
+                        return
+
                     if event["type"] == "scrape_done":
                         break
                     

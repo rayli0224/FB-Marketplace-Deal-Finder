@@ -1,0 +1,20 @@
+---
+description: Keep user-facing text non-technical (no jargon) and preserve the app's pirate theme
+alwaysApply: true
+---
+
+# User-Facing Copy
+
+User-facing text must be **non-technical** (no jargon) while **keeping the app's theme and personality** (e.g. pirate theme).
+
+## Rules
+
+- **Preserve the pirate theme** in the UI: keep themed labels (TARGET_QUERY, PORT_CODE, LOOT FINDER, HEIST FAILED, TREASURE ACQUIRED, loot-map, Steal Score, Doubloons, etc.), status messages, button copy (BEGIN HEIST, TRY AGAIN), and loading/phase wording (Infiltrating, raid, loot, comps). Do not remove or "plain-ify" theme for the sake of accessibility alone.
+- **No technical jargon** in instructions, docs, or error messages. Avoid: API, server, backend, port, session, cookie, debug, DEBUG, headed mode, persistent profile, endpoint, environment variable, JSON, etc. Use plain language for *instructions* and *errors* (e.g. "log in to Facebook in the browser window that opens", "We couldn't connect. Make sure the app is running and try again.").
+- **Instructions** (README, cookies/README): step-by-step in simple language, no dev jargon. Theme/personality can still show in app UI copy.
+- **Error messages**: say what went wrong and what to do, in everyday words. The surrounding UI (e.g. "HEIST FAILED!", "TRY AGAIN") stays themed.
+
+## When in doubt
+
+- For UI labels, status, buttons, loading text: keep the theme.
+- For instructions and error text: no jargon; would a non-technical friend understand?
