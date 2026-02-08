@@ -37,6 +37,7 @@ class SearchRequest(BaseModel):
     zipCode: str
     radius: int = 25
     threshold: float
+    maxListings: int = 20
 
 
 class CompItemSummary(BaseModel):
@@ -101,6 +102,7 @@ def search_deals(request: SearchRequest):
             query=request.query,
             zip_code=request.zipCode,
             radius=request.radius,
+            max_listings=request.maxListings,
             headless=True
         )
         logger.info(f"✅ Step 2 complete: Found {len(fb_listings)} listings")
@@ -207,6 +209,7 @@ def search_deals_stream(request: SearchRequest):
                 query=request.query,
                 zip_code=request.zipCode,
                 radius=request.radius,
+                max_listings=request.maxListings,
                 headless=True,
                 on_listing_found=on_listing_found
             )

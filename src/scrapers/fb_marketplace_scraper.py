@@ -489,13 +489,15 @@ class FBMarketplaceScraper:
         except Exception:
             return None
     
-    def _extract_listings(self, on_listing_found=None) -> List[Listing]:
+    def _extract_listings(self, max_listings: int = 20, on_listing_found=None) -> List[Listing]:
         """
-        Extract listings from the current Facebook Marketplace page.
-        
-        Scrolls the page to load more content, finds listing elements, and extracts
-        data from each element using helper functions. Optionally calls a callback
-        each time a listing is found. Returns list of successfully extracted listings.
+        Extract up to max_listings from the current Marketplace results page.
+
+        Scrolls to load content, locates listing DOM elements, then iterates
+        up to max_listings of them and parses each into a Listing. Only valid
+        listings are appended; the callback, if given, is called for each with
+        (listing, current_count). Failures during scroll or parse are ignored
+        and the collected list is returned.
         """
         listings = []
         
@@ -503,7 +505,7 @@ class FBMarketplaceScraper:
             self._scroll_page_to_load_content()
             listing_elements = self._find_listing_elements()
             
-            for element in listing_elements[:50]:
+            for element in listing_elements[:max_listings]:
                 listing = self._extract_listing_from_element(element)
                 if listing:
                     listings.append(listing)
@@ -515,12 +517,19 @@ class FBMarketplaceScraper:
         
         return listings
     
-    def search_marketplace(self, query: str, zip_code: str, radius: int = 25, on_listing_found=None) -> List[Listing]:
-        """Search Facebook Marketplace for listings matching the query."""
+    def search_marketplace(self, query: str, zip_code: str, radius: int = 25, max_listings: int = 20, on_listing_found=None) -> List[Listing]:
+        """
+        Run a Marketplace search and return up to max_listings results.
+
+        Sets location from zip_code and radius, performs the search, then extracts
+        listing data from the page. Only the first max_listings elements are
+        processed. If on_listing_found is provided, it is invoked for each
+        successfully extracted listing with (listing, count).
+        """
         logger.info("")
         logger.info("╔" + "═" * 78 + "╗")
         logger.info(f"║  🔍 Starting FB Marketplace Search")
-        logger.info(f"║  Query: '{query}' | Zip: {zip_code} | Radius: {radius}mi")
+        logger.info(f"║  Query: '{query}' | Zip: {zip_code} | Radius: {radius}mi | Max: {max_listings}")
         logger.info("╚" + "═" * 78 + "╝")
         logger.info("")
         
@@ -530,7 +539,7 @@ class FBMarketplaceScraper:
             
             self._set_location(zip_code, radius)
             self._search(query)
-            listings = self._extract_listings(on_listing_found=on_listing_found)
+            listings = self._extract_listings(max_listings=max_listings, on_listing_found=on_listing_found)
             
             logger.info("")
             logger.info(f"✅ Search completed. Found {len(listings)} listings")
@@ -554,13 +563,21 @@ def search_marketplace(
     query: str,
     zip_code: str,
     radius: int = 25,
+    max_listings: int = 20,
     headless: bool = None,
     on_listing_found=None,
 ) -> List[Listing]:
-    """Convenience function to search Facebook Marketplace."""
+    """
+    Run a one-off Facebook Marketplace search and return the results.
+
+    Creates a browser scraper, runs the search with the given query, location,
+    and cap on how many listings to extract, then closes the scraper. The
+    on_listing_found callback, if provided, is invoked for each listing as
+    it is found so callers can show progress.
+    """
     scraper = FBMarketplaceScraper(headless=headless)
     try:
-        return scraper.search_marketplace(query, zip_code, radius, on_listing_found=on_listing_found)
+        return scraper.search_marketplace(query, zip_code, radius, max_listings=max_listings, on_listing_found=on_listing_found)
     finally:
         scraper.close()
 

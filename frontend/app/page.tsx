@@ -54,7 +54,7 @@ export default function Home() {
     formState: { errors, isValid },
   } = useForm<ValidationFormData>({
     resolver: zodResolver(formSchema),
-    defaultValues: { query: "", zipCode: "", radius: "", threshold: "" },
+    defaultValues: { query: "", zipCode: "", radius: "", threshold: "", maxListings: "10" },
     mode: "onTouched",
   });
   const formData = watch();
@@ -218,6 +218,7 @@ export default function Home() {
           zipCode: formData.zipCode,
           radius: formData.radius,
           threshold: formData.threshold,
+          maxListings: formData.maxListings,
         }),
       });
 
