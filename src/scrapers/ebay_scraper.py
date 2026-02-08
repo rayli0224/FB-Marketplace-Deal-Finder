@@ -35,6 +35,7 @@ class PriceStats:
     sample_size: int
     average: float
     raw_prices: list[float]
+    item_summaries: Optional[List[dict]] = None  # [{title, price, url}, ...] for UI transparency
     
     def __str__(self) -> str:
         return f"""
@@ -286,19 +287,23 @@ class EbayBrowseAPIClient:
             logger.warning(f"Not enough data from Browse API: only found {len(items) if items else 0} items (minimum 3 required for statistical significance)")
             return None
         
-        # Extract prices
-        prices = [item["price"] for item in items if item.get("price", 0) > 0]
-        
+        valid_items = [item for item in items if item.get("price", 0) > 0]
+        prices = [item["price"] for item in valid_items]
         if len(prices) < 3:
             logger.error(f"⚠️  Insufficient prices - {len(prices)} valid")
             return None
-        
+
+        item_summaries = [
+            {"title": item.get("title", ""), "price": item["price"], "url": item.get("url", "")}
+            for item in valid_items
+        ]
         # Calculate average price
         stats = PriceStats(
             search_term=search_term,
             sample_size=len(prices),
             average=statistics.mean(prices),
             raw_prices=sorted(prices),
+            item_summaries=item_summaries,
         )
         
         logger.info(f"✅ Found {stats.sample_size} eBay listings | Avg: ${stats.average:.2f}")
