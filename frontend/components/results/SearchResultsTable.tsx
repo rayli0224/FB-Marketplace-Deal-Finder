@@ -7,6 +7,7 @@ export interface CompItem {
   title: string;
   price: number;
   url: string;
+  filtered?: boolean;  // True if this item was filtered out as non-comparable
 }
 
 export interface Listing {
@@ -19,14 +20,12 @@ export interface Listing {
   compPrice?: number;
   compPrices?: number[];
   compItems?: CompItem[];
-  filterConfidence?: number;
 }
 
 export interface SearchResultsTableProps {
   listings: Listing[];
   scannedCount: number;
   threshold: number;
-  averageConfidence?: number | null;
   onDownloadCSV: () => void;
   onReset: () => void;
 }
@@ -76,19 +75,28 @@ function ListingCompsPanel({ listing }: { listing: Listing }) {
           <span className="font-bold text-foreground">Compared against {count} listing{count !== 1 ? "s" : ""}:</span>
           <ul className="mt-1 max-h-40 overflow-auto space-y-0.5 pl-2 border-l-2 border-border">
             {compItems && compItems.length > 0
-              ? compItems.map((item, i) => (
-                  <li key={i} className="flex items-baseline gap-2 flex-wrap">
-                    <a
-                      href={item.url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-primary hover:underline truncate max-w-[280px]"
-                    >
-                      {item.title || "eBay listing"}
-                    </a>
-                    <span className="text-primary font-bold shrink-0">${item.price.toFixed(2)}</span>
-                  </li>
-                ))
+              ? compItems.map((item, i) => {
+                  const isFiltered = item.filtered === true;
+                  return (
+                    <li key={i} className={`flex items-baseline gap-2 flex-wrap ${isFiltered ? 'opacity-60' : ''}`}>
+                      <a
+                        href={item.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className={`truncate max-w-[280px] hover:underline ${isFiltered ? 'text-red-500 line-through' : 'text-primary'}`}
+                        title={isFiltered ? 'Filtered out as non-comparable' : undefined}
+                      >
+                        {item.title || "eBay listing"}
+                      </a>
+                      <span className={`font-bold shrink-0 ${isFiltered ? 'text-red-500' : 'text-primary'}`}>
+                        ${item.price.toFixed(2)}
+                      </span>
+                      {isFiltered && (
+                        <span className="text-xs text-red-500/70 shrink-0">(filtered)</span>
+                      )}
+                    </li>
+                  );
+                })
               : compPrices?.map((p, i) => (
                   <li key={i}>
                     <span className="text-muted-foreground">${p.toFixed(2)}</span>
@@ -107,7 +115,7 @@ function ListingCompsPanel({ listing }: { listing: Listing }) {
  * visibility of below-threshold deals. Rows are color-coded by deal quality; each row can
  * expand to show eBay comparison details (search query, comp price, comp listings).
  */
-export function SearchResultsTable({ listings, scannedCount, threshold, averageConfidence, onDownloadCSV, onReset }: SearchResultsTableProps) {
+export function SearchResultsTable({ listings, scannedCount, threshold, onDownloadCSV, onReset }: SearchResultsTableProps) {
   const [showBadDeals, setShowBadDeals] = useState<boolean>(true);
   const [isFiltersExpanded, setIsFiltersExpanded] = useState<boolean>(false);
   const [expandedListingUrl, setExpandedListingUrl] = useState<string | null>(null);
@@ -129,11 +137,6 @@ export function SearchResultsTable({ listings, scannedCount, threshold, averageC
           <p className="font-mono text-xs text-muted-foreground">
             Showing {filteredCount} of {listings.length} treasures from {scannedCount} scanned
           </p>
-          {averageConfidence != null && (
-            <p className="font-mono text-xs text-muted-foreground mt-1">
-              Average filter confidence: <span className="font-bold text-foreground">{(averageConfidence * 100).toFixed(1)}%</span>
-            </p>
-          )}
         </div>
         <div className="flex gap-2">
           <button
@@ -254,7 +257,7 @@ export function SearchResultsTable({ listings, scannedCount, threshold, averageC
                 </tr>
                 {isExpanded && hasComps && (
                   <tr className="border-b border-border/50 bg-secondary/80">
-                    <td colSpan={6} className="px-4 py-3">
+                    <td colSpan={7} className="px-4 py-3">
                       <ListingCompsPanel listing={listing} />
                     </td>
                   </tr>

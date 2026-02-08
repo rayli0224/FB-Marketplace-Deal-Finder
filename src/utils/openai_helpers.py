@@ -1,14 +1,12 @@
 """
-Query enhancer utility for generating eBay search queries using OpenAI.
+OpenAI API helper functions for query generation and result filtering.
 
-Takes a Facebook Marketplace listing and generates an optimized eBay search query
-with exclusion keywords specific to that listing. This ensures accurate price
-comparisons by matching each FB listing to similar items on eBay.
+Provides helper functions for making OpenAI API calls to generate optimized eBay
+search queries and filter eBay results to match Facebook Marketplace listings.
 """
 
 import os
 import json
-import logging
 from typing import Optional, Tuple, List
 
 try:
@@ -18,9 +16,15 @@ except ImportError:
 
 from src.scrapers.fb_marketplace_scraper import Listing
 from src.utils.colored_logger import setup_colored_logger
+from src.utils.prompts import (
+    QUERY_GENERATION_SYSTEM_MESSAGE,
+    RESULT_FILTERING_SYSTEM_MESSAGE,
+    get_query_generation_prompt,
+    get_result_filtering_prompt,
+)
 
 # Configure colored logging with module prefix (auto-detects DEBUG from env/--debug flag)
-logger = setup_colored_logger("query_enhancer")
+logger = setup_colored_logger("openai_helpers")
 
 # OpenAI API key from environment
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
@@ -70,64 +74,19 @@ def generate_ebay_query_for_listing(
     
     # Build prompt for OpenAI
     description_text = listing.description if listing.description else "No description provided"
-    prompt = f"""You are helping to find accurate price comparisons on eBay for a Facebook Marketplace listing.
-
-Original user search query: "{original_query}"
-Facebook Marketplace listing:
-- Title: "{listing.title}"
-- Price: ${listing.price:.2f}
-- Location: {listing.location}
-- Description: "{description_text}"
-
-Your task:
-1. Generate an optimized eBay search query that will find similar items to this listing.
-2. Provide exclusion keywords to filter out unrelated listings (accessories, incompatible items, etc).
-
-Abstraction rules:
-
-PRESERVE (always include if present):
-- Brand
-- Product type
-- Model / product line
-- Functional condition (e.g. "for parts", "broken", "not working", "refurbished", "new")
-
-INCLUDE ONLY IF THEY MATERIALLY AFFECT PRICE:
-- Storage / capacity (e.g. 128GB, 1TB)
-- Pro/Max/Ultra variants
-- Generation / year
-
-IGNORE OR GENERALIZE:
-- Color
-- Cosmetic descriptors
-- Seller adjectives (rare, amazing, mint)
-- Minor accessories
-- Bundle details unless they dominate value
-
-Important:
-- The goal is to find many comparable items, not exact matches.
-- Do NOT make the query overly specific.
-- However, if the listing is for parts / broken, the query MUST reflect that.
-- The enhanced_query should typically be 3–6 tokens long, unless functional condition requires more.
-
-Focus on the MAIN PRODUCT, not accessories.
-Examples:
-- "Nintendo DS Lite Pink" → "Nintendo DS Lite"
-- "iPhone 13 Pro 256GB cracked screen" → "iPhone 13 Pro for parts"
-- "MacBook Pro 2019 16 inch i9" → "MacBook Pro 2019"
-
-Return your response as a JSON object with exactly this structure:
-{{
-  "enhanced_query": "optimized eBay search query",
-  "exclusion_keywords": ["keyword1", "keyword2", "keyword3"]
-}}
-
-Only return the JSON object, no other text."""
+    prompt = get_query_generation_prompt(
+        original_query=original_query,
+        listing_title=listing.title,
+        listing_price=listing.price,
+        listing_location=listing.location,
+        description_text=description_text,
+    )
 
     try:
         messages = [
             {
                 "role": "system",
-                "content": "You are an expert at creating precise search queries for online marketplaces. Always respond with valid JSON only."
+                "content": QUERY_GENERATION_SYSTEM_MESSAGE
             },
             {
                 "role": "user",
@@ -200,7 +159,7 @@ Only return the JSON object, no other text."""
 def filter_ebay_results_with_openai(
     listing: Listing,
     ebay_items: List[dict]
-) -> Optional[Tuple[List[dict], float]]:
+) -> Optional[List[dict]]:
     """
     Filter eBay search results to keep only items comparable to the Facebook Marketplace listing.
     
@@ -209,9 +168,8 @@ def filter_ebay_results_with_openai(
     not comparable. This improves price comparison accuracy by ensuring only truly similar items
     are used for calculating the market average.
     
-    Returns tuple of (filtered list of eBay items, confidence score) or None if filtering fails.
-    Filtered items are in same format: [{title, price, url}, ...]. Confidence is a float between
-    0 and 1 representing how confident the model is that the filtered items are truly comparable.
+    Returns filtered list of eBay items (same format: [{title, price, url}, ...]) or None if
+    filtering fails (caller should fall back to original items).
     """
     if not OpenAI:
         logger.debug("OpenAI library not installed - skipping eBay result filtering")
@@ -222,7 +180,7 @@ def filter_ebay_results_with_openai(
         return None
     
     if not ebay_items or len(ebay_items) == 0:
-        return (ebay_items, 1.0) if ebay_items else None
+        return ebay_items
     
     client = OpenAI(api_key=OPENAI_API_KEY)
     
@@ -233,71 +191,18 @@ def filter_ebay_results_with_openai(
         for i, item in enumerate(ebay_items)
     ])
     
-    prompt = f"""You are helping filter eBay search results to find items that are truly comparable to a Facebook Marketplace listing.
-
-Facebook Marketplace listing:
-- Title: "{listing.title}"
-- Price: ${listing.price:.2f}
-- Description: "{description_text}"
-
-eBay search results:
-{ebay_items_text}
-
-Your task: Identify which eBay items are actually comparable to the FB listing.
-
-Internally, reason about each item one by one and justify your decision, but do NOT output your reasoning.
-
-An eBay item is comparable if and only if:
-
-1. Core Product Match  
-- It refers to the **same core product/model** (same brand, product line, generation, or series).
-- If the FB listing is **specific** (contains clear identifying tokens such as brand, model, generation, size, capacity, etc.), then:
-  - Those key tokens must also appear in the eBay title or description.
-  - If they do not, exclude the item.
-- If the FB listing is **vague or generic**, use best judgment based on overall similarity.
-
-2. Condition Match  
-- The **condition is similar** (e.g. both new, both used, both working).
-- Exclude items marked as:
-  - for parts
-  - broken / not working
-  - damaged in a way that affects functionality
-
-3. Full Product Only  
-- It must be a **complete product**, not:
-  - an accessory (case, charger, cable, etc.)
-  - a part or component
-  - a bundle, lot, or multi-item listing
-  - a service or subscription
-
-4. Material Variants  
-- Exclude items that are a **different variant that materially affects price**, such as:
-  - locked vs unlocked
-  - mini vs pro vs max
-  - wrong size class or generation
-- Minor differences (color, storage, cosmetic wear) are acceptable only if the core product is clearly the same.
-
-Be **strict**. If there is ambiguity, missing information, or reasonable doubt, exclude the item.
-
-Return your response as a JSON object with exactly this structure:
-{{
-  "comparable_indices": [1, 3, 5],
-  "confidence": 0.92
-}}
-
-Where:
-- comparable_indices are 1-based indices from the eBay results list.
-- confidence is a float between 0 and 1 representing how confident you are that the selected items are truly comparable overall.
-
-Only include items that are suitable for accurate price comparison.  
-Return only the JSON object and no other text.
-"""
+    prompt = get_result_filtering_prompt(
+        listing_title=listing.title,
+        listing_price=listing.price,
+        description_text=description_text,
+        ebay_items_text=ebay_items_text,
+    )
     
     try:
         messages = [
             {
                 "role": "system",
-                "content": "You are an expert at comparing products across marketplaces. Always respond with valid JSON only."
+                "content": RESULT_FILTERING_SYSTEM_MESSAGE
             },
             {
                 "role": "user",
@@ -326,19 +231,10 @@ Return only the JSON object and no other text.
         # Parse JSON
         result = json.loads(content)
         comparable_indices = result.get("comparable_indices", [])
-        confidence = result.get("confidence", 0.0)
-        
-        # Validate confidence is a float between 0 and 1
-        try:
-            confidence = float(confidence)
-            confidence = max(0.0, min(1.0, confidence))  # Clamp to [0, 1]
-        except (ValueError, TypeError):
-            logger.warning("OpenAI returned invalid confidence value - defaulting to 0.5")
-            confidence = 0.5
         
         if not isinstance(comparable_indices, list):
             logger.warning("OpenAI returned invalid comparable_indices format - skipping filter")
-            return (ebay_items, confidence)
+            return ebay_items
         
         # Filter items (indices are 1-based, convert to 0-based)
         filtered_items = [
@@ -349,11 +245,11 @@ Return only the JSON object and no other text.
         
         removed_count = len(ebay_items) - len(filtered_items)
         if removed_count > 0:
-            logger.info(f"Filtered out {removed_count} non-comparable eBay items ({len(filtered_items)} remaining) | Confidence: {confidence:.2%}")
+            logger.info(f"Filtered out {removed_count} non-comparable eBay items ({len(filtered_items)} remaining)")
         else:
-            logger.debug(f"All {len(ebay_items)} eBay items were deemed comparable | Confidence: {confidence:.2%}")
+            logger.debug(f"All {len(ebay_items)} eBay items were deemed comparable")
         
-        return (filtered_items if filtered_items else ebay_items, confidence)
+        return filtered_items if filtered_items else ebay_items
         
     except json.JSONDecodeError as e:
         logger.warning(f"Failed to parse OpenAI filter response as JSON: {e} - using original items")
