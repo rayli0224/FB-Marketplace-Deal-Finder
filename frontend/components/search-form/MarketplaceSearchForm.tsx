@@ -93,7 +93,7 @@ export function MarketplaceSearchForm({ register, errors, isValid, handleSubmit 
           digitsOnly
           inputMode="numeric"
           error={errors.maxListings?.message}
-          tooltip="Max number of FB Marketplace listings to scan. Lower = faster (e.g. 10 for quick tests)"
+          tooltip="Max listings to scan. Fewer = faster."
         />
       </div>
 
