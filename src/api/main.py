@@ -46,6 +46,7 @@ class CompItemSummary(BaseModel):
     title: str
     price: float
     url: str
+    filtered: bool = False  # True if this item was filtered out as non-comparable
 
 
 class ListingResponse(BaseModel):
@@ -58,14 +59,12 @@ class ListingResponse(BaseModel):
     compPrice: Optional[float] = None
     compPrices: Optional[List[float]] = None
     compItems: Optional[List[CompItemSummary]] = None
-    filterConfidence: Optional[float] = None
 
 
 class SearchResponse(BaseModel):
     listings: List[ListingResponse]
     scannedCount: int
     evaluatedCount: int
-    averageConfidence: Optional[float] = None
 
 
 class EbayStatsRequest(BaseModel):
@@ -145,26 +144,14 @@ def search_deals(request: SearchRequest):
         )
         evaluated_count = len(scored_listings)
         logger.info(f"✅ Step 4 complete: Found {evaluated_count} deals")
-        
-        # Calculate average confidence
-        confidences = [
-            listing.get("filterConfidence")
-            for listing in scored_listings
-            if listing.get("filterConfidence") is not None
-        ]
-        average_confidence = sum(confidences) / len(confidences) if confidences else None
-        
         logger.info(f"{'='*60}")
         logger.info(f"🎯 Step 5: Search completed - {scanned_count} scanned, {evaluated_count} deals found")
-        if average_confidence is not None:
-            logger.info(f"📊 Average filter confidence: {average_confidence:.2%}")
         logger.info(f"{'='*60}")
         
         return SearchResponse(
             listings=[ListingResponse(**listing) for listing in scored_listings],
             scannedCount=scanned_count,
-            evaluatedCount=evaluated_count,
-            averageConfidence=average_confidence
+            evaluatedCount=evaluated_count
         )
     
     logger.warning("⚠️  Step 3: No eBay stats available - skipping deal scoring")
@@ -185,8 +172,7 @@ def search_deals(request: SearchRequest):
     return SearchResponse(
         listings=all_listings,
         scannedCount=scanned_count,
-        evaluatedCount=len(all_listings),
-        averageConfidence=None
+        evaluatedCount=len(all_listings)
     )
 
 
@@ -377,27 +363,16 @@ def search_deals_stream(request: SearchRequest):
             if cancelled.is_set():
                 return
             
-            # Calculate average confidence
-            confidences = [
-                listing.get("filterConfidence")
-                for listing in scored_listings
-                if listing.get("filterConfidence") is not None
-            ]
-            average_confidence = sum(confidences) / len(confidences) if confidences else None
-            
             # Send completion event
             logger.info(f"{'='*60}")
             logger.info(f"🎯 Step 5: Search completed - {len(fb_listings)} scanned, {len(scored_listings)} deals found")
-            if average_confidence is not None:
-                logger.info(f"📊 Average filter confidence: {average_confidence:.2%}")
             logger.info(f"{'='*60}")
             done_event = {
                 "type": "done",
                 "scannedCount": len(fb_listings),
                 "evaluatedCount": evaluated_count,
                 "listings": scored_listings,
-                "threshold": request.threshold,
-                "averageConfidence": average_confidence
+                "threshold": request.threshold
             }
             yield f"data: {json.dumps(done_event)}\n\n"
         except (GeneratorExit, BrokenPipeError, ConnectionResetError, ConnectionAbortedError) as e:

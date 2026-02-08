@@ -19,7 +19,7 @@ const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 type SSEDispatchHandlers = {
   handlePhaseUpdate: (phase: SearchPhase) => void;
   handleProgressUpdate: (scannedCount: number) => void;
-  handleCompletion: (data: { scannedCount: number; evaluatedCount: number; listings: Listing[]; threshold?: number; averageConfidence?: number | null }) => void;
+  handleCompletion: (data: { scannedCount: number; evaluatedCount: number; listings: Listing[]; threshold?: number }) => void;
   setEvaluatedCount: (n: number) => void;
 };
 
@@ -28,7 +28,7 @@ type SSEDispatchHandlers = {
  * Throws if JSON is invalid so the stream parser can surface the error.
  */
 function dispatchSSEEvent(payloadString: string, handlers: SSEDispatchHandlers): void {
-  const data = JSON.parse(payloadString) as { type: string; phase?: SearchPhase; scannedCount?: number; evaluatedCount?: number; listings?: Listing[]; threshold?: number; averageConfidence?: number | null };
+  const data = JSON.parse(payloadString) as { type: string; phase?: SearchPhase; scannedCount?: number; evaluatedCount?: number; listings?: Listing[]; threshold?: number };
   if (data.type === "phase" && data.phase != null) {
     handlers.handlePhaseUpdate(data.phase);
   } else if (data.type === "progress" && typeof data.scannedCount === "number") {
@@ -41,7 +41,6 @@ function dispatchSSEEvent(payloadString: string, handlers: SSEDispatchHandlers):
       evaluatedCount: data.evaluatedCount ?? 0,
       listings: data.listings,
       threshold: data.threshold,
-      averageConfidence: data.averageConfidence ?? null,
     });
   }
 }
@@ -67,7 +66,6 @@ export default function Home() {
   const [error, setError] = useState<string | null>(null);
   const [phase, setPhase] = useState<SearchPhase>("scraping");
   const [threshold, setThreshold] = useState<number>(0);
-  const [averageConfidence, setAverageConfidence] = useState<number | null>(null);
   const [isSearching, setIsSearching] = useState<boolean>(false);
   const isSearchingRef = useRef<boolean>(false);
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -128,12 +126,11 @@ export default function Home() {
    * Applies the final search result: sets listings, counts, threshold, generates CSV blob,
    * and switches the app to the done state so the results table is shown.
    */
-  const handleCompletion = useCallback((data: { scannedCount: number; evaluatedCount: number; listings: Listing[]; threshold?: number; averageConfidence?: number | null }) => {
+  const handleCompletion = useCallback((data: { scannedCount: number; evaluatedCount: number; listings: Listing[]; threshold?: number }) => {
     setScannedCount(data.scannedCount);
     setEvaluatedCount(data.evaluatedCount);
     setListings(data.listings);
     setThreshold(data.threshold || 0);
-    setAverageConfidence(data.averageConfidence ?? null);
 
     const blob = generateCSV(data.listings);
     setCsvBlob(blob);
@@ -371,7 +368,6 @@ export default function Home() {
     setCsvBlob(null);
     setListings([]);
     setError(null);
-    setAverageConfidence(null);
     isSearchingRef.current = false;
     setIsSearching(false);
   };
@@ -417,7 +413,6 @@ export default function Home() {
                 listings={listings}
                 scannedCount={scannedCount}
                 threshold={threshold}
-                averageConfidence={averageConfidence}
                 onDownloadCSV={downloadCSV}
                 onReset={handleReset}
               />
