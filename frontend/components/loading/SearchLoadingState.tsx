@@ -8,6 +8,7 @@ export interface SearchLoadingStateProps {
   phase: SearchPhase;
   scannedCount: number;
   evaluatedCount: number;
+  onCancel?: () => void;
 }
 
 /**
@@ -39,9 +40,9 @@ function getPhaseMessages(phase: SearchPhase): { main: string; description: stri
 /**
  * Loading state component displaying progress during marketplace search.
  * Shows current phase with animated dots, phase description, and progress bars
- * for scanned and evaluated listings.
+ * for scanned and evaluated listings. Includes a cancel button to abort the search.
  */
-export function SearchLoadingState({ phase, scannedCount, evaluatedCount }: SearchLoadingStateProps) {
+export function SearchLoadingState({ phase, scannedCount, evaluatedCount, onCancel }: SearchLoadingStateProps) {
   const phaseMessages = getPhaseMessages(phase) || {
     main: "🔄 Processing...",
     description: "Working on your request...",
@@ -50,15 +51,26 @@ export function SearchLoadingState({ phase, scannedCount, evaluatedCount }: Sear
   return (
     <div className="space-y-6">
       <div className="border border-border bg-secondary p-4">
-        <div className="flex items-center gap-3">
-          <div className="flex gap-1">
-            <span className="inline-block h-2 w-2 animate-bounce bg-primary" style={{ animationDelay: "0ms" }} />
-            <span className="inline-block h-2 w-2 animate-bounce bg-primary" style={{ animationDelay: "150ms" }} />
-            <span className="inline-block h-2 w-2 animate-bounce bg-primary" style={{ animationDelay: "300ms" }} />
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="flex gap-1">
+              <span className="inline-block h-2 w-2 animate-bounce bg-primary" style={{ animationDelay: "0ms" }} />
+              <span className="inline-block h-2 w-2 animate-bounce bg-primary" style={{ animationDelay: "150ms" }} />
+              <span className="inline-block h-2 w-2 animate-bounce bg-primary" style={{ animationDelay: "300ms" }} />
+            </div>
+            <span className="font-mono text-sm text-muted-foreground">
+              {phaseMessages.main}
+            </span>
           </div>
-          <span className="font-mono text-sm text-muted-foreground">
-            {phaseMessages.main}
-          </span>
+          {onCancel && (
+            <button
+              type="button"
+              onClick={onCancel}
+              className="border-2 border-primary bg-transparent px-3 py-1.5 font-mono text-xs font-bold text-primary transition-all hover:bg-primary hover:text-primary-foreground"
+            >
+              CANCEL
+            </button>
+          )}
         </div>
         <div className="mt-3 font-mono text-xs text-muted-foreground/60">
           {phaseMessages.description}

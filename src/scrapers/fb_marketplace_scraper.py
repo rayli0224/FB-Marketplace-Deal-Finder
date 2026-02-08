@@ -518,14 +518,14 @@ class FBMarketplaceScraper:
         
         return listing_elements
     
-    def _extract_listing_from_element(self, element) -> Optional[Listing]:
+    def _extract_listing_from_element(self, element, extract_descriptions: bool = False) -> Optional[Listing]:
         """
         Extract a single listing from a listing element.
         
-        Extracts URL, price, title, and location from the element. Then navigates
-        to the listing's detail page to extract the full description. Validates that
-        price is valid and title is not a price format. Returns Listing object if
-        valid, or None if extraction fails or data is invalid.
+        Extracts URL, price, title, and location from the element. Optionally navigates
+        to the listing's detail page to extract the full description if extract_descriptions
+        is True. Validates that price is valid and title is not a price format. Returns
+        Listing object if valid, or None if extraction fails or data is invalid.
         """
         try:
             url = element.get_attribute("href") or ""
@@ -548,9 +548,11 @@ class FBMarketplaceScraper:
             
             location = self._extract_location(element)
             
-            # Extract description from detail page (disabled for performance)
-            # description = self._extract_description_from_detail_page(url)
-            description = ""  # Skip description extraction for now
+            # Extract description from detail page if enabled
+            if extract_descriptions:
+                description = self._extract_description_from_detail_page(url)
+            else:
+                description = ""  # Skip description extraction for performance
             
             if title and price:
                 return Listing(
@@ -566,7 +568,7 @@ class FBMarketplaceScraper:
         except Exception:
             return None
     
-    def _extract_listings(self, on_listing_found=None) -> List[Listing]:
+    def _extract_listings(self, on_listing_found=None, extract_descriptions: bool = False) -> List[Listing]:
         """
         Extract listings from the current Facebook Marketplace page.
         
@@ -581,7 +583,7 @@ class FBMarketplaceScraper:
             listing_elements = self._find_listing_elements()
             
             for element in listing_elements[:50]:
-                listing = self._extract_listing_from_element(element)
+                listing = self._extract_listing_from_element(element, extract_descriptions=extract_descriptions)
                 if listing:
                     logger.debug(
                         f"Extracted FB listing:\n"
@@ -600,12 +602,14 @@ class FBMarketplaceScraper:
         
         return listings
     
-    def search_marketplace(self, query: str, zip_code: str, radius: int = 25, on_listing_found=None) -> List[Listing]:
+    def search_marketplace(self, query: str, zip_code: str, radius: int = 25, on_listing_found=None, extract_descriptions: bool = False) -> List[Listing]:
         """Search Facebook Marketplace for listings matching the query."""
         logger.info("")
         logger.info("╔" + "═" * 78 + "╗")
         logger.info(f"║  🔍 Starting FB Marketplace Search")
         logger.info(f"║  Query: '{query}' | Zip: {zip_code} | Radius: {radius}mi")
+        if extract_descriptions:
+            logger.info(f"║  ⚠️  Description extraction enabled (slower)")
         logger.info("╚" + "═" * 78 + "╝")
         logger.info("")
         
@@ -615,7 +619,7 @@ class FBMarketplaceScraper:
             
             self._set_location(zip_code, radius)
             self._search(query)
-            listings = self._extract_listings(on_listing_found=on_listing_found)
+            listings = self._extract_listings(on_listing_found=on_listing_found, extract_descriptions=extract_descriptions)
             
             logger.info("")
             logger.info(f"✅ Search completed. Found {len(listings)} listings")
@@ -641,11 +645,12 @@ def search_marketplace(
     radius: int = 25,
     headless: bool = None,
     on_listing_found=None,
+    extract_descriptions: bool = False,
 ) -> List[Listing]:
     """Convenience function to search Facebook Marketplace."""
     scraper = FBMarketplaceScraper(headless=headless)
     try:
-        return scraper.search_marketplace(query, zip_code, radius, on_listing_found=on_listing_found)
+        return scraper.search_marketplace(query, zip_code, radius, on_listing_found=on_listing_found, extract_descriptions=extract_descriptions)
     finally:
         scraper.close()
 

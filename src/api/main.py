@@ -37,6 +37,7 @@ class SearchRequest(BaseModel):
     zipCode: str
     radius: int = 25
     threshold: float
+    extractDescriptions: bool = False
 
 
 class CompItemSummary(BaseModel):
@@ -101,7 +102,8 @@ def search_deals(request: SearchRequest):
             query=request.query,
             zip_code=request.zipCode,
             radius=request.radius,
-            headless=True
+            headless=True,
+            extract_descriptions=request.extractDescriptions
         )
         logger.info(f"✅ Step 2 complete: Found {len(fb_listings)} listings")
     except Exception as e:
@@ -208,7 +210,8 @@ def search_deals_stream(request: SearchRequest):
                 zip_code=request.zipCode,
                 radius=request.radius,
                 headless=True,
-                on_listing_found=on_listing_found
+                on_listing_found=on_listing_found,
+                extract_descriptions=request.extractDescriptions
             )
         except Exception as e:
             logger.error(f"❌ Step 2 failed: {str(e)[:100]}")

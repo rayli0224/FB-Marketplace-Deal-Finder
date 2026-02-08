@@ -35,6 +35,7 @@ export const formSchema = z.object({
       .min(0, "Threshold must be between 0% and 100%")
       .max(100, "Threshold must be between 0% and 100%")
   ),
+  extractDescriptions: z.boolean().default(false),
 });
 
 export type FormData = z.infer<typeof formSchema>;
