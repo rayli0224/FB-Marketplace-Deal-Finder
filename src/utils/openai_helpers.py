@@ -101,7 +101,7 @@ def generate_ebay_query_for_listing(
             "max_tokens": 200,
         }
         
-        # Log the prompt being sent (INFO level for visibility)
+        # Log the prompt being sent
         logger.debug(f"📝 Prompt sent to OpenAI (model: {api_params['model']}):")
         logger.debug(f"   System message: {messages[0]['content']}")
         logger.debug(f"   User prompt ({len(messages[1]['content'])} chars):")

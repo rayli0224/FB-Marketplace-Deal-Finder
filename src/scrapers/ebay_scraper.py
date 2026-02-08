@@ -11,7 +11,6 @@ import statistics
 import os
 from dataclasses import dataclass
 from typing import Optional, List
-import logging
 import time
 
 import requests
@@ -24,8 +23,6 @@ logger = setup_colored_logger("ebay_scraper")
 # eBay API credentials (get from developer.ebay.com)
 EBAY_APP_ID = os.environ.get("EBAY_APP_ID", "")
 EBAY_CLIENT_SECRET = os.environ.get("EBAY_CLIENT_SECRET", "")
-
-# Check credentials (only log when actually needed)
 
 
 @dataclass
@@ -71,9 +68,6 @@ class EbayBrowseAPIClient:
         self.client_secret = client_secret or EBAY_CLIENT_SECRET
         self._access_token = None
         self._token_expiry = 0
-        
-        if not self.app_id or not self.client_secret:
-            pass
     
     def _get_access_token(self) -> Optional[str]:
         """Get or refresh OAuth 2.0 access token using Client Credentials flow."""
@@ -284,8 +278,7 @@ class EbayBrowseAPIClient:
                 # Rate limiting: be nice to the API
                 time.sleep(0.5)
                 
-            except requests.exceptions.RequestException as e:
-                pass
+            except requests.exceptions.RequestException:
                 break
         
         return all_items[:max_items] if all_items else None
