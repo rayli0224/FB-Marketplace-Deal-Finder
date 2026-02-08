@@ -79,7 +79,7 @@ export default function Home() {
       `"${item.title}"`,
       `$${item.price}`,
       `"${item.location}"`,
-      `${item.dealScore}%`,
+      item.dealScore !== null ? `${item.dealScore}%` : "--",
       item.url,
     ]);
 

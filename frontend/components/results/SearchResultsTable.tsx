@@ -14,7 +14,7 @@ export interface Listing {
   price: number;
   location: string;
   url: string;
-  dealScore: number;
+  dealScore: number | null;
   ebaySearchQuery?: string;
   compPrice?: number;
   compPrices?: number[];
@@ -30,17 +30,17 @@ export interface SearchResultsTableProps {
 }
 
 /**
- * Returns true when the listing is a good deal: dealScore is positive and at or above the threshold.
+ * Returns true when the listing is a good deal: dealScore is not null and at or above the threshold.
  */
-function isGoodDeal(dealScore: number, threshold: number): boolean {
-  return dealScore > 0 && dealScore >= threshold;
+function isGoodDeal(dealScore: number | null, threshold: number): boolean {
+  return dealScore !== null && dealScore >= threshold;
 }
 
 /**
- * Returns true when the listing is a bad deal: dealScore is positive but below the threshold.
+ * Returns true when the listing is a bad deal: dealScore is not null and below the threshold.
  */
-function isBadDeal(dealScore: number, threshold: number): boolean {
-  return dealScore > 0 && dealScore < threshold;
+function isBadDeal(dealScore: number | null, threshold: number): boolean {
+  return dealScore !== null && dealScore < threshold;
 }
 
 /**
@@ -211,7 +211,7 @@ export function SearchResultsTable({ listings, scannedCount, threshold, onDownlo
                     {listing.location}
                   </td>
                   <td className="px-3 py-2">
-                    {listing.dealScore > 0 ? (
+                    {listing.dealScore !== null ? (
                       <span className={`font-bold ${goodDeal ? 'text-green-500' : badDeal ? 'text-red-500' : 'text-muted-foreground'}`}>
                         {listing.dealScore}%
                       </span>

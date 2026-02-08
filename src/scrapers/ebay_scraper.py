@@ -64,11 +64,8 @@ class EbayBrowseAPIClient:
     
     def __init__(self, app_id: str = None, client_secret: str = None):
         """
-        Initialize the eBay Browse API client.
-        
-        Args:
-            app_id: eBay App ID (Client ID) from developer.ebay.com
-            client_secret: eBay Client Secret from developer.ebay.com
+        Initialize the eBay Browse API client. Uses EBAY_APP_ID and EBAY_CLIENT_SECRET
+        from environment if not provided.
         """
         self.app_id = app_id or EBAY_APP_ID
         self.client_secret = client_secret or EBAY_CLIENT_SECRET
@@ -128,19 +125,8 @@ class EbayBrowseAPIClient:
         max_price: Optional[float] = None,
     ) -> Optional[List[dict]]:
         """
-        Search for active eBay listings using Browse API.
-        
-        Note: Returns ACTIVE listings only, not sold items. Useful for current market prices.
-        
-        Args:
-            keywords: Search keywords
-            max_items: Maximum number of items to return (API limit: 200 per page)
-            excluded_keywords: Keywords to exclude from search
-            min_price: Minimum price filter
-            max_price: Maximum price filter
-            
-        Returns:
-            List of item dictionaries with price data, or None if failed
+        Search for active eBay listings using Browse API. Returns ACTIVE listings
+        only (not sold items). Supports exclusion keywords and price filters.
         """
         token = self._get_access_token()
         if not token:
@@ -258,19 +244,8 @@ class EbayBrowseAPIClient:
         max_price: Optional[float] = None,
     ) -> Optional[PriceStats]:
         """
-        Get average price from active listings using Browse API.
-        
-        Note: These are ACTIVE listings, not sold items. Useful for current market comparison.
-        
-        Args:
-            search_term: The item to search for
-            n_items: Target number of listings to analyze
-            excluded_keywords: Words to exclude from search
-            min_price: Minimum price filter
-            max_price: Maximum price filter
-            
-        Returns:
-            PriceStats object with average price and raw prices, or None if failed
+        Get average price from active eBay listings using Browse API.
+        Returns PriceStats with average and raw prices, or None if insufficient data.
         """
         logger.info(f"🔍 Searching eBay for: '{search_term}'")
         logger.debug("Note: Browse API returns ACTIVE listings only, not sold items")
@@ -317,23 +292,8 @@ def get_market_price(
     headless: bool = None,  # Deprecated, kept for backwards compatibility
 ) -> Optional[PriceStats]:
     """
-    Get average price from eBay active listings using Browse API.
-    
-    Note: This function returns ACTIVE listings (current market prices), not sold items.
-    
-    Args:
-        search_term: The item to search for (e.g., "iPhone 13 Pro 128GB")
-        n_items: Number of listings to analyze (50-100 recommended)
-        excluded_keywords: Words to exclude (e.g., ["broken", "parts", "locked"])
-        headless: Deprecated parameter, kept for backwards compatibility
-        
-    Returns:
-        PriceStats object with average price and raw prices, or None if failed
-        
-    Example:
-        >>> stats = get_market_price("Nintendo Switch OLED", n_items=50)
-        >>> print(stats)
-        >>> print(f"Average price: ${stats.average:.2f}")
+    Get average price from eBay active listings using Browse API. Returns PriceStats
+    or None if failed. headless parameter is deprecated and ignored.
     """
     if not EBAY_APP_ID or not EBAY_CLIENT_SECRET:
         logger.error("❌ eBay credentials not configured")

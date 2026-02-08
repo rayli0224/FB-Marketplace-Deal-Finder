@@ -3,8 +3,8 @@ Listing processor for evaluating individual Facebook Marketplace listings.
 
 Processes a single FB listing by generating an optimized eBay search query,
 fetching comparable prices from eBay, and calculating a deal score. Returns the
-listing with deal score (or 0.0 when unknown). All listings are returned
-regardless of threshold or eBay data availability.
+listing with deal score (or None when eBay data or calculation fails). All
+listings are returned regardless of threshold or eBay data availability.
 """
 
 import time
@@ -23,7 +23,7 @@ logger = setup_colored_logger("listing_processor", level=logging.INFO)
 
 def _listing_result(
     listing: Listing,
-    deal_score: float,
+    deal_score: Optional[float],
     ebay_search_query: Optional[str] = None,
     comp_price: Optional[float] = None,
     comp_prices: Optional[list] = None,
@@ -64,43 +64,10 @@ def process_single_listing(
     total_listings: Optional[int] = None
 ) -> Dict:
     """
-    Process a single FB listing to determine if it's a good deal.
-    
-    Orchestrates the full evaluation process:
-    1. Generates an optimized eBay search query using OpenAI
-    2. Fetches comparable prices from eBay using the generated query
-    3. Calculates deal score (percentage savings vs eBay average)
-    4. Returns listing dict with dealScore (0.0 when eBay data or score unavailable)
-    
-    All listings are returned. When eBay stats are missing or deal score cannot
-    be calculated, dealScore is set to 0.0 so the UI can show "unknown" (e.g. --).
-    
-    Args:
-        listing: Facebook Marketplace listing to evaluate
-        original_query: The original user search query (e.g., "nintendo ds")
-        threshold: Minimum deal score percentage to include (default: 20.0)
-        n_items: Number of eBay listings to analyze for price comparison (default: 50)
-        listing_index: Optional index of this listing (for progress tracking)
-        total_listings: Optional total number of listings (for progress tracking)
-        
-    Returns:
-        Dictionary with listing data and dealScore (always returned). Format: {
-            "title": str,
-            "price": float,
-            "location": str,
-            "url": str,
-            "dealScore": float
-        }
-        
-    Example:
-        >>> listing = Listing(
-        ...     title="Nintendo DS Lite Pink - Great Condition",
-        ...     price=50.0,
-        ...     location="New York, NY",
-        ...     url="https://facebook.com/..."
-        ... )
-        >>> result = process_single_listing(listing, "nintendo ds", threshold=20.0)
-        >>> print(f"Deal score: {result['dealScore']}%")
+    Process a single FB listing: generate eBay query via OpenAI, fetch comparable
+    prices, and calculate deal score (percentage savings vs eBay average).
+    Returns listing dict with dealScore. When eBay stats are missing or calculation
+    fails, dealScore is None so the UI shows "--".
     """
     progress_info = ""
     if listing_index is not None and total_listings is not None:
@@ -117,7 +84,7 @@ def process_single_listing(
     if not query_result:
         logger.warning(f"❌ Failed to generate eBay query - including listing with unknown deal score")
         logger.info("")
-        return _listing_result(listing, 0.0)
+        return _listing_result(listing, None)
 
     enhanced_query, exclusion_keywords = query_result
     
@@ -134,7 +101,7 @@ def process_single_listing(
     if not ebay_stats:
         logger.warning(f"❌ No eBay stats found (insufficient data) - including listing with unknown deal score")
         logger.info("")
-        return _listing_result(listing, 0.0)
+        return _listing_result(listing, None)
 
     logger.info(f"   ✓ Found {ebay_stats.sample_size} eBay listings | Avg price: ${ebay_stats.average:.2f}")
     
@@ -147,7 +114,7 @@ def process_single_listing(
     if deal_score is None:
         logger.warning(f"❌ Could not calculate deal score - including listing with unknown deal score")
         logger.info("")
-        return _listing_result(listing, 0.0)
+        return _listing_result(listing, None)
 
     logger.info(f"   ✓ Deal score: {deal_score:.1f}% savings vs eBay average")
     if deal_score >= threshold:

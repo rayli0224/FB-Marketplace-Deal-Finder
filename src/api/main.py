@@ -51,7 +51,7 @@ class ListingResponse(BaseModel):
     price: float
     location: str
     url: str
-    dealScore: float
+    dealScore: Optional[float] = None
     ebaySearchQuery: Optional[str] = None
     compPrice: Optional[float] = None
     compPrices: Optional[List[float]] = None
@@ -149,7 +149,6 @@ def search_deals(request: SearchRequest):
             evaluatedCount=evaluated_count
         )
     
-    # No eBay stats - return all FB listings with dealScore=0 (unknown)
     logger.warning("⚠️  Step 3: No eBay stats available - skipping deal scoring")
     all_listings = [
         ListingResponse(
@@ -157,7 +156,7 @@ def search_deals(request: SearchRequest):
             price=listing.price,
             location=listing.location,
             url=listing.url,
-            dealScore=0.0,  # Unknown deal score
+            dealScore=None,
         )
         for listing in fb_listings
     ]

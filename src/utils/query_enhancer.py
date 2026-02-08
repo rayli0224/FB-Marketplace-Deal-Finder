@@ -31,31 +31,10 @@ def generate_ebay_query_for_listing(
     original_query: str
 ) -> Optional[Tuple[str, List[str]]]:
     """
-    Generate an optimized eBay search query and exclusion keywords for a specific FB listing.
-    
-    Uses OpenAI to analyze the listing title, price, and original search query to create
-    a targeted eBay search query that will find similar items. Also generates exclusion
-    keywords to filter out accessories, broken items, and unrelated listings.
-    
-    Args:
-        listing: Facebook Marketplace listing with title, price, location, and url
-        original_query: The original user search query (e.g., "nintendo ds")
-        
-    Returns:
-        Tuple of (enhanced_ebay_query, exclusion_keywords) if successful, None if failed.
-        Example: ("nintendo ds lite", ["case", "pen", "stylus", "broken"])
-        
-    Example:
-        >>> listing = Listing(
-        ...     title="Nintendo DS Lite Pink - Great Condition",
-        ...     price=50.0,
-        ...     location="New York, NY",
-        ...     url="https://facebook.com/..."
-        ... )
-        >>> result = generate_ebay_query_for_listing(listing, "nintendo ds")
-        >>> enhanced_query, exclusions = result
-        >>> print(enhanced_query)  # "nintendo ds lite"
-        >>> print(exclusions)  # ["case", "pen", "stylus", "broken", "for parts"]
+    Generate an optimized eBay search query and exclusion keywords using OpenAI.
+    Analyzes listing title, price, and original query to create a targeted search
+    that finds similar items, plus exclusion keywords for accessories/unrelated items.
+    Returns (enhanced_query, exclusion_keywords) or None if failed.
     """
     if not OpenAI:
         logger.error("OpenAI library not installed. Install with: pip install openai")
