@@ -8,7 +8,7 @@ export interface Listing {
   price: number;
   location: string;
   url: string;
-  dealScore: number;
+  dealScore: number | null;
 }
 
 export interface SearchResultsTableProps {
@@ -21,18 +21,18 @@ export interface SearchResultsTableProps {
 
 /**
  * Determines if a listing is a good deal based on threshold comparison.
- * A good deal has a dealScore > 0 and dealScore >= threshold.
+ * A good deal has a known deal score (not null) and meets or exceeds the threshold.
  */
-function isGoodDeal(dealScore: number, threshold: number): boolean {
-  return dealScore > 0 && dealScore >= threshold;
+function isGoodDeal(dealScore: number | null, threshold: number): boolean {
+  return dealScore !== null && dealScore >= threshold;
 }
 
 /**
  * Determines if a listing is a bad deal based on threshold comparison.
- * A bad deal has a dealScore > 0 and dealScore < threshold.
+ * A bad deal has a known deal score (not null) and is below the threshold.
  */
-function isBadDeal(dealScore: number, threshold: number): boolean {
-  return dealScore > 0 && dealScore < threshold;
+function isBadDeal(dealScore: number | null, threshold: number): boolean {
+  return dealScore !== null && dealScore < threshold;
 }
 
 /**
@@ -143,7 +143,7 @@ export function SearchResultsTable({ listings, scannedCount, threshold, onDownlo
                     {listing.location}
                   </td>
                   <td className="px-3 py-2">
-                    {listing.dealScore > 0 ? (
+                    {listing.dealScore !== null ? (
                       <span className={`font-bold ${goodDeal ? 'text-green-500' : badDeal ? 'text-red-500' : 'text-muted-foreground'}`}>
                         {listing.dealScore}%
                       </span>

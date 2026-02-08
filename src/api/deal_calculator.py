@@ -47,9 +47,9 @@ def score_listings(
     their prices to eBay market data. Returns all listings regardless of score,
     allowing the frontend to filter and color-code based on threshold.
     
-    The function handles the case where eBay stats are unavailable by returning
-    all listings with dealScore set to 0.0, ensuring robust behavior when external
-    data is missing.
+    When eBay stats are unavailable or the calculation fails for a listing,
+    dealScore is set to None so the frontend can distinguish "unknown" from
+    a calculated score of zero.
     
     Args:
         fb_listings: List of Facebook Marketplace listings to score
@@ -60,7 +60,7 @@ def score_listings(
         List of dictionaries containing all listings with their deal scores.
         Each dictionary includes title, price, location, url, and dealScore fields.
         Deal scores are percentages (e.g., 25.0 means 25% below market value).
-        Returns all listings with dealScore=0.0 if eBay stats are unavailable.
+        dealScore is None when eBay data is unavailable or average price is zero.
     """
     scored_listings = []
     
@@ -72,7 +72,7 @@ def score_listings(
             "price": listing.price,
             "location": listing.location,
             "url": listing.url,
-            "dealScore": deal_score if deal_score is not None else 0.0,
+            "dealScore": deal_score,
         })
     
     return scored_listings
