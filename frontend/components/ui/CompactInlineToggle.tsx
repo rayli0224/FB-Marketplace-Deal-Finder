@@ -11,8 +11,8 @@ export interface CompactInlineToggleProps {
 }
 
 /**
- * Small inline toggle for label rows.
- * Compact dimensions, neutral styling.
+ * Compact inline toggle for use in form label rows.
+ * Renders a small switch with label and optional info icon.
  */
 export function CompactInlineToggle({ id, label, checked, onChange, tooltip }: CompactInlineToggleProps) {
   return (

@@ -7,7 +7,7 @@ export interface InfoIconProps {
 
 /**
  * Parses tooltip text into main text and optional example section.
- * Splits on "Example:" delimiter if present, otherwise returns the full text as main.
+ * Splits on the "Example:" delimiter when present; otherwise returns the full text as main.
  */
 function parseTooltip(tooltip: string): { main: string; example?: string } {
   if (tooltip.includes("Example:")) {
@@ -18,8 +18,8 @@ function parseTooltip(tooltip: string): { main: string; example?: string } {
 }
 
 /**
- * Reusable info icon with hover popup.
- * Shared across form fields.
+ * Info icon with hover popup, shared across form fields.
+ * Ensures main text and example (when present) end with exactly one period.
  */
 export function InfoIcon({ tooltip, className = "" }: InfoIconProps) {
   const { main, example } = parseTooltip(tooltip);
@@ -35,7 +35,12 @@ export function InfoIcon({ tooltip, className = "" }: InfoIconProps) {
           <span className="block whitespace-pre-line text-foreground">
             {main}{main.endsWith(".") ? "" : "."}
             {example && (
-              <> <span className="text-accent font-semibold">Example:</span>{" "}{example}{example.endsWith(".") ? "" : "."}</>
+              <>
+                {" "}
+                <span className="text-accent font-semibold">Example:</span>{" "}
+                {example}
+                {example.endsWith(".") ? "" : "."}
+              </>
             )}
           </span>
         </div>

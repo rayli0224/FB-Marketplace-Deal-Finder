@@ -15,9 +15,9 @@ export interface MarketplaceSearchFormProps {
 }
 
 /**
- * Search form component for entering marketplace search parameters.
- * Includes fields for query, zip code, radius, threshold, and max listings with validation.
- * Submit button is disabled until all fields are valid.
+ * Search form component for marketplace search parameters.
+ * Fields: query, zip code, radius, threshold, max loot, and deep dig toggle.
+ * Submit button is disabled until all required fields are valid.
  */
 export function MarketplaceSearchForm({ register, errors, isValid, handleSubmit, watch, setValue }: MarketplaceSearchFormProps) {
   return (
@@ -90,7 +90,7 @@ export function MarketplaceSearchForm({ register, errors, isValid, handleSubmit,
           inputMode="numeric"
           error={errors.threshold?.message}
           suffix="%"
-          tooltip="Max % of eBay average price. Example: 80% shows only listings at 80% of market value or below"
+          tooltip="Max % of eBay average price. Example: 80% shows only listings at 80% of market value or below."
         />
 
         <FormInputField

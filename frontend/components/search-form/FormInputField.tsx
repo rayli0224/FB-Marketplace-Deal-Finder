@@ -31,10 +31,10 @@ export interface FormInputFieldProps {
 }
 
 /**
- * Reusable form field component with pirate-themed styling.
- * Supports both controlled (value/onChange) and uncontrolled (react-hook-form register) modes.
- * When register is provided, uses react-hook-form for form state management. Otherwise uses controlled mode.
- * Displays validation errors below the input with red border styling when invalid.
+ * Reusable form field component with themed styling.
+ * Supports controlled (value/onChange) and uncontrolled (react-hook-form register) modes.
+ * When register is provided, uses react-hook-form; otherwise controlled mode.
+ * Displays validation errors below the input when invalid.
  */
 export function FormInputField({
   label,
