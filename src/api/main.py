@@ -46,6 +46,7 @@ class CompItemSummary(BaseModel):
     title: str
     price: float
     url: str
+    filtered: bool = False  # True if this item was filtered out as non-comparable
 
 
 class ListingResponse(BaseModel):

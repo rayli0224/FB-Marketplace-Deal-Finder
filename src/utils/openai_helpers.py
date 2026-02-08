@@ -1,14 +1,12 @@
 """
-Query enhancer utility for generating eBay search queries using OpenAI.
+OpenAI API helper functions for query generation and result filtering.
 
-Takes a Facebook Marketplace listing and generates an optimized eBay search query
-with exclusion keywords specific to that listing. This ensures accurate price
-comparisons by matching each FB listing to similar items on eBay.
+Provides helper functions for making OpenAI API calls to generate optimized eBay
+search queries and filter eBay results to match Facebook Marketplace listings.
 """
 
 import os
 import json
-import logging
 from typing import Optional, Tuple, List
 
 try:
@@ -18,9 +16,15 @@ except ImportError:
 
 from src.scrapers.fb_marketplace_scraper import Listing
 from src.utils.colored_logger import setup_colored_logger
+from src.utils.prompts import (
+    QUERY_GENERATION_SYSTEM_MESSAGE,
+    RESULT_FILTERING_SYSTEM_MESSAGE,
+    get_query_generation_prompt,
+    get_result_filtering_prompt,
+)
 
 # Configure colored logging with module prefix (auto-detects DEBUG from env/--debug flag)
-logger = setup_colored_logger("query_enhancer")
+logger = setup_colored_logger("openai_helpers")
 
 # OpenAI API key from environment
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
@@ -68,66 +72,20 @@ def generate_ebay_query_for_listing(
     
     client = OpenAI(api_key=OPENAI_API_KEY)
     
-    # Build prompt for OpenAI
     description_text = listing.description if listing.description else "No description provided"
-    prompt = f"""You are helping to find accurate price comparisons on eBay for a Facebook Marketplace listing.
-
-Original user search query: "{original_query}"
-Facebook Marketplace listing:
-- Title: "{listing.title}"
-- Price: ${listing.price:.2f}
-- Location: {listing.location}
-- Description: "{description_text}"
-
-Your task:
-1. Generate an optimized eBay search query that will find similar items to this listing.
-2. Provide exclusion keywords to filter out unrelated listings (accessories, incompatible items, etc).
-
-Abstraction rules:
-
-PRESERVE (always include if present):
-- Brand
-- Product type
-- Model / product line
-- Functional condition (e.g. "for parts", "broken", "not working", "refurbished", "new")
-
-INCLUDE ONLY IF THEY MATERIALLY AFFECT PRICE:
-- Storage / capacity (e.g. 128GB, 1TB)
-- Pro/Max/Ultra variants
-- Generation / year
-
-IGNORE OR GENERALIZE:
-- Color
-- Cosmetic descriptors
-- Seller adjectives (rare, amazing, mint)
-- Minor accessories
-- Bundle details unless they dominate value
-
-Important:
-- The goal is to find many comparable items, not exact matches.
-- Do NOT make the query overly specific.
-- However, if the listing is for parts / broken, the query MUST reflect that.
-- The enhanced_query should typically be 3–6 tokens long, unless functional condition requires more.
-
-Focus on the MAIN PRODUCT, not accessories.
-Examples:
-- "Nintendo DS Lite Pink" → "Nintendo DS Lite"
-- "iPhone 13 Pro 256GB cracked screen" → "iPhone 13 Pro for parts"
-- "MacBook Pro 2019 16 inch i9" → "MacBook Pro 2019"
-
-Return your response as a JSON object with exactly this structure:
-{{
-  "enhanced_query": "optimized eBay search query",
-  "exclusion_keywords": ["keyword1", "keyword2", "keyword3"]
-}}
-
-Only return the JSON object, no other text."""
+    prompt = get_query_generation_prompt(
+        original_query=original_query,
+        listing_title=listing.title,
+        listing_price=listing.price,
+        listing_location=listing.location,
+        description_text=description_text,
+    )
 
     try:
         messages = [
             {
                 "role": "system",
-                "content": "You are an expert at creating precise search queries for online marketplaces. Always respond with valid JSON only."
+                "content": QUERY_GENERATION_SYSTEM_MESSAGE
             },
             {
                 "role": "user",
@@ -194,4 +152,107 @@ Only return the JSON object, no other text."""
         return None
     except Exception as e:
         logger.error(f"OpenAI API call failed: {e}")
+        return None
+
+
+def filter_ebay_results_with_openai(
+    listing: Listing,
+    ebay_items: List[dict]
+) -> Optional[List[dict]]:
+    """
+    Filter eBay search results to keep only items comparable to the Facebook Marketplace listing.
+    
+    Uses OpenAI to analyze each eBay item's title and compare it to the FB listing's title,
+    description, and price. Removes items that are accessories, different models, or otherwise
+    not comparable. This improves price comparison accuracy by ensuring only truly similar items
+    are used for calculating the market average.
+    
+    Returns filtered list of eBay items (same format: [{title, price, url}, ...]) or None if
+    filtering fails (caller should fall back to original items).
+    """
+    if not OpenAI:
+        logger.debug("OpenAI library not installed - skipping eBay result filtering")
+        return None
+    
+    if not OPENAI_API_KEY:
+        logger.debug("OPENAI_API_KEY not set - skipping eBay result filtering")
+        return None
+    
+    if not ebay_items or len(ebay_items) == 0:
+        return ebay_items
+    
+    client = OpenAI(api_key=OPENAI_API_KEY)
+    
+    # Build list of eBay items for the prompt
+    description_text = listing.description if listing.description else "No description provided"
+    ebay_items_text = "\n".join([
+        f"{i+1}. {item.get('title', '')} - ${item.get('price', 0):.2f}"
+        for i, item in enumerate(ebay_items)
+    ])
+    
+    prompt = get_result_filtering_prompt(
+        listing_title=listing.title,
+        listing_price=listing.price,
+        description_text=description_text,
+        ebay_items_text=ebay_items_text,
+    )
+    
+    try:
+        messages = [
+            {
+                "role": "system",
+                "content": RESULT_FILTERING_SYSTEM_MESSAGE
+            },
+            {
+                "role": "user",
+                "content": prompt
+            }
+        ]
+        
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=messages,
+            temperature=0.2,
+            max_tokens=500,
+        )
+        
+        content = response.choices[0].message.content.strip()
+        
+        # Remove markdown code blocks if present
+        if content.startswith("```json"):
+            content = content[7:]
+        if content.startswith("```"):
+            content = content[3:]
+        if content.endswith("```"):
+            content = content[:-3]
+        content = content.strip()
+        
+        # Parse JSON
+        result = json.loads(content)
+        comparable_indices = result.get("comparable_indices", [])
+        
+        if not isinstance(comparable_indices, list):
+            logger.warning("OpenAI returned invalid comparable_indices format - skipping filter")
+            return ebay_items
+        
+        # Filter items (indices are 1-based, convert to 0-based)
+        filtered_items = [
+            ebay_items[idx - 1]
+            for idx in comparable_indices
+            if 1 <= idx <= len(ebay_items)
+        ]
+        
+        removed_count = len(ebay_items) - len(filtered_items)
+        if removed_count > 0:
+            logger.info(f"Filtered out {removed_count} non-comparable eBay items ({len(filtered_items)} remaining)")
+        else:
+            logger.debug(f"All {len(ebay_items)} eBay items were deemed comparable")
+        
+        return filtered_items if filtered_items else ebay_items
+        
+    except json.JSONDecodeError as e:
+        logger.warning(f"Failed to parse OpenAI filter response as JSON: {e} - using original items")
+        return None
+    except Exception as e:
+        logger.warning(f"OpenAI filtering failed: {e} - using original items")
         return None

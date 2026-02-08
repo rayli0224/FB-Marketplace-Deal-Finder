@@ -7,6 +7,7 @@ export interface CompItem {
   title: string;
   price: number;
   url: string;
+  filtered?: boolean;  // True if this item was filtered out as non-comparable
 }
 
 export interface Listing {
@@ -74,19 +75,28 @@ function ListingCompsPanel({ listing }: { listing: Listing }) {
           <span className="font-bold text-foreground">Compared against {count} listing{count !== 1 ? "s" : ""}:</span>
           <ul className="mt-1 max-h-40 overflow-auto space-y-0.5 pl-2 border-l-2 border-border">
             {compItems && compItems.length > 0
-              ? compItems.map((item, i) => (
-                  <li key={i} className="flex items-baseline gap-2 flex-wrap">
-                    <a
-                      href={item.url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-primary hover:underline truncate max-w-[280px]"
-                    >
-                      {item.title || "eBay listing"}
-                    </a>
-                    <span className="text-primary font-bold shrink-0">${item.price.toFixed(2)}</span>
-                  </li>
-                ))
+              ? compItems.map((item, i) => {
+                  const isFiltered = item.filtered === true;
+                  return (
+                    <li key={i} className={`flex items-baseline gap-2 flex-wrap ${isFiltered ? 'opacity-60' : ''}`}>
+                      <a
+                        href={item.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className={`truncate max-w-[280px] hover:underline ${isFiltered ? 'text-red-500 line-through' : 'text-primary'}`}
+                        title={isFiltered ? 'Filtered out as non-comparable' : undefined}
+                      >
+                        {item.title || "eBay listing"}
+                      </a>
+                      <span className={`font-bold shrink-0 ${isFiltered ? 'text-red-500' : 'text-primary'}`}>
+                        ${item.price.toFixed(2)}
+                      </span>
+                      {isFiltered && (
+                        <span className="text-xs text-red-500/70 shrink-0">(filtered)</span>
+                      )}
+                    </li>
+                  );
+                })
               : compPrices?.map((p, i) => (
                   <li key={i}>
                     <span className="text-muted-foreground">${p.toFixed(2)}</span>
@@ -247,7 +257,7 @@ export function SearchResultsTable({ listings, scannedCount, threshold, onDownlo
                 </tr>
                 {isExpanded && hasComps && (
                   <tr className="border-b border-border/50 bg-secondary/80">
-                    <td colSpan={6} className="px-4 py-3">
+                    <td colSpan={7} className="px-4 py-3">
                       <ListingCompsPanel listing={listing} />
                     </td>
                   </tr>
