@@ -2,6 +2,7 @@
 
 import { type ReactNode, type Ref, type ChangeEvent, type FocusEvent, type KeyboardEvent, type ClipboardEvent } from "react";
 import { type FormData as ValidationFormData } from "@/lib/validation";
+import { InfoIcon } from "@/components/ui/InfoIcon";
 
 export interface FormInputFieldProps {
   label: string;
@@ -18,6 +19,7 @@ export interface FormInputFieldProps {
   suffix?: string;
   error?: string;
   tooltip?: string;
+  afterLabel?: ReactNode;
   digitsOnly?: boolean;
   inputMode?: "numeric" | "text";
   register?: (name: keyof ValidationFormData) => {
@@ -29,22 +31,10 @@ export interface FormInputFieldProps {
 }
 
 /**
- * Parses tooltip text into main text and optional example section.
- * Splits on "Example:" delimiter if present, otherwise returns the full text as main.
- */
-function parseTooltip(tooltip: string): { main: string; example?: string } {
-  if (tooltip.includes("Example:")) {
-    const [main, example] = tooltip.split("Example:");
-    return { main: main.trim(), example: example.trim() };
-  }
-  return { main: tooltip };
-}
-
-/**
- * Reusable form field component with pirate-themed styling.
- * Supports both controlled (value/onChange) and uncontrolled (react-hook-form register) modes.
- * When register is provided, uses react-hook-form for form state management. Otherwise uses controlled mode.
- * Displays validation errors below the input with red border styling when invalid.
+ * Reusable form field component with themed styling.
+ * Supports controlled (value/onChange) and uncontrolled (react-hook-form register) modes.
+ * When register is provided, uses react-hook-form; otherwise controlled mode.
+ * Displays validation errors below the input when invalid.
  */
 export function FormInputField({
   label,
@@ -61,6 +51,7 @@ export function FormInputField({
   suffix,
   error,
   tooltip,
+  afterLabel,
   digitsOnly,
   inputMode,
   register,
@@ -108,29 +99,8 @@ export function FormInputField({
       <label htmlFor={id} className="mb-2 flex items-center gap-2 font-mono text-xs text-muted-foreground">
         <span className="text-primary">$</span>
         {label}
-        {tooltip && (() => {
-          const { main, example } = parseTooltip(tooltip);
-          return (
-            <div className="group relative ml-1 inline-flex cursor-help">
-              <span className="flex h-4 w-4 items-center justify-center rounded-full border border-accent/40 bg-accent/10 text-[10px] font-bold text-accent transition-all hover:border-accent hover:bg-accent/20 hover:scale-110">
-                i
-              </span>
-              <div className="invisible absolute bottom-full left-1/2 mb-3 w-72 -translate-x-1/2 rounded-lg border-2 border-accent/30 bg-gradient-to-br from-card to-secondary/80 px-4 py-3 font-mono text-xs text-foreground shadow-[0_4px_12px_rgba(0,0,0,0.15)] backdrop-blur-sm group-hover:visible z-20">
-                <div className="absolute -bottom-1 left-1/2 h-2 w-2 -translate-x-1/2 rotate-45 border-r-2 border-b-2 border-accent/30 bg-gradient-to-br from-card to-secondary/80"></div>
-                <div className="relative">
-                  <span className="text-foreground">{main}.</span>
-                  {example && (
-                    <>
-                      {" "}
-                      <span className="text-accent font-semibold">Example:</span>{" "}
-                      <span className="text-foreground">{example}</span>
-                    </>
-                  )}
-                </div>
-              </div>
-            </div>
-          );
-        })()}
+        {tooltip && <InfoIcon tooltip={tooltip} />}
+        {afterLabel}
         {icon && <span className="ml-auto">{icon}</span>}
       </label>
       <div className="relative">
@@ -160,6 +130,7 @@ export function FormInputField({
               : "border-border focus:border-primary"
           }`}
         />
+
         {suffix && (
           <span className="absolute right-3 top-1/2 -translate-y-1/2 font-mono text-xs text-muted-foreground">
             {suffix}

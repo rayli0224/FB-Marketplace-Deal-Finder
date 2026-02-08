@@ -55,7 +55,7 @@ export default function Home() {
     formState: { errors, isValid },
   } = useForm<ValidationFormData>({
     resolver: zodResolver(formSchema),
-    defaultValues: { query: "", zipCode: "", radius: "", threshold: "", maxListings: "10", extractDescriptions: false },
+    defaultValues: { query: "", zipCode: "", radius: "", threshold: "", maxListings: "", extractDescriptions: false },
     mode: "onTouched",
   });
   const formData = watch();

@@ -1,7 +1,7 @@
 "use client";
 
 import { Fragment, useState } from "react";
-import { ToggleSwitch } from "@/components/ui/ToggleSwitch";
+import { FullSizeToggle } from "@/components/ui/FullSizeToggle";
 
 export interface CompItem {
   title: string;
@@ -172,7 +172,7 @@ export function SearchResultsTable({ listings, scannedCount, threshold, onDownlo
         </button>
         {isFiltersExpanded && (
           <div className="p-4">
-            <ToggleSwitch
+            <FullSizeToggle
               checked={showBadDeals}
               onChange={setShowBadDeals}
               label="Show bad deals"
