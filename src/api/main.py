@@ -18,8 +18,8 @@ from src.api.deal_calculator import score_listings
 from src.utils.listing_processor import process_single_listing
 from src.utils.colored_logger import setup_colored_logger
 
-# Configure colored logging with module prefix
-logger = setup_colored_logger("api", level=logging.INFO)
+# Configure colored logging with module prefix (auto-detects DEBUG from env/--debug flag)
+logger = setup_colored_logger("api")
 
 app = FastAPI(title="FB Marketplace Deal Finder API")
 

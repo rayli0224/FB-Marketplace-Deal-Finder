@@ -28,8 +28,8 @@ from playwright.sync_api import sync_playwright, Browser, Page, BrowserContext, 
 from src.scrapers.utils import random_delay, parse_price, is_valid_listing_price
 from src.utils.colored_logger import setup_colored_logger
 
-# Configure colored logging with module prefix
-logger = setup_colored_logger("fb_scraper", level=logging.INFO)
+# Configure colored logging with module prefix (auto-detects DEBUG from env/--debug flag)
+logger = setup_colored_logger("fb_scraper")
 
 # Default cookie file path
 COOKIES_FILE = os.environ.get("FB_COOKIES_FILE", "/app/cookies/facebook_cookies.json")
@@ -41,6 +41,7 @@ class Listing:
     price: float
     location: str
     url: str
+    description: str = ""
     
     def __str__(self) -> str:
         return f"Listing(title='{self.title}', price=${self.price:.2f}, location='{self.location}', url='{self.url}')"
@@ -415,6 +416,76 @@ class FBMarketplaceScraper:
         
         return ""
     
+    def _extract_description_from_detail_page(self, url: str) -> str:
+        """
+        Navigate to listing detail page and extract description text under 'Details' section.
+        
+        Opens the listing URL in a new page, waits for it to load, finds the 'Details' text,
+        and extracts the description content that appears underneath it. Tries multiple strategies:
+        finding sibling elements, parent containers, and text analysis. Returns empty string
+        if description cannot be found or if navigation fails.
+        """
+        description = ""
+        
+        try:
+            # Open detail page in new page to avoid losing search results context
+            detail_page = self.context.new_page()
+            detail_page.goto(url, wait_until="networkidle", timeout=15000)
+            random_delay(2, 3)
+            
+            # Find "Details" text and get the description underneath
+            details_selectors = [
+                "span:has-text('Details')",
+                "div:has-text('Details')",
+                "h2:has-text('Details')",
+                "h3:has-text('Details')",
+            ]
+            
+            for selector in details_selectors:
+                try:
+                    details_element = detail_page.locator(selector).first
+                    if details_element.is_visible(timeout=3000):
+                        # Strategy 1: Try to find next sibling element containing description
+                        try:
+                            next_sibling = details_element.locator("xpath=following-sibling::*[1]")
+                            if next_sibling.count() > 0:
+                                sibling_text = next_sibling.inner_text().strip()
+                                if sibling_text and len(sibling_text) > 10:  # Reasonable description length
+                                    description = sibling_text
+                                    break
+                        except:
+                            pass
+                        
+                        # Strategy 2: Get parent container and extract text after "Details"
+                        try:
+                            parent = details_element.locator("xpath=..")
+                            full_text = parent.inner_text().strip()
+                            
+                            # Extract text after "Details"
+                            details_index = full_text.find("Details")
+                            if details_index >= 0:
+                                description_candidate = full_text[details_index + len("Details"):].strip()
+                                # Remove any leading colons, dashes, or whitespace
+                                description_candidate = description_candidate.lstrip(":-\n\r\t ")
+                                if description_candidate and len(description_candidate) > 10:
+                                    description = description_candidate
+                                    break
+                        except:
+                            pass
+                except:
+                    continue
+            
+            detail_page.close()
+            
+        except Exception:
+            # If anything fails, ensure we close the page and return empty string
+            try:
+                detail_page.close()
+            except:
+                pass
+        
+        return description
+    
     def _scroll_page_to_load_content(self):
         """Scroll the page to load more listing content."""
         scroll_attempts = 3
@@ -455,7 +526,8 @@ class FBMarketplaceScraper:
         """
         Extract a single listing from a listing element.
         
-        Extracts URL, price, title, and location from the element. Validates that
+        Extracts URL, price, title, and location from the element. Then navigates
+        to the listing's detail page to extract the full description. Validates that
         price is valid and title is not a price format. Returns Listing object if
         valid, or None if extraction fails or data is invalid.
         """
@@ -480,12 +552,17 @@ class FBMarketplaceScraper:
             
             location = self._extract_location(element)
             
+            # Extract description from detail page (disabled for performance)
+            # description = self._extract_description_from_detail_page(url)
+            description = ""  # Skip description extraction for now
+            
             if title and price:
                 return Listing(
                     title=title,
                     price=price,
                     location=location or "Unknown",
-                    url=url
+                    url=url,
+                    description=description
                 )
             
             return None

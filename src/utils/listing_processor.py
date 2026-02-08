@@ -6,7 +6,6 @@ fetching comparable prices from eBay, and calculating a deal score. Returns
 the listing with deal score if it meets the threshold, or None if it doesn't.
 """
 
-import time
 import logging
 from typing import Optional, Dict
 
@@ -17,7 +16,7 @@ from src.utils.query_enhancer import generate_ebay_query_for_listing
 from src.utils.colored_logger import setup_colored_logger
 
 # Configure colored logging with module prefix
-logger = setup_colored_logger("listing_processor", level=logging.INFO)
+logger = setup_colored_logger("listing_processor")
 
 
 def process_single_listing(
@@ -90,9 +89,6 @@ def process_single_listing(
     
     enhanced_query, exclusion_keywords = query_result
     
-    # Rate limiting delay for OpenAI API
-    time.sleep(0.5)
-    
     logger.info(f"🔍 Step 2: Fetching eBay price data for query: '{enhanced_query}'...")
     ebay_stats = get_market_price(
         search_term=enhanced_query,
@@ -106,9 +102,6 @@ def process_single_listing(
         return None
     
     logger.info(f"   ✓ Found {ebay_stats.sample_size} eBay listings | Avg price: ${ebay_stats.average:.2f}")
-    
-    # Rate limiting delay for eBay API
-    time.sleep(0.3)
     
     logger.info("🔍 Step 3: Calculating deal score...")
     deal_score = calculate_deal_score(listing.price, ebay_stats)

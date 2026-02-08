@@ -18,8 +18,8 @@ import requests
 
 from src.utils.colored_logger import setup_colored_logger
 
-# Configure colored logging with module prefix
-logger = setup_colored_logger("ebay_scraper", level=logging.INFO)
+# Configure colored logging with module prefix (auto-detects DEBUG from env/--debug flag)
+logger = setup_colored_logger("ebay_scraper")
 
 # eBay API credentials (get from developer.ebay.com)
 EBAY_APP_ID = os.environ.get("EBAY_APP_ID", "")

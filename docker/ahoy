@@ -1,18 +1,19 @@
 #!/bin/bash
 # Ahoy! Pirate-themed command wrapper 🏴‍☠️
-# Usage: ahoy plunder | ahoy show_loot
+# Usage: ahoy plunder [--debug] | ahoy show_loot
 
 case "$1" in
     plunder)
-        exec /app/docker/start/start-api.sh
+        # Pass remaining arguments (like --debug) to start-api.sh
+        exec /app/docker/start/start-api.sh "$@"
         ;;
     show_loot)
         exec /app/docker/start/start-frontend.sh
         ;;
     *)
         echo "🏴‍☠️  Ahoy! Available commands:"
-        echo "   ahoy plunder   - Start API server (scrape for booty)"
-        echo "   ahoy show_loot - Start frontend server (view the loot)"
+        echo "   ahoy plunder [--debug]   - Start API server (scrape for booty)"
+        echo "   ahoy show_loot           - Start frontend server (view the loot)"
         exit 1
         ;;
 esac
