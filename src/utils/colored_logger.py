@@ -34,11 +34,7 @@ class ColoredFormatter(logging.Formatter):
     
     def __init__(self, module_name: str = None, use_colors: bool = True):
         """
-        Initialize the colored formatter.
-        
-        Args:
-            module_name: Optional module name prefix (e.g., "ebay_scraper")
-            use_colors: Whether to use colors (default: True, auto-detects if TTY)
+        Initialize the colored formatter. Auto-detects TTY for color output.
         """
         # Auto-detect if colors should be used (only if stdout is a TTY)
         if use_colors and not hasattr(sys.stdout, 'isatty'):

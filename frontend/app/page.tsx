@@ -16,6 +16,35 @@ type AppState = "form" | "loading" | "done" | "error";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
+type SSEDispatchHandlers = {
+  handlePhaseUpdate: (phase: SearchPhase) => void;
+  handleProgressUpdate: (scannedCount: number) => void;
+  handleCompletion: (data: { scannedCount: number; evaluatedCount: number; listings: Listing[]; threshold?: number }) => void;
+  setEvaluatedCount: (n: number) => void;
+};
+
+/**
+ * Parses a single SSE "data:" payload (JSON string) and invokes the appropriate handler by event type.
+ * Throws if JSON is invalid so the stream parser can surface the error.
+ */
+function dispatchSSEEvent(payloadString: string, handlers: SSEDispatchHandlers): void {
+  const data = JSON.parse(payloadString) as { type: string; phase?: SearchPhase; scannedCount?: number; evaluatedCount?: number; listings?: Listing[]; threshold?: number };
+  if (data.type === "phase" && data.phase != null) {
+    handlers.handlePhaseUpdate(data.phase);
+  } else if (data.type === "progress" && typeof data.scannedCount === "number") {
+    handlers.handleProgressUpdate(data.scannedCount);
+  } else if (data.type === "listing_processed" && typeof data.evaluatedCount === "number") {
+    handlers.setEvaluatedCount(data.evaluatedCount);
+  } else if (data.type === "done" && data.listings != null) {
+    handlers.handleCompletion({
+      scannedCount: data.scannedCount ?? 0,
+      evaluatedCount: data.evaluatedCount ?? 0,
+      listings: data.listings,
+      threshold: data.threshold,
+    });
+  }
+}
+
 export default function Home() {
   const [appState, setAppState] = useState<AppState>("form");
   const {
@@ -50,7 +79,7 @@ export default function Home() {
       `"${item.title}"`,
       `$${item.price}`,
       `"${item.location}"`,
-      `${item.dealScore}%`,
+      item.dealScore !== null ? `${item.dealScore}%` : "--",
       item.url,
     ]);
 
@@ -77,24 +106,22 @@ export default function Home() {
   }, [csvBlob, formData.query]);
 
   /**
-   * Handles SSE phase update events by updating the current search phase state.
-   * Called when the server sends a phase change notification (scraping, ebay, calculating).
+   * Updates the current search phase (e.g. scraping, evaluating) from an SSE event.
    */
   const handlePhaseUpdate = useCallback((phase: SearchPhase) => {
     setPhase(phase);
   }, []);
 
   /**
-   * Handles SSE progress update events by updating the scanned count.
-   * Called periodically as listings are scanned during the search process.
+   * Updates the scanned listing count from an SSE progress event.
    */
   const handleProgressUpdate = useCallback((scannedCount: number) => {
     setScannedCount(scannedCount);
   }, []);
 
   /**
-   * Handles SSE completion events by setting final results and transitioning to done state.
-   * Processes the final listings data, generates CSV blob, and updates all final counts.
+   * Applies the final search result: sets listings, counts, threshold, generates CSV blob,
+   * and switches the app to the done state so the results table is shown.
    */
   const handleCompletion = useCallback((data: { scannedCount: number; evaluatedCount: number; listings: Listing[]; threshold?: number }) => {
     setScannedCount(data.scannedCount);
@@ -109,36 +136,57 @@ export default function Home() {
   }, [generateCSV]);
 
   /**
-   * Parses a Server-Sent Events (SSE) stream from a ReadableStream reader.
-   * Continuously reads chunks, decodes them as text, and processes lines prefixed with "data: ".
-   * Updates the UI based on event type: "phase" updates the search phase, "progress" updates
-   * the scanned listing count, and "done" sets the final results and transitions to the results view.
+   * Parses an SSE stream from the reader and updates UI from each event.
+   * Reads in chunks and accumulates text in a buffer so only complete lines (ending with \n)
+   * are parsed. This avoids "Unterminated string" when the large "done" payload is split across
+   * TCP chunks. Uses stream: true for decode so multi-byte UTF-8 spanning chunks is handled.
+   * Event types: "phase" (search phase), "progress" (scanned count), "listing_processed" (evaluated count), "done" (final listings and counts).
    */
   const parseSSEStream = useCallback(
     async (reader: ReadableStreamDefaultReader<Uint8Array>) => {
       const decoder = new TextDecoder();
+      let buffer = "";
 
       while (true) {
         const { done, value } = await reader.read();
-        if (done) break;
+        buffer += decoder.decode(value, { stream: !done });
 
-        const text = decoder.decode(value);
-        const lines = text.split("\n");
+        const hasNewline = buffer.includes("\n");
+        if (!hasNewline && !done) continue;
+
+        const lines = buffer.split("\n");
+        buffer = done ? "" : (lines.pop() ?? "");
 
         for (const line of lines) {
           if (line.startsWith("data: ")) {
-            const data = JSON.parse(line.slice(6));
-
-            if (data.type === "phase") {
-              handlePhaseUpdate(data.phase);
-            } else if (data.type === "progress") {
-              handleProgressUpdate(data.scannedCount);
-            } else if (data.type === "listing_processed") {
-              setEvaluatedCount(data.evaluatedCount);
-            } else if (data.type === "done") {
-              handleCompletion(data);
+            try {
+              dispatchSSEEvent(line.slice(6), {
+                handlePhaseUpdate,
+                handleProgressUpdate,
+                handleCompletion,
+                setEvaluatedCount,
+              });
+            } catch (parseErr) {
+              console.error("SSE parse error for line length:", line.length, parseErr);
+              throw parseErr;
             }
           }
+        }
+
+        if (done) {
+          if (buffer.startsWith("data: ")) {
+            try {
+              dispatchSSEEvent(buffer.slice(6), {
+                handlePhaseUpdate,
+                handleProgressUpdate,
+                handleCompletion,
+                setEvaluatedCount,
+              });
+            } catch {
+              // Trailing partial line when stream ends without newline; ignore.
+            }
+          }
+          break;
         }
       }
     },
@@ -146,21 +194,15 @@ export default function Home() {
   );
 
   /**
-   * Performs the marketplace search API call and processes the SSE response stream.
-   * Sends form data as JSON POST request, reads the streaming response using ReadableStream,
-   * and delegates stream parsing to parseSSEStream. Handles errors by logging and setting error state.
-   * 
-   * Accepts form data as parameter to avoid dependency on formData state, preventing unnecessary
-   * callback recreations that could trigger duplicate requests.
+   * Runs the marketplace search: POSTs form data to the stream endpoint, reads the SSE response,
+   * and updates state from events. Uses a ref to block duplicate submissions while a search is in progress.
+   * Form data is passed in as an argument to avoid the callback depending on form state and recreating on every keystroke.
    */
   const performSearch = useCallback(async (formData: ValidationFormData) => {
     if (isSearchingRef.current) {
-      console.log("⚠️ performSearch: Search already in progress, skipping duplicate request");
       return;
     }
-    
-    console.log("✅ performSearch: Starting search request");
-    console.log(`📍 API URL: ${API_URL}`);
+
     isSearchingRef.current = true;
     setIsSearching(true);
     

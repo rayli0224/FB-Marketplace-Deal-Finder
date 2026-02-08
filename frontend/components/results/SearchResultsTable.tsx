@@ -1,14 +1,24 @@
 "use client";
 
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import { ToggleSwitch } from "@/components/ui/ToggleSwitch";
+
+export interface CompItem {
+  title: string;
+  price: number;
+  url: string;
+}
 
 export interface Listing {
   title: string;
   price: number;
   location: string;
   url: string;
-  dealScore: number;
+  dealScore: number | null;
+  ebaySearchQuery?: string;
+  compPrice?: number;
+  compPrices?: number[];
+  compItems?: CompItem[];
 }
 
 export interface SearchResultsTableProps {
@@ -20,30 +30,85 @@ export interface SearchResultsTableProps {
 }
 
 /**
- * Determines if a listing is a good deal based on threshold comparison.
- * A good deal has a dealScore > 0 and dealScore >= threshold.
+ * Returns true when the listing is a good deal: dealScore is not null and at or above the threshold.
  */
-function isGoodDeal(dealScore: number, threshold: number): boolean {
-  return dealScore > 0 && dealScore >= threshold;
+function isGoodDeal(dealScore: number | null, threshold: number): boolean {
+  return dealScore !== null && dealScore >= threshold;
 }
 
 /**
- * Determines if a listing is a bad deal based on threshold comparison.
- * A bad deal has a dealScore > 0 and dealScore < threshold.
+ * Returns true when the listing is a bad deal: dealScore is not null and below the threshold.
  */
-function isBadDeal(dealScore: number, threshold: number): boolean {
-  return dealScore > 0 && dealScore < threshold;
+function isBadDeal(dealScore: number | null, threshold: number): boolean {
+  return dealScore !== null && dealScore < threshold;
 }
 
 /**
- * Results table component displaying search results in a scrollable table.
- * Shows listing details including title, price, location, deal score, and link.
- * Includes header with result counts, filter toggle, and action buttons for CSV export and new search.
- * Color-codes listings based on threshold: green for good deals, red for bad deals.
+ * Renders the comparison transparency block for one result: eBay search query, comp (average) price,
+ * and the list of comps. When compItems (title, price, url) exist, shows each as a link; otherwise
+ * shows compPrices as plain price list.
+ */
+function ListingCompsPanel({ listing }: { listing: Listing }) {
+  const { ebaySearchQuery, compPrice, compPrices, compItems } = listing;
+  const prices = compItems?.map((c) => c.price) ?? compPrices ?? [];
+  const count = prices.length;
+
+  return (
+    <div className="font-mono text-xs space-y-2">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-muted-foreground">
+        {ebaySearchQuery != null && (
+          <div>
+            <span className="font-bold text-foreground">eBay search query: </span>
+            <span className="break-all">&quot;{ebaySearchQuery}&quot;</span>
+          </div>
+        )}
+        {compPrice != null && (
+          <div>
+            <span className="font-bold text-foreground">Comp price (eBay avg): </span>
+            <span className="text-primary font-bold">${compPrice.toFixed(2)}</span>
+          </div>
+        )}
+      </div>
+      {count > 0 && (
+        <div>
+          <span className="font-bold text-foreground">Compared against {count} listing{count !== 1 ? "s" : ""}:</span>
+          <ul className="mt-1 max-h-40 overflow-auto space-y-0.5 pl-2 border-l-2 border-border">
+            {compItems && compItems.length > 0
+              ? compItems.map((item, i) => (
+                  <li key={i} className="flex items-baseline gap-2 flex-wrap">
+                    <a
+                      href={item.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-primary hover:underline truncate max-w-[280px]"
+                    >
+                      {item.title || "eBay listing"}
+                    </a>
+                    <span className="text-primary font-bold shrink-0">${item.price.toFixed(2)}</span>
+                  </li>
+                ))
+              : compPrices?.map((p, i) => (
+                  <li key={i}>
+                    <span className="text-muted-foreground">${p.toFixed(2)}</span>
+                  </li>
+                ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Scrollable results table with one row per listing (title, price, location, deal %, link).
+ * Header shows result counts and actions (CSV export, new search). Filter section toggles
+ * visibility of below-threshold deals. Rows are color-coded by deal quality; each row can
+ * expand to show eBay comparison details (search query, comp price, comp listings).
  */
 export function SearchResultsTable({ listings, scannedCount, threshold, onDownloadCSV, onReset }: SearchResultsTableProps) {
   const [showBadDeals, setShowBadDeals] = useState<boolean>(true);
   const [isFiltersExpanded, setIsFiltersExpanded] = useState<boolean>(false);
+  const [expandedListingUrl, setExpandedListingUrl] = useState<string | null>(null);
 
   const filteredListings = listings.filter((listing) => {
     if (showBadDeals) return true;
@@ -116,6 +181,7 @@ export function SearchResultsTable({ listings, scannedCount, threshold, onDownlo
                 <th className="px-3 py-2 text-xs text-muted-foreground">LOCATION</th>
                 <th className="px-3 py-2 text-xs text-muted-foreground">DEAL %</th>
                 <th className="px-3 py-2 text-xs text-muted-foreground">LINK</th>
+                <th className="px-3 py-2 text-xs text-muted-foreground w-20">DETAILS</th>
               </tr>
             </thead>
             <tbody>
@@ -127,10 +193,12 @@ export function SearchResultsTable({ listings, scannedCount, threshold, onDownlo
                   : badDeal 
                   ? "bg-red-500/10 hover:bg-red-500/20"
                   : "hover:bg-secondary/50";
-                
+                const hasComps = listing.ebaySearchQuery != null || listing.compPrice != null;
+                const isExpanded = expandedListingUrl === listing.url;
+
                 return (
+                <Fragment key={listing.url}>
                 <tr 
-                  key={index} 
                   className={`border-b border-border/50 transition-colors ${rowBgClass}`}
                 >
                   <td className="px-3 py-2 max-w-[300px] truncate" title={listing.title}>
@@ -143,7 +211,7 @@ export function SearchResultsTable({ listings, scannedCount, threshold, onDownlo
                     {listing.location}
                   </td>
                   <td className="px-3 py-2">
-                    {listing.dealScore > 0 ? (
+                    {listing.dealScore !== null ? (
                       <span className={`font-bold ${goodDeal ? 'text-green-500' : badDeal ? 'text-red-500' : 'text-muted-foreground'}`}>
                         {listing.dealScore}%
                       </span>
@@ -157,11 +225,34 @@ export function SearchResultsTable({ listings, scannedCount, threshold, onDownlo
                       target="_blank" 
                       rel="noopener noreferrer"
                       className="text-primary hover:underline"
+                      onClick={(e: React.MouseEvent) => e.stopPropagation()}
                     >
                       VIEW →
                     </a>
                   </td>
+                  <td className="px-3 py-2">
+                    {hasComps ? (
+                      <button
+                        type="button"
+                        onClick={() => setExpandedListingUrl(isExpanded ? null : listing.url)}
+                        className="font-mono text-xs text-primary hover:underline"
+                        aria-expanded={isExpanded}
+                      >
+                        {isExpanded ? "▲ Hide" : "▼ Comps"}
+                      </button>
+                    ) : (
+                      <span className="text-muted-foreground/50 text-xs">--</span>
+                    )}
+                  </td>
                 </tr>
+                {isExpanded && hasComps && (
+                  <tr className="border-b border-border/50 bg-secondary/80">
+                    <td colSpan={6} className="px-4 py-3">
+                      <ListingCompsPanel listing={listing} />
+                    </td>
+                  </tr>
+                )}
+                </Fragment>
                 );
               })}
             </tbody>

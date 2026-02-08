@@ -25,6 +25,7 @@ alwaysApply: true
 
 ### Docstrings
 - All functions should have docstrings explaining **what** it does and **how** it does it
+- A plain description paragraph is sufficient — omit Args, Returns, and Example sections unless they add real value
 - Do not assume the reader has context — docstrings should be understandable on their own
 - **Do not reference other function names** — describe the behavior inline instead of saying "delegates to X" or "calls Y"
 - Include implementation details that aren't obvious from reading the code

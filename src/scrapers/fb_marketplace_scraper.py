@@ -53,11 +53,7 @@ class FBMarketplaceScraper:
     
     def __init__(self, headless: bool = None, cookies_file: str = None):
         """
-        Initialize the Facebook Marketplace scraper.
-        
-        Args:
-            headless: Run browser in headless mode
-            cookies_file: Path to JSON file containing Facebook cookies
+        Initialize the Facebook Marketplace scraper. Loads cookies from JSON file.
         """
         if headless is None:
             self.headless = os.environ.get("DISPLAY") is None
@@ -587,6 +583,14 @@ class FBMarketplaceScraper:
             for element in listing_elements[:50]:
                 listing = self._extract_listing_from_element(element)
                 if listing:
+                    logger.debug(
+                        f"Extracted FB listing:\n"
+                        f"  Title: {listing.title}\n"
+                        f"  Price: ${listing.price:.2f}\n"
+                        f"  Location: {listing.location}\n"
+                        f"  URL: {listing.url}\n"
+                        f"  Description: {listing.description}"
+                    )
                     listings.append(listing)
                     if on_listing_found:
                         on_listing_found(listing, len(listings))
