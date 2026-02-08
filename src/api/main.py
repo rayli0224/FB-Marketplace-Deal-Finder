@@ -39,12 +39,23 @@ class SearchRequest(BaseModel):
     threshold: float
 
 
+class CompItemSummary(BaseModel):
+    """Single eBay comp listing for transparency UI."""
+    title: str
+    price: float
+    url: str
+
+
 class ListingResponse(BaseModel):
     title: str
     price: float
     location: str
     url: str
-    dealScore: Optional[float]
+    dealScore: Optional[float] = None
+    ebaySearchQuery: Optional[str] = None
+    compPrice: Optional[float] = None
+    compPrices: Optional[List[float]] = None
+    compItems: Optional[List[CompItemSummary]] = None
 
 
 class SearchResponse(BaseModel):

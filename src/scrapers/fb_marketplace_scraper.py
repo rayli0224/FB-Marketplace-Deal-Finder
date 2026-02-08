@@ -52,11 +52,7 @@ class FBMarketplaceScraper:
     
     def __init__(self, headless: bool = None, cookies_file: str = None):
         """
-        Initialize the Facebook Marketplace scraper.
-        
-        Args:
-            headless: Run browser in headless mode
-            cookies_file: Path to JSON file containing Facebook cookies
+        Initialize the Facebook Marketplace scraper. Loads cookies from JSON file.
         """
         if headless is None:
             self.headless = os.environ.get("DISPLAY") is None
