@@ -195,3 +195,169 @@ Only return the JSON object, no other text."""
     except Exception as e:
         logger.error(f"OpenAI API call failed: {e}")
         return None
+
+
+def filter_ebay_results_with_openai(
+    listing: Listing,
+    ebay_items: List[dict]
+) -> Optional[Tuple[List[dict], float]]:
+    """
+    Filter eBay search results to keep only items comparable to the Facebook Marketplace listing.
+    
+    Uses OpenAI to analyze each eBay item's title and compare it to the FB listing's title,
+    description, and price. Removes items that are accessories, different models, or otherwise
+    not comparable. This improves price comparison accuracy by ensuring only truly similar items
+    are used for calculating the market average.
+    
+    Returns tuple of (filtered list of eBay items, confidence score) or None if filtering fails.
+    Filtered items are in same format: [{title, price, url}, ...]. Confidence is a float between
+    0 and 1 representing how confident the model is that the filtered items are truly comparable.
+    """
+    if not OpenAI:
+        logger.debug("OpenAI library not installed - skipping eBay result filtering")
+        return None
+    
+    if not OPENAI_API_KEY:
+        logger.debug("OPENAI_API_KEY not set - skipping eBay result filtering")
+        return None
+    
+    if not ebay_items or len(ebay_items) == 0:
+        return (ebay_items, 1.0) if ebay_items else None
+    
+    client = OpenAI(api_key=OPENAI_API_KEY)
+    
+    # Build list of eBay items for the prompt
+    description_text = listing.description if listing.description else "No description provided"
+    ebay_items_text = "\n".join([
+        f"{i+1}. {item.get('title', '')} - ${item.get('price', 0):.2f}"
+        for i, item in enumerate(ebay_items)
+    ])
+    
+    prompt = f"""You are helping filter eBay search results to find items that are truly comparable to a Facebook Marketplace listing.
+
+Facebook Marketplace listing:
+- Title: "{listing.title}"
+- Price: ${listing.price:.2f}
+- Description: "{description_text}"
+
+eBay search results:
+{ebay_items_text}
+
+Your task: Identify which eBay items are actually comparable to the FB listing.
+
+Internally, reason about each item one by one and justify your decision, but do NOT output your reasoning.
+
+An eBay item is comparable if and only if:
+
+1. Core Product Match  
+- It refers to the **same core product/model** (same brand, product line, generation, or series).
+- If the FB listing is **specific** (contains clear identifying tokens such as brand, model, generation, size, capacity, etc.), then:
+  - Those key tokens must also appear in the eBay title or description.
+  - If they do not, exclude the item.
+- If the FB listing is **vague or generic**, use best judgment based on overall similarity.
+
+2. Condition Match  
+- The **condition is similar** (e.g. both new, both used, both working).
+- Exclude items marked as:
+  - for parts
+  - broken / not working
+  - damaged in a way that affects functionality
+
+3. Full Product Only  
+- It must be a **complete product**, not:
+  - an accessory (case, charger, cable, etc.)
+  - a part or component
+  - a bundle, lot, or multi-item listing
+  - a service or subscription
+
+4. Material Variants  
+- Exclude items that are a **different variant that materially affects price**, such as:
+  - locked vs unlocked
+  - mini vs pro vs max
+  - wrong size class or generation
+- Minor differences (color, storage, cosmetic wear) are acceptable only if the core product is clearly the same.
+
+Be **strict**. If there is ambiguity, missing information, or reasonable doubt, exclude the item.
+
+Return your response as a JSON object with exactly this structure:
+{{
+  "comparable_indices": [1, 3, 5],
+  "confidence": 0.92
+}}
+
+Where:
+- comparable_indices are 1-based indices from the eBay results list.
+- confidence is a float between 0 and 1 representing how confident you are that the selected items are truly comparable overall.
+
+Only include items that are suitable for accurate price comparison.  
+Return only the JSON object and no other text.
+"""
+    
+    try:
+        messages = [
+            {
+                "role": "system",
+                "content": "You are an expert at comparing products across marketplaces. Always respond with valid JSON only."
+            },
+            {
+                "role": "user",
+                "content": prompt
+            }
+        ]
+        
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=messages,
+            temperature=0.2,
+            max_tokens=500,
+        )
+        
+        content = response.choices[0].message.content.strip()
+        
+        # Remove markdown code blocks if present
+        if content.startswith("```json"):
+            content = content[7:]
+        if content.startswith("```"):
+            content = content[3:]
+        if content.endswith("```"):
+            content = content[:-3]
+        content = content.strip()
+        
+        # Parse JSON
+        result = json.loads(content)
+        comparable_indices = result.get("comparable_indices", [])
+        confidence = result.get("confidence", 0.0)
+        
+        # Validate confidence is a float between 0 and 1
+        try:
+            confidence = float(confidence)
+            confidence = max(0.0, min(1.0, confidence))  # Clamp to [0, 1]
+        except (ValueError, TypeError):
+            logger.warning("OpenAI returned invalid confidence value - defaulting to 0.5")
+            confidence = 0.5
+        
+        if not isinstance(comparable_indices, list):
+            logger.warning("OpenAI returned invalid comparable_indices format - skipping filter")
+            return (ebay_items, confidence)
+        
+        # Filter items (indices are 1-based, convert to 0-based)
+        filtered_items = [
+            ebay_items[idx - 1]
+            for idx in comparable_indices
+            if 1 <= idx <= len(ebay_items)
+        ]
+        
+        removed_count = len(ebay_items) - len(filtered_items)
+        if removed_count > 0:
+            logger.info(f"Filtered out {removed_count} non-comparable eBay items ({len(filtered_items)} remaining) | Confidence: {confidence:.2%}")
+        else:
+            logger.debug(f"All {len(ebay_items)} eBay items were deemed comparable | Confidence: {confidence:.2%}")
+        
+        return (filtered_items if filtered_items else ebay_items, confidence)
+        
+    except json.JSONDecodeError as e:
+        logger.warning(f"Failed to parse OpenAI filter response as JSON: {e} - using original items")
+        return None
+    except Exception as e:
+        logger.warning(f"OpenAI filtering failed: {e} - using original items")
+        return None

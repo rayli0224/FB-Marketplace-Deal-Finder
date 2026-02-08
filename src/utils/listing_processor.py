@@ -13,8 +13,9 @@ from typing import Dict, Optional
 from src.scrapers.fb_marketplace_scraper import Listing
 from src.scrapers.ebay_scraper import get_market_price
 from src.api.deal_calculator import calculate_deal_score
-from src.utils.query_enhancer import generate_ebay_query_for_listing
+from src.utils.query_enhancer import generate_ebay_query_for_listing, filter_ebay_results_with_openai
 from src.utils.colored_logger import setup_colored_logger
+import statistics
 
 # Configure colored logging with module prefix
 logger = setup_colored_logger("listing_processor")
@@ -27,12 +28,13 @@ def _listing_result(
     comp_price: Optional[float] = None,
     comp_prices: Optional[list] = None,
     comp_items: Optional[list] = None,
+    filter_confidence: Optional[float] = None,
 ) -> Dict:
     """
     Build the result dict for a processed listing.
 
     Always includes title, price, location, url, and dealScore. Adds
-    ebaySearchQuery, compPrice, compPrices, and compItems only when the
+    ebaySearchQuery, compPrice, compPrices, compItems, and filterConfidence only when the
     corresponding arguments are not None, so the API can omit transparency
     fields when eBay data was unavailable.
     """
@@ -51,6 +53,8 @@ def _listing_result(
         out["compPrices"] = comp_prices
     if comp_items is not None:
         out["compItems"] = comp_items
+    if filter_confidence is not None:
+        out["filterConfidence"] = filter_confidence
     return out
 
 
@@ -109,7 +113,32 @@ def process_single_listing(
 
     logger.info(f"   ✓ Found {ebay_stats.sample_size} eBay listings | Avg price: ${ebay_stats.average:.2f}")
     
-    logger.info("🔍 Step 3: Calculating deal score...")
+    # Filter eBay results to keep only comparable items
+    logger.info("🔍 Step 3: Filtering eBay results with OpenAI to ensure comparability...")
+    ebay_items = getattr(ebay_stats, "item_summaries", None)
+    filter_confidence = None
+    if ebay_items:
+        filter_result = filter_ebay_results_with_openai(listing, ebay_items)
+        if filter_result is not None:
+            filtered_items, filter_confidence = filter_result
+            if len(filtered_items) != len(ebay_items):
+                # Recalculate stats from filtered items
+                filtered_prices = [item["price"] for item in filtered_items]
+                if len(filtered_prices) >= 3:
+                    ebay_stats.raw_prices = sorted(filtered_prices)
+                    ebay_stats.average = statistics.mean(filtered_prices)
+                    ebay_stats.sample_size = len(filtered_prices)
+                    ebay_stats.item_summaries = filtered_items
+                    logger.info(f"   ✓ Filtered to {ebay_stats.sample_size} comparable listings | Avg price: ${ebay_stats.average:.2f} | Confidence: {filter_confidence:.2%}")
+                else:
+                    logger.warning(f"   ⚠️  Filtering reduced items below minimum (3) - using original results")
+                    filter_confidence = None
+            else:
+                logger.debug(f"   All items deemed comparable | Confidence: {filter_confidence:.2%}")
+        else:
+            logger.debug("   Filtering unavailable (OpenAI not configured) - using original results")
+    
+    logger.info("🔍 Step 4: Calculating deal score...")
     deal_score = calculate_deal_score(listing.price, ebay_stats)
     
     if deal_score is None:
@@ -131,4 +160,5 @@ def process_single_listing(
         comp_price=ebay_stats.average,
         comp_prices=ebay_stats.raw_prices,
         comp_items=getattr(ebay_stats, "item_summaries", None),
+        filter_confidence=filter_confidence,
     )
