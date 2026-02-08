@@ -193,18 +193,26 @@ def search_deals_stream(request: SearchRequest):
     Technical note: We use a background thread for scraping because the scraper uses
     a callback for each listing found, but SSE requires a generator. A queue bridges
     the two: the callback pushes events to the queue, the generator reads from it.
+    
+    Cancellation: When the client disconnects, the generator detects it and signals
+    cancellation to stop all processing (scraping thread and listing evaluation).
     """
     logger.info(f"🔍 Received search request: query='{request.query}', zip={request.zipCode}, radius={request.radius}mi")
     
     event_queue = queue.Queue()
     fb_listings = []
+    cancelled = threading.Event()
     
     def on_listing_found(listing, count):
+        if cancelled.is_set():
+            return
         fb_listings.append(listing)
         event_queue.put({"type": "progress", "scannedCount": count})
     
     def scrape_worker():
         try:
+            if cancelled.is_set():
+                return
             search_fb_marketplace(
                 query=request.query,
                 zip_code=request.zipCode,
@@ -214,92 +222,165 @@ def search_deals_stream(request: SearchRequest):
                 extract_descriptions=request.extractDescriptions
             )
         except Exception as e:
-            logger.error(f"❌ Step 2 failed: {str(e)[:100]}")
-        event_queue.put({"type": "scrape_done"})
+            if not cancelled.is_set():
+                logger.error(f"❌ Step 2 failed: {str(e)[:100]}")
+        finally:
+            if not cancelled.is_set():
+                event_queue.put({"type": "scrape_done"})
     
     def event_generator():
-        logger.info(f"▶️  Step 1: Starting search - query='{request.query}', zip={request.zipCode}, radius={request.radius}mi")
-        
-        # Phase 1: Scraping Facebook
-        logger.info("▶️  Step 2: Scraping Facebook Marketplace")
-        yield f"data: {json.dumps({'type': 'phase', 'phase': 'scraping'})}\n\n"
-        
-        thread = threading.Thread(target=scrape_worker)
-        thread.start()
-        
-        # Stream progress events
-        while True:
-            event = event_queue.get()
-            if event["type"] == "scrape_done":
-                break
-            yield f"data: {json.dumps(event)}\n\n"
-        
-        thread.join()
-        logger.info(f"✅ Step 2 complete: Found {len(fb_listings)} listings")
-        
-        # Phase 2: Processing each listing individually
-        yield f"data: {json.dumps({'type': 'phase', 'phase': 'evaluating'})}\n\n"
-        
-        scored_listings = []
-        evaluated_count = 0
-        
-        if fb_listings:
-            logger.info("")
-            logger.info("╔" + "═" * 78 + "╗")
-            logger.info(f"║  Processing {len(fb_listings)} FB listings individually...")
-            logger.info("╚" + "═" * 78 + "╝")
-            logger.info("")
+        nonlocal cancelled
+        try:
+            logger.info(f"▶️  Step 1: Starting search - query='{request.query}', zip={request.zipCode}, radius={request.radius}mi")
             
-            for idx, listing in enumerate(fb_listings, 1):
+            # Phase 1: Scraping Facebook
+            logger.info("▶️  Step 2: Scraping Facebook Marketplace")
+            yield f"data: {json.dumps({'type': 'phase', 'phase': 'scraping'})}\n\n"
+            
+            thread = threading.Thread(target=scrape_worker)
+            thread.start()
+            
+            # Stream progress events with timeout to check for cancellation
+            while True:
+                # Check for cancellation first, even if queue has items
+                if cancelled.is_set():
+                    logger.info("⚠️  Search cancelled by client - stopping event stream")
+                    break
+                
                 try:
-                    # Process single listing: OpenAI → eBay → deal score
-                    result = process_single_listing(
-                        listing=listing,
-                        original_query=request.query,
-                        threshold=request.threshold,
-                        n_items=50,
-                        listing_index=idx,
-                        total_listings=len(fb_listings)
-                    )
+                    # Use timeout to periodically check if cancelled
+                    event = event_queue.get(timeout=0.5)
                     
-                    evaluated_count += 1
+                    # Check cancellation again after getting event (cancellation may have happened while waiting)
+                    if cancelled.is_set():
+                        logger.info("⚠️  Search cancelled by client - stopping event stream")
+                        break
                     
-                    # Stream progress after each listing is processed
-                    yield f"data: {json.dumps({
-                        'type': 'listing_processed',
-                        'evaluatedCount': evaluated_count,
-                        'currentListing': listing.title
-                    })}\n\n"
+                    if event["type"] == "scrape_done":
+                        break
                     
-                    # If listing meets threshold, add to results
-                    if result:
-                        scored_listings.append(result)
-                        # Deal found logging is handled in listing_processor.py
+                    # Check cancellation before yielding (client may have disconnected)
+                    if cancelled.is_set():
+                        logger.info("⚠️  Search cancelled by client - stopping event stream")
+                        break
+                    
+                    try:
+                        yield f"data: {json.dumps(event)}\n\n"
+                    except (GeneratorExit, BrokenPipeError, ConnectionResetError, ConnectionAbortedError) as e:
+                        # Client disconnected during yield - signal cancellation and re-raise
+                        logger.info(f"⚠️  Client disconnected during yield ({type(e).__name__}) - cancelling search")
+                        cancelled.set()
+                        raise
+                except queue.Empty:
+                    # Queue is empty, continue loop to check cancellation again
+                    continue
+            
+            # Wait for thread to finish, but don't block forever if cancelled
+            if not cancelled.is_set():
+                thread.join(timeout=1.0)
+                if thread.is_alive():
+                    logger.warning("⚠️  Scraping thread still running after join timeout")
+            else:
+                logger.info("⚠️  Search cancelled - waiting for scraping thread to exit")
+                # Give thread a moment to check cancelled flag and exit
+                thread.join(timeout=2.0)
+                if thread.is_alive():
+                    logger.warning("⚠️  Scraping thread still running after cancellation")
+            
+            if cancelled.is_set():
+                logger.info("⚠️  Search cancelled - aborting processing")
+                return
+            
+            logger.info(f"✅ Step 2 complete: Found {len(fb_listings)} listings")
+            
+            # Phase 2: Processing each listing individually
+            yield f"data: {json.dumps({'type': 'phase', 'phase': 'evaluating'})}\n\n"
+            
+            scored_listings = []
+            evaluated_count = 0
+            
+            if fb_listings:
+                logger.info("")
+                logger.info("╔" + "═" * 78 + "╗")
+                logger.info(f"║  Processing {len(fb_listings)} FB listings individually...")
+                logger.info("╚" + "═" * 78 + "╝")
+                logger.info("")
+                
+                for idx, listing in enumerate(fb_listings, 1):
+                    # Check for cancellation before processing each listing
+                    if cancelled.is_set():
+                        logger.info("⚠️  Search cancelled - stopping listing processing")
+                        break
+                    
+                    try:
+                        # Process single listing: OpenAI → eBay → deal score
+                        result = process_single_listing(
+                            listing=listing,
+                            original_query=request.query,
+                            threshold=request.threshold,
+                            n_items=50,
+                            listing_index=idx,
+                            total_listings=len(fb_listings)
+                        )
                         
-                except Exception as e:
-                    logger.warning(f"Error processing listing '{listing.title}': {e}")
-                    evaluated_count += 1
-                    # Stream progress even if processing failed
-                    yield f"data: {json.dumps({
-                        'type': 'listing_processed',
-                        'evaluatedCount': evaluated_count,
-                        'currentListing': listing.title
-                    })}\n\n"
-        else:
-            logger.warning("⚠️  Step 2: No listings found - login may be required")
-        
-        # Send completion event
-        logger.info(f"{'='*60}")
-        logger.info(f"🎯 Step 5: Search completed - {len(fb_listings)} scanned, {len(scored_listings)} deals found")
-        logger.info(f"{'='*60}")
-        done_event = {
-            "type": "done",
-            "scannedCount": len(fb_listings),
-            "evaluatedCount": evaluated_count,
-            "listings": scored_listings,
-            "threshold": request.threshold
-        }
-        yield f"data: {json.dumps(done_event)}\n\n"
+                        evaluated_count += 1
+                        
+                        # Stream progress after each listing is processed
+                        yield f"data: {json.dumps({
+                            'type': 'listing_processed',
+                            'evaluatedCount': evaluated_count,
+                            'currentListing': listing.title
+                        })}\n\n"
+                        
+                        # If listing meets threshold, add to results
+                        if result:
+                            scored_listings.append(result)
+                            # Deal found logging is handled in listing_processor.py
+                            
+                    except Exception as e:
+                        if cancelled.is_set():
+                            break
+                        logger.warning(f"Error processing listing '{listing.title}': {e}")
+                        evaluated_count += 1
+                        # Stream progress even if processing failed
+                        try:
+                            yield f"data: {json.dumps({
+                                'type': 'listing_processed',
+                                'evaluatedCount': evaluated_count,
+                                'currentListing': listing.title
+                            })}\n\n"
+                        except (GeneratorExit, BrokenPipeError, ConnectionResetError, ConnectionAbortedError) as e:
+                            logger.info(f"⚠️  Client disconnected during listing processing ({type(e).__name__}) - cancelling search")
+                            cancelled.set()
+                            raise
+            else:
+                logger.warning("⚠️  Step 2: No listings found - login may be required")
+            
+            if cancelled.is_set():
+                return
+            
+            # Send completion event
+            logger.info(f"{'='*60}")
+            logger.info(f"🎯 Step 5: Search completed - {len(fb_listings)} scanned, {len(scored_listings)} deals found")
+            logger.info(f"{'='*60}")
+            done_event = {
+                "type": "done",
+                "scannedCount": len(fb_listings),
+                "evaluatedCount": evaluated_count,
+                "listings": scored_listings,
+                "threshold": request.threshold
+            }
+            yield f"data: {json.dumps(done_event)}\n\n"
+        except (GeneratorExit, BrokenPipeError, ConnectionResetError, ConnectionAbortedError) as e:
+            # Client disconnected - signal cancellation
+            logger.info(f"⚠️  Client disconnected ({type(e).__name__}) - cancelling search")
+            cancelled.set()
+            raise
+        except Exception as e:
+            # Other errors - still signal cancellation to stop background work
+            logger.error(f"❌ Error in event generator: {e}")
+            cancelled.set()
+            raise
     
     return StreamingResponse(
         event_generator(),

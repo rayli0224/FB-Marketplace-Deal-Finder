@@ -69,6 +69,7 @@ export default function Home() {
   const [isSearching, setIsSearching] = useState<boolean>(false);
   const isSearchingRef = useRef<boolean>(false);
   const abortControllerRef = useRef<AbortController | null>(null);
+  const readerRef = useRef<ReadableStreamDefaultReader<Uint8Array> | null>(null);
 
   /**
    * Generates a CSV blob from listings data with pirate-themed column headers.
@@ -214,14 +215,35 @@ export default function Home() {
   );
 
   /**
-   * Cancels the current search by aborting the fetch request.
+   * Cancels the current search by canceling the stream reader and aborting the fetch request.
    * Resets state and returns the app to the form view.
    */
   const cancelSearch = useCallback(() => {
+    // Cancel the reader first to stop reading from the stream
+    if (readerRef.current) {
+      try {
+        readerRef.current.cancel();
+      } catch (err) {
+        // Reader may already be cancelled or released, ignore
+      }
+      try {
+        readerRef.current.releaseLock();
+      } catch (err) {
+        // Lock may already be released, ignore
+      }
+      readerRef.current = null;
+    }
+    
+    // Then abort the fetch request
     if (abortControllerRef.current) {
-      abortControllerRef.current.abort();
+      try {
+        abortControllerRef.current.abort();
+      } catch (err) {
+        // AbortController may already be aborted, ignore
+      }
       abortControllerRef.current = null;
     }
+    
     isSearchingRef.current = false;
     setIsSearching(false);
     setAppState("form");
@@ -274,6 +296,9 @@ export default function Home() {
         throw new Error("No response body");
       }
 
+      // Store reader reference for cancellation
+      readerRef.current = reader;
+
       await parseSSEStream(reader);
     } catch (err) {
       // Don't show error if search was cancelled
@@ -298,6 +323,7 @@ export default function Home() {
       isSearchingRef.current = false;
       setIsSearching(false);
       abortControllerRef.current = null;
+      readerRef.current = null;
     }
   }, [parseSSEStream]);
 
