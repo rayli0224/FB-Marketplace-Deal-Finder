@@ -22,8 +22,8 @@ services:
       - ./frontend:/app/frontend
       - /app/frontend/node_modules
       - /app/frontend/.next
-      # Mount cookies directory for Facebook authentication
-      - ./cookies:/app/cookies:ro
+      # Mount cookies directory for Facebook authentication (writable so the app can save login data)
+      - ./cookies:/app/cookies
     stdin_open: true
     tty: true
     command: ["/bin/bash"]

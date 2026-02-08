@@ -4,18 +4,9 @@ Facebook Marketplace Scraper
 Scrapes Facebook Marketplace listings using Playwright for better anti-detection.
 Supports searching by query, zip code, and radius.
 
-AUTHENTICATION:
-Facebook Marketplace requires login. To use this scraper:
-1. Export your Facebook cookies using a browser extension (e.g., "EditThisCookie" or "Cookie-Editor")
-2. Save them as JSON to: cookies/facebook_cookies.json
-3. The scraper will automatically load them
-
-Cookie JSON format (array of objects):
-[
-  {"name": "c_user", "value": "...", "domain": ".facebook.com", "path": "/", ...},
-  {"name": "xs", "value": "...", "domain": ".facebook.com", "path": "/", ...},
-  ...
-]
+Authentication is handled by the app: users provide login data via the in-app setup,
+which is stored and loaded from the path in FB_COOKIES_FILE. The scraper expects
+that file to contain a JSON array of cookie objects (e.g. name, value, domain, path).
 """
 
 import re
@@ -33,6 +24,17 @@ logger = setup_colored_logger("fb_scraper")
 
 # Default cookie file path
 COOKIES_FILE = os.environ.get("FB_COOKIES_FILE", "/app/cookies/facebook_cookies.json")
+
+
+class FacebookNotLoggedInError(Exception):
+    """
+    Raised when the scraper detects that the Facebook session is invalid or expired.
+
+    This happens when navigating to Marketplace results in a redirect to the login page
+    or when login-wall elements are visible on the page, indicating the saved login data
+    is no longer valid and needs to be re-exported.
+    """
+    pass
 
 
 @dataclass
@@ -138,12 +140,50 @@ class FBMarketplaceScraper:
         
         self.page = self.context.new_page()
     
+    def _check_logged_in(self):
+        """
+        Check whether the browser is logged into Facebook after navigating to Marketplace.
+
+        Inspects the current URL and page content for signs of being redirected to a login
+        page. Facebook redirects unauthenticated users to /login or shows a login form when
+        session cookies are missing or expired. Raises FacebookNotLoggedInError if any
+        login-wall signal is detected.
+        """
+        current_url = self.page.url.lower()
+
+        # Facebook redirects logged-out users to /login or /checkpoint
+        if "/login" in current_url or "/checkpoint" in current_url:
+            logger.warning("🔒 Detected login redirect — Facebook session is invalid")
+            raise FacebookNotLoggedInError("Facebook session expired or invalid")
+
+        # Check for login form elements that appear on the login wall
+        login_signals = [
+            "input[name='email']",
+            "input[name='pass']",
+            "button[name='login']",
+            "form[action*='login']",
+        ]
+
+        for selector in login_signals:
+            try:
+                element = self.page.locator(selector).first
+                if element.is_visible(timeout=2000):
+                    logger.warning(f"🔒 Detected login form element ({selector}) — Facebook session is invalid")
+                    raise FacebookNotLoggedInError("Facebook session expired or invalid")
+            except PlaywrightTimeoutError:
+                continue
+            except FacebookNotLoggedInError:
+                raise
+
     def _set_location(self, zip_code: str, radius: int):
         """Navigate to Facebook Marketplace and set location via zip code."""
         try:
             self.page.goto(self.MARKETPLACE_URL, wait_until="networkidle", timeout=30000)
             random_delay(2, 4)
-            
+
+            # Verify we're actually logged in before proceeding
+            self._check_logged_in()
+
             try:
                 self.page.wait_for_selector("h1", timeout=10000)
             except PlaywrightTimeoutError:
