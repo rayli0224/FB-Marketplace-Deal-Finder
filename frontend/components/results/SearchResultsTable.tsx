@@ -19,12 +19,14 @@ export interface Listing {
   compPrice?: number;
   compPrices?: number[];
   compItems?: CompItem[];
+  filterConfidence?: number;
 }
 
 export interface SearchResultsTableProps {
   listings: Listing[];
   scannedCount: number;
   threshold: number;
+  averageConfidence?: number | null;
   onDownloadCSV: () => void;
   onReset: () => void;
 }
@@ -105,7 +107,7 @@ function ListingCompsPanel({ listing }: { listing: Listing }) {
  * visibility of below-threshold deals. Rows are color-coded by deal quality; each row can
  * expand to show eBay comparison details (search query, comp price, comp listings).
  */
-export function SearchResultsTable({ listings, scannedCount, threshold, onDownloadCSV, onReset }: SearchResultsTableProps) {
+export function SearchResultsTable({ listings, scannedCount, threshold, averageConfidence, onDownloadCSV, onReset }: SearchResultsTableProps) {
   const [showBadDeals, setShowBadDeals] = useState<boolean>(true);
   const [isFiltersExpanded, setIsFiltersExpanded] = useState<boolean>(false);
   const [expandedListingUrl, setExpandedListingUrl] = useState<string | null>(null);
@@ -127,6 +129,11 @@ export function SearchResultsTable({ listings, scannedCount, threshold, onDownlo
           <p className="font-mono text-xs text-muted-foreground">
             Showing {filteredCount} of {listings.length} treasures from {scannedCount} scanned
           </p>
+          {averageConfidence != null && (
+            <p className="font-mono text-xs text-muted-foreground mt-1">
+              Average filter confidence: <span className="font-bold text-foreground">{(averageConfidence * 100).toFixed(1)}%</span>
+            </p>
+          )}
         </div>
         <div className="flex gap-2">
           <button
