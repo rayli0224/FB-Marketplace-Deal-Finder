@@ -1,6 +1,6 @@
 # create-pr
 
-Edit the existing GitHub Pull Request for the current branch. There is no PR template; use a concise, bullet-pointed description.
+A PR already exists for the current branch. Find it and modify it using MCP (do not create a new PR). There is no PR template; use a concise, bullet-pointed description.
 
 ## Title rules
 - Start with bracketed topics (e.g. `[Results] [SSE]`).
@@ -24,4 +24,6 @@ Edit the existing GitHub Pull Request for the current branch. There is no PR tem
 - Focus on the validation approach (e.g. manual flows, automated coverage, edge cases exercised).
 
 ## Process
-- Set the PR title and body. When the user asks to do it or update the PR, apply via GitHub API (e.g. update_issue for the PR number) or `gh pr edit` if available.
+- **Find** the existing PR for the current branch using MCP (e.g. `list_pull_requests` with `head` filter: `owner:branch-name`, state `open`).
+- **Modify** that PR using MCP: set title and body via `update_issue` (PRs are issues; use the PR number as the issue number).
+- When the user asks to do it or update the PR, look up the repo owner from the remote (e.g. `origin`), then find and update the PR.
