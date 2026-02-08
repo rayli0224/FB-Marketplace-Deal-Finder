@@ -37,6 +37,7 @@ class SearchRequest(BaseModel):
     zipCode: str
     radius: int = 25
     threshold: float
+    maxListings: int = 20
     extractDescriptions: bool = False
 
 
@@ -102,6 +103,7 @@ def search_deals(request: SearchRequest):
             query=request.query,
             zip_code=request.zipCode,
             radius=request.radius,
+            max_listings=request.maxListings,
             headless=True,
             extract_descriptions=request.extractDescriptions
         )
@@ -217,6 +219,7 @@ def search_deals_stream(request: SearchRequest):
                 query=request.query,
                 zip_code=request.zipCode,
                 radius=request.radius,
+                max_listings=request.maxListings,
                 headless=True,
                 on_listing_found=on_listing_found,
                 extract_descriptions=request.extractDescriptions
