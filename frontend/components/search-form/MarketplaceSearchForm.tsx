@@ -16,7 +16,7 @@ export interface MarketplaceSearchFormProps {
 
 /**
  * Search form component for marketplace search parameters.
- * Fields: query, zip code, radius, threshold, max loot, and deep dig toggle.
+ * Fields: query, zip code, radius, threshold, max loot, and full-loot (description) toggle.
  * Submit button is disabled until all required fields are valid.
  */
 export function MarketplaceSearchForm({ register, errors, isValid, handleSubmit, watch, setValue }: MarketplaceSearchFormProps) {
@@ -38,10 +38,10 @@ export function MarketplaceSearchForm({ register, errors, isValid, handleSubmit,
         afterLabel={
           <CompactInlineToggle
             id="extractDescriptions"
-            label="DEEP_DIG"
+            label="FULL_LOOT"
             checked={watch("extractDescriptions")}
             onChange={(checked) => setValue("extractDescriptions", checked, { shouldValidate: true })}
-            tooltip={'On: Read full listing text for each item (better accuracy, slower).\nOff: Use titles only (faster, less accurate for complex items).'}
+            tooltip={'On: Ransack full listing text for each haul (better accuracy, slower).\nOff: Titles only (faster, less accurate for complex loot).'}
           />
         }
       />

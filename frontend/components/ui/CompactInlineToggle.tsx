@@ -38,7 +38,7 @@ export function CompactInlineToggle({ id, label, checked, onChange, tooltip }: C
             }`}
           />
         </div>
-        <span className="font-mono text-[10px] text-muted-foreground">{label}</span>
+        <span className="font-mono text-xs text-muted-foreground">{label}</span>
       </label>
       <InfoIcon tooltip={tooltip} />
     </span>
