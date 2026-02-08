@@ -72,7 +72,6 @@ def generate_ebay_query_for_listing(
     
     client = OpenAI(api_key=OPENAI_API_KEY)
     
-    # Build prompt for OpenAI
     description_text = listing.description if listing.description else "No description provided"
     prompt = get_query_generation_prompt(
         original_query=original_query,
