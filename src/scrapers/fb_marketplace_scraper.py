@@ -28,8 +28,8 @@ from playwright.sync_api import sync_playwright, Browser, Page, BrowserContext, 
 from src.scrapers.utils import random_delay, parse_price, is_valid_listing_price
 from src.utils.colored_logger import setup_colored_logger
 
-# Configure colored logging with module prefix
-logger = setup_colored_logger("fb_scraper", level=logging.INFO)
+# Configure colored logging with module prefix (auto-detects DEBUG from env/--debug flag)
+logger = setup_colored_logger("fb_scraper")
 
 # Default cookie file path
 COOKIES_FILE = os.environ.get("FB_COOKIES_FILE", "/app/cookies/facebook_cookies.json")
@@ -41,6 +41,7 @@ class Listing:
     price: float
     location: str
     url: str
+    description: str = ""
     
     def __str__(self) -> str:
         return f"Listing(title='{self.title}', price=${self.price:.2f}, location='{self.location}', url='{self.url}')"
@@ -411,6 +412,76 @@ class FBMarketplaceScraper:
         
         return ""
     
+    def _extract_description_from_detail_page(self, url: str) -> str:
+        """
+        Navigate to listing detail page and extract description text under 'Details' section.
+        
+        Opens the listing URL in a new page, waits for it to load, finds the 'Details' text,
+        and extracts the description content that appears underneath it. Tries multiple strategies:
+        finding sibling elements, parent containers, and text analysis. Returns empty string
+        if description cannot be found or if navigation fails.
+        """
+        description = ""
+        
+        try:
+            # Open detail page in new page to avoid losing search results context
+            detail_page = self.context.new_page()
+            detail_page.goto(url, wait_until="networkidle", timeout=15000)
+            random_delay(2, 3)
+            
+            # Find "Details" text and get the description underneath
+            details_selectors = [
+                "span:has-text('Details')",
+                "div:has-text('Details')",
+                "h2:has-text('Details')",
+                "h3:has-text('Details')",
+            ]
+            
+            for selector in details_selectors:
+                try:
+                    details_element = detail_page.locator(selector).first
+                    if details_element.is_visible(timeout=3000):
+                        # Strategy 1: Try to find next sibling element containing description
+                        try:
+                            next_sibling = details_element.locator("xpath=following-sibling::*[1]")
+                            if next_sibling.count() > 0:
+                                sibling_text = next_sibling.inner_text().strip()
+                                if sibling_text and len(sibling_text) > 10:  # Reasonable description length
+                                    description = sibling_text
+                                    break
+                        except:
+                            pass
+                        
+                        # Strategy 2: Get parent container and extract text after "Details"
+                        try:
+                            parent = details_element.locator("xpath=..")
+                            full_text = parent.inner_text().strip()
+                            
+                            # Extract text after "Details"
+                            details_index = full_text.find("Details")
+                            if details_index >= 0:
+                                description_candidate = full_text[details_index + len("Details"):].strip()
+                                # Remove any leading colons, dashes, or whitespace
+                                description_candidate = description_candidate.lstrip(":-\n\r\t ")
+                                if description_candidate and len(description_candidate) > 10:
+                                    description = description_candidate
+                                    break
+                        except:
+                            pass
+                except:
+                    continue
+            
+            detail_page.close()
+            
+        except Exception:
+            # If anything fails, ensure we close the page and return empty string
+            try:
+                detail_page.close()
+            except:
+                pass
+        
+        return description
+    
     def _scroll_page_to_load_content(self):
         """Scroll the page to load more listing content."""
         scroll_attempts = 3
@@ -447,13 +518,14 @@ class FBMarketplaceScraper:
         
         return listing_elements
     
-    def _extract_listing_from_element(self, element) -> Optional[Listing]:
+    def _extract_listing_from_element(self, element, extract_descriptions: bool = False) -> Optional[Listing]:
         """
         Extract a single listing from a listing element.
         
-        Extracts URL, price, title, and location from the element. Validates that
-        price is valid and title is not a price format. Returns Listing object if
-        valid, or None if extraction fails or data is invalid.
+        Extracts URL, price, title, and location from the element. Optionally navigates
+        to the listing's detail page to extract the full description if extract_descriptions
+        is True. Validates that price is valid and title is not a price format. Returns
+        Listing object if valid, or None if extraction fails or data is invalid.
         """
         try:
             url = element.get_attribute("href") or ""
@@ -476,12 +548,19 @@ class FBMarketplaceScraper:
             
             location = self._extract_location(element)
             
+            # Extract description from detail page if enabled
+            if extract_descriptions:
+                description = self._extract_description_from_detail_page(url)
+            else:
+                description = ""  # Skip description extraction for performance
+            
             if title and price:
                 return Listing(
                     title=title,
                     price=price,
                     location=location or "Unknown",
-                    url=url
+                    url=url,
+                    description=description
                 )
             
             return None
@@ -489,7 +568,7 @@ class FBMarketplaceScraper:
         except Exception:
             return None
     
-    def _extract_listings(self, max_listings: int = 20, on_listing_found=None) -> List[Listing]:
+    def _extract_listings(self, max_listings: int = 20, on_listing_found=None, extract_descriptions: bool = False) -> List[Listing]:
         """
         Extract up to max_listings from the current Marketplace results page.
 
@@ -506,8 +585,16 @@ class FBMarketplaceScraper:
             listing_elements = self._find_listing_elements()
             
             for element in listing_elements[:max_listings]:
-                listing = self._extract_listing_from_element(element)
+                listing = self._extract_listing_from_element(element, extract_descriptions=extract_descriptions)
                 if listing:
+                    logger.debug(
+                        f"Extracted FB listing:\n"
+                        f"  Title: {listing.title}\n"
+                        f"  Price: ${listing.price:.2f}\n"
+                        f"  Location: {listing.location}\n"
+                        f"  URL: {listing.url}\n"
+                        f"  Description: {listing.description}"
+                    )
                     listings.append(listing)
                     if on_listing_found:
                         on_listing_found(listing, len(listings))
@@ -517,7 +604,7 @@ class FBMarketplaceScraper:
         
         return listings
     
-    def search_marketplace(self, query: str, zip_code: str, radius: int = 25, max_listings: int = 20, on_listing_found=None) -> List[Listing]:
+    def search_marketplace(self, query: str, zip_code: str, radius: int = 25, max_listings: int = 20, on_listing_found=None, extract_descriptions: bool = False) -> List[Listing]:
         """
         Run a Marketplace search and return up to max_listings results.
 
@@ -530,6 +617,8 @@ class FBMarketplaceScraper:
         logger.info("╔" + "═" * 78 + "╗")
         logger.info(f"║  🔍 Starting FB Marketplace Search")
         logger.info(f"║  Query: '{query}' | Zip: {zip_code} | Radius: {radius}mi | Max: {max_listings}")
+        if extract_descriptions:
+            logger.info(f"║  ⚠️  Description extraction enabled (slower)")
         logger.info("╚" + "═" * 78 + "╝")
         logger.info("")
         
@@ -539,7 +628,7 @@ class FBMarketplaceScraper:
             
             self._set_location(zip_code, radius)
             self._search(query)
-            listings = self._extract_listings(max_listings=max_listings, on_listing_found=on_listing_found)
+            listings = self._extract_listings(max_listings=max_listings, on_listing_found=on_listing_found, extract_descriptions=extract_descriptions)
             
             logger.info("")
             logger.info(f"✅ Search completed. Found {len(listings)} listings")
@@ -566,6 +655,7 @@ def search_marketplace(
     max_listings: int = 20,
     headless: bool = None,
     on_listing_found=None,
+    extract_descriptions: bool = False,
 ) -> List[Listing]:
     """
     Run a one-off Facebook Marketplace search and return the results.
@@ -577,7 +667,7 @@ def search_marketplace(
     """
     scraper = FBMarketplaceScraper(headless=headless)
     try:
-        return scraper.search_marketplace(query, zip_code, radius, max_listings=max_listings, on_listing_found=on_listing_found)
+        return scraper.search_marketplace(query, zip_code, radius, max_listings=max_listings, on_listing_found=on_listing_found, extract_descriptions=extract_descriptions)
     finally:
         scraper.close()
 

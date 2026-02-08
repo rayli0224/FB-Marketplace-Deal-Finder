@@ -7,6 +7,7 @@ and prefixes them with module names for easier identification.
 
 import logging
 import sys
+import os
 
 
 class ColoredFormatter(logging.Formatter):
@@ -76,10 +77,50 @@ class ColoredFormatter(logging.Formatter):
         return formatted
 
 
-def setup_colored_logger(module_name: str, level: int = logging.INFO) -> logging.Logger:
+def _get_log_level() -> int:
     """
-    Set up a logger with colored formatting and module name prefix.
+    Determine the logging level from environment variables or command-line arguments.
+    
+    Checks for DEBUG environment variable or --debug flag in sys.argv.
+    Returns logging.DEBUG if debug mode is enabled, otherwise logging.INFO.
     """
+    # Check for DEBUG environment variable
+    if os.environ.get("DEBUG", "").lower() in ("1", "true", "yes"):
+        return logging.DEBUG
+    
+    # Check for LOG_LEVEL environment variable
+    log_level_env = os.environ.get("LOG_LEVEL", "").upper()
+    if log_level_env == "DEBUG":
+        return logging.DEBUG
+    elif log_level_env == "INFO":
+        return logging.INFO
+    elif log_level_env == "WARNING":
+        return logging.WARNING
+    elif log_level_env == "ERROR":
+        return logging.ERROR
+    
+    # Check for --debug flag in command-line arguments
+    if "--debug" in sys.argv:
+        return logging.DEBUG
+    
+    return logging.INFO
+
+
+def setup_colored_logger(module_name: str, level: int = None) -> logging.Logger:
+    """
+    Set up a logger with colored formatting and module prefix.
+    
+    Args:
+        module_name: Name of the module (e.g., "ebay_scraper")
+        level: Logging level (default: None, will auto-detect from DEBUG env var or --debug flag)
+        
+    Returns:
+        Configured logger instance
+    """
+    # Auto-detect log level if not provided
+    if level is None:
+        level = _get_log_level()
+    
     logger = logging.getLogger(module_name)
     logger.setLevel(level)
     

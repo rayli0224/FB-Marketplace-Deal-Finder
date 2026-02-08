@@ -7,7 +7,6 @@ listing with deal score (or None when eBay data or calculation fails). All
 listings are returned regardless of threshold or eBay data availability.
 """
 
-import time
 import logging
 from typing import Dict, Optional
 
@@ -18,7 +17,7 @@ from src.utils.query_enhancer import generate_ebay_query_for_listing
 from src.utils.colored_logger import setup_colored_logger
 
 # Configure colored logging with module prefix
-logger = setup_colored_logger("listing_processor", level=logging.INFO)
+logger = setup_colored_logger("listing_processor")
 
 
 def _listing_result(
@@ -78,6 +77,14 @@ def process_single_listing(
     logger.info(f"{progress_info}📋 FB Listing: '{listing.title}'")
     logger.info(f"   💰 Price: ${listing.price:.2f} | 📍 Location: {listing.location}")
     logger.info("=" * 80)
+    logger.debug(
+        f"Full FB listing details:\n"
+        f"  Title: {listing.title}\n"
+        f"  Price: ${listing.price:.2f}\n"
+        f"  Location: {listing.location}\n"
+        f"  URL: {listing.url}\n"
+        f"  Description: {listing.description}"
+    )
     
     logger.info("🔍 Step 1: Generating eBay search query with OpenAI...")
     query_result = generate_ebay_query_for_listing(listing, original_query)
@@ -87,9 +94,6 @@ def process_single_listing(
         return _listing_result(listing, None)
 
     enhanced_query, exclusion_keywords = query_result
-    
-    # Rate limiting delay for OpenAI API
-    time.sleep(0.5)
     
     logger.info(f"🔍 Step 2: Fetching eBay price data for query: '{enhanced_query}'...")
     ebay_stats = get_market_price(
@@ -104,9 +108,6 @@ def process_single_listing(
         return _listing_result(listing, None)
 
     logger.info(f"   ✓ Found {ebay_stats.sample_size} eBay listings | Avg price: ${ebay_stats.average:.2f}")
-    
-    # Rate limiting delay for eBay API
-    time.sleep(0.3)
     
     logger.info("🔍 Step 3: Calculating deal score...")
     deal_score = calculate_deal_score(listing.price, ebay_stats)

@@ -19,8 +19,8 @@ except ImportError:
 from src.scrapers.fb_marketplace_scraper import Listing
 from src.utils.colored_logger import setup_colored_logger
 
-# Configure colored logging with module prefix
-logger = setup_colored_logger("query_enhancer", level=logging.INFO)
+# Configure colored logging with module prefix (auto-detects DEBUG from env/--debug flag)
+logger = setup_colored_logger("query_enhancer")
 
 # OpenAI API key from environment
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
@@ -31,10 +31,32 @@ def generate_ebay_query_for_listing(
     original_query: str
 ) -> Optional[Tuple[str, List[str]]]:
     """
-    Generate an optimized eBay search query and exclusion keywords using OpenAI.
-    Analyzes listing title, price, and original query to create a targeted search
-    that finds similar items, plus exclusion keywords for accessories/unrelated items.
-    Returns (enhanced_query, exclusion_keywords) or None if failed.
+    Generate an optimized eBay search query and exclusion keywords for a specific FB listing.
+    
+    Uses OpenAI to analyze the listing title, price, description, and original search query to create
+    a targeted eBay search query that will find similar items. Also generates exclusion
+    keywords to filter out accessories, broken items, and unrelated listings.
+    
+    Args:
+        listing: Facebook Marketplace listing with title, price, location, url, and description
+        original_query: The original user search query (e.g., "nintendo ds")
+        
+    Returns:
+        Tuple of (enhanced_ebay_query, exclusion_keywords) if successful, None if failed.
+        Example: ("nintendo ds lite", ["case", "pen", "stylus", "broken"])
+        
+    Example:
+        >>> listing = Listing(
+        ...     title="Nintendo DS Lite Pink - Great Condition",
+        ...     price=50.0,
+        ...     location="New York, NY",
+        ...     url="https://facebook.com/...",
+        ...     description="Great condition, comes with charger and stylus"
+        ... )
+        >>> result = generate_ebay_query_for_listing(listing, "nintendo ds")
+        >>> enhanced_query, exclusions = result
+        >>> print(enhanced_query)  # "nintendo ds lite"
+        >>> print(exclusions)  # ["case", "pen", "stylus", "broken", "for parts"]
     """
     if not OpenAI:
         logger.error("OpenAI library not installed. Install with: pip install openai")
@@ -47,6 +69,7 @@ def generate_ebay_query_for_listing(
     client = OpenAI(api_key=OPENAI_API_KEY)
     
     # Build prompt for OpenAI
+    description_text = listing.description if listing.description else "No description provided"
     prompt = f"""You are helping to find accurate price comparisons on eBay for a Facebook Marketplace listing.
 
 Original user search query: "{original_query}"
@@ -54,6 +77,7 @@ Facebook Marketplace listing:
 - Title: "{listing.title}"
 - Price: ${listing.price:.2f}
 - Location: {listing.location}
+- Description: "{description_text}"
 
 Your task:
 1. Generate an optimized eBay search query that will find similar items to this listing.
@@ -100,21 +124,44 @@ Return your response as a JSON object with exactly this structure:
 Only return the JSON object, no other text."""
 
     try:
+        messages = [
+            {
+                "role": "system",
+                "content": "You are an expert at creating precise search queries for online marketplaces. Always respond with valid JSON only."
+            },
+            {
+                "role": "user",
+                "content": prompt
+            }
+        ]
+        
+        api_params = {
+            "model": "gpt-4o-mini",
+            "temperature": 0.4,
+            "max_tokens": 200,
+        }
+        
+        logger.debug(f"OpenAI API Request - Model: {api_params['model']}, Messages: {json.dumps(messages, indent=2)}")
+        
         response = client.chat.completions.create(
-            model="gpt-4o-mini",  # Using mini for cost efficiency
-            messages=[
-                {
-                    "role": "system",
-                    "content": "You are an expert at creating precise search queries for online marketplaces. Always respond with valid JSON only."
-                },
-                {
-                    "role": "user",
-                    "content": prompt
-                }
-            ],
-            temperature=0.4,  # Slightly higher temperature to encourage broader queries
-            max_tokens=200,
+            model=api_params["model"],
+            messages=messages,
+            temperature=api_params["temperature"],
+            max_tokens=api_params["max_tokens"],
         )
+        
+        # Log full response for debugging
+        try:
+            if hasattr(response, 'model_dump'):
+                response_dict = response.model_dump()
+            elif hasattr(response, 'dict'):
+                response_dict = response.dict()
+            else:
+                response_dict = {"id": getattr(response, 'id', None), "model": getattr(response, 'model', None), "choices": [{"message": {"content": response.choices[0].message.content if response.choices else None}}]}
+            logger.debug(f"OpenAI API Response - Full response: {json.dumps(response_dict, indent=2)}")
+        except Exception as e:
+            logger.debug(f"OpenAI API Response - Could not serialize response: {e}")
+            logger.debug(f"OpenAI API Response - Raw response: {str(response)}")
         
         # Extract JSON from response
         content = response.choices[0].message.content.strip()

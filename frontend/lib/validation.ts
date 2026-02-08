@@ -41,6 +41,7 @@ export const formSchema = z.object({
       .min(1, "Max listings must be between 1 and 200")
       .max(200, "Max listings must be between 1 and 200")
   ),
+  extractDescriptions: z.boolean().default(false),
 });
 
 export type FormData = z.infer<typeof formSchema>;

@@ -51,10 +51,11 @@ export default function Home() {
     register,
     handleSubmit: handleFormSubmit,
     watch,
+    setValue,
     formState: { errors, isValid },
   } = useForm<ValidationFormData>({
     resolver: zodResolver(formSchema),
-    defaultValues: { query: "", zipCode: "", radius: "", threshold: "", maxListings: "10" },
+    defaultValues: { query: "", zipCode: "", radius: "", threshold: "", maxListings: "10", extractDescriptions: false },
     mode: "onTouched",
   });
   const formData = watch();
@@ -67,6 +68,8 @@ export default function Home() {
   const [threshold, setThreshold] = useState<number>(0);
   const [isSearching, setIsSearching] = useState<boolean>(false);
   const isSearchingRef = useRef<boolean>(false);
+  const abortControllerRef = useRef<AbortController | null>(null);
+  const readerRef = useRef<ReadableStreamDefaultReader<Uint8Array> | null>(null);
 
   /**
    * Generates a CSV blob from listings data with pirate-themed column headers.
@@ -141,57 +144,114 @@ export default function Home() {
    * are parsed. This avoids "Unterminated string" when the large "done" payload is split across
    * TCP chunks. Uses stream: true for decode so multi-byte UTF-8 spanning chunks is handled.
    * Event types: "phase" (search phase), "progress" (scanned count), "listing_processed" (evaluated count), "done" (final listings and counts).
+   * Handles cancellation gracefully by catching abort errors.
    */
   const parseSSEStream = useCallback(
     async (reader: ReadableStreamDefaultReader<Uint8Array>) => {
       const decoder = new TextDecoder();
       let buffer = "";
 
-      while (true) {
-        const { done, value } = await reader.read();
-        buffer += decoder.decode(value, { stream: !done });
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          buffer += decoder.decode(value, { stream: !done });
 
-        const hasNewline = buffer.includes("\n");
-        if (!hasNewline && !done) continue;
+          const hasNewline = buffer.includes("\n");
+          if (!hasNewline && !done) continue;
 
-        const lines = buffer.split("\n");
-        buffer = done ? "" : (lines.pop() ?? "");
+          const lines = buffer.split("\n");
+          buffer = done ? "" : (lines.pop() ?? "");
 
-        for (const line of lines) {
-          if (line.startsWith("data: ")) {
-            try {
-              dispatchSSEEvent(line.slice(6), {
-                handlePhaseUpdate,
-                handleProgressUpdate,
-                handleCompletion,
-                setEvaluatedCount,
-              });
-            } catch (parseErr) {
-              console.error("SSE parse error for line length:", line.length, parseErr);
-              throw parseErr;
+          for (const line of lines) {
+            if (line.startsWith("data: ")) {
+              try {
+                dispatchSSEEvent(line.slice(6), {
+                  handlePhaseUpdate,
+                  handleProgressUpdate,
+                  handleCompletion,
+                  setEvaluatedCount,
+                });
+              } catch (parseErr) {
+                console.error("SSE parse error for line length:", line.length, parseErr);
+                throw parseErr;
+              }
             }
           }
-        }
 
-        if (done) {
-          if (buffer.startsWith("data: ")) {
-            try {
-              dispatchSSEEvent(buffer.slice(6), {
-                handlePhaseUpdate,
-                handleProgressUpdate,
-                handleCompletion,
-                setEvaluatedCount,
-              });
-            } catch {
-              // Trailing partial line when stream ends without newline; ignore.
+          if (done) {
+            if (buffer.startsWith("data: ")) {
+              try {
+                dispatchSSEEvent(buffer.slice(6), {
+                  handlePhaseUpdate,
+                  handleProgressUpdate,
+                  handleCompletion,
+                  setEvaluatedCount,
+                });
+              } catch {
+                // Trailing partial line when stream ends without newline; ignore.
+              }
             }
+            break;
           }
-          break;
         }
+      } catch (err) {
+        // If cancelled, release the reader and re-throw to be handled by performSearch
+        if (err instanceof Error && err.name === "AbortError") {
+          reader.cancel();
+          throw err;
+        }
+        // For other errors, try to cancel the reader and re-throw
+        try {
+          reader.cancel();
+        } catch {
+          // Reader may already be cancelled, ignore
+        }
+        throw err;
+      } finally {
+        reader.releaseLock();
       }
     },
     [handlePhaseUpdate, handleProgressUpdate, handleCompletion]
   );
+
+  /**
+   * Cancels the current search by canceling the stream reader and aborting the fetch request.
+   * Resets state and returns the app to the form view.
+   */
+  const cancelSearch = useCallback(() => {
+    // Cancel the reader first to stop reading from the stream
+    if (readerRef.current) {
+      try {
+        readerRef.current.cancel();
+      } catch (err) {
+        // Reader may already be cancelled or released, ignore
+      }
+      try {
+        readerRef.current.releaseLock();
+      } catch (err) {
+        // Lock may already be released, ignore
+      }
+      readerRef.current = null;
+    }
+    
+    // Then abort the fetch request
+    if (abortControllerRef.current) {
+      try {
+        abortControllerRef.current.abort();
+      } catch (err) {
+        // AbortController may already be aborted, ignore
+      }
+      abortControllerRef.current = null;
+    }
+    
+    isSearchingRef.current = false;
+    setIsSearching(false);
+    setAppState("form");
+    setScannedCount(0);
+    setEvaluatedCount(0);
+    setPhase("scraping");
+    setError(null);
+  }, []);
 
   /**
    * Runs the marketplace search: POSTs form data to the stream endpoint, reads the SSE response,
@@ -206,6 +266,10 @@ export default function Home() {
     isSearchingRef.current = true;
     setIsSearching(true);
     
+    // Create new AbortController for this search
+    abortControllerRef.current = new AbortController();
+    const abortSignal = abortControllerRef.current.signal;
+    
     try {
       setError(null);
       const response = await fetch(`${API_URL}/api/search/stream`, {
@@ -219,7 +283,9 @@ export default function Home() {
           radius: formData.radius,
           threshold: formData.threshold,
           maxListings: formData.maxListings,
+          extractDescriptions: formData.extractDescriptions,
         }),
+        signal: abortSignal,
       });
 
       if (!response.ok) {
@@ -231,8 +297,17 @@ export default function Home() {
         throw new Error("No response body");
       }
 
+      // Store reader reference for cancellation
+      readerRef.current = reader;
+
       await parseSSEStream(reader);
     } catch (err) {
+      // Don't show error if search was cancelled
+      if (err instanceof Error && err.name === "AbortError") {
+        console.log("Search cancelled by user");
+        return;
+      }
+      
       console.error("Search error:", err);
       
       // Provide more helpful error messages
@@ -248,6 +323,8 @@ export default function Home() {
     } finally {
       isSearchingRef.current = false;
       setIsSearching(false);
+      abortControllerRef.current = null;
+      readerRef.current = null;
     }
   }, [parseSSEStream]);
 
@@ -317,6 +394,8 @@ export default function Home() {
                 errors={errors}
                 isValid={isValid}
                 handleSubmit={handleSubmit}
+                watch={watch}
+                setValue={setValue}
               />
             )}
 
@@ -325,6 +404,7 @@ export default function Home() {
                 phase={phase}
                 scannedCount={scannedCount}
                 evaluatedCount={evaluatedCount}
+                onCancel={cancelSearch}
               />
             )}
 
