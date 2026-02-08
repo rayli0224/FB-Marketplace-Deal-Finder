@@ -2,9 +2,8 @@
 
 import { type UseFormRegister, type FieldErrors, type UseFormHandleSubmit, type UseFormWatch, type UseFormSetValue } from "react-hook-form";
 import { type FormData as ValidationFormData } from "@/lib/validation";
-import { TreasureIcon } from "@/lib/icons";
 import { FormInputField } from "@/components/search-form/FormInputField";
-import { ToggleSwitch } from "@/components/ui/ToggleSwitch";
+import { CompactInlineToggle } from "@/components/ui/CompactInlineToggle";
 
 export interface MarketplaceSearchFormProps {
   register: UseFormRegister<ValidationFormData>;
@@ -16,9 +15,9 @@ export interface MarketplaceSearchFormProps {
 }
 
 /**
- * Search form component for entering marketplace search parameters.
- * Includes fields for query, zip code, radius, threshold, and max listings with validation.
- * Submit button is disabled until all fields are valid.
+ * Search form component for marketplace search parameters.
+ * Fields: query, zip code, radius, threshold, max loot, and deep dig toggle.
+ * Submit button is disabled until all required fields are valid.
  */
 export function MarketplaceSearchForm({ register, errors, isValid, handleSubmit, watch, setValue }: MarketplaceSearchFormProps) {
   return (
@@ -35,7 +34,16 @@ export function MarketplaceSearchForm({ register, errors, isValid, handleSubmit,
         register={register}
         required
         error={errors.query?.message}
-        icon={<TreasureIcon className="text-accent" />}
+        tooltip="The search term for Facebook Marketplace—what you're looking for."
+        afterLabel={
+          <CompactInlineToggle
+            id="extractDescriptions"
+            label="DEEP_DIG"
+            checked={watch("extractDescriptions")}
+            onChange={(checked) => setValue("extractDescriptions", checked, { shouldValidate: true })}
+            tooltip={'On: Read full listing text for each item (better accuracy, slower).\nOff: Use titles only (faster, less accurate for complex items).'}
+          />
+        }
       />
 
       <FormInputField
@@ -49,10 +57,10 @@ export function MarketplaceSearchForm({ register, errors, isValid, handleSubmit,
         digitsOnly
         inputMode="numeric"
         error={errors.zipCode?.message}
-        icon={<span className="text-accent">@</span>}
+        tooltip="5-digit ZIP code for your search area."
       />
 
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-3 gap-4">
         <FormInputField
           label="RAID_RADIUS"
           id="radius"
@@ -66,6 +74,7 @@ export function MarketplaceSearchForm({ register, errors, isValid, handleSubmit,
           inputMode="numeric"
           error={errors.radius?.message}
           suffix="mi"
+          tooltip="Search radius in miles from your ZIP code."
         />
 
         <FormInputField
@@ -81,11 +90,11 @@ export function MarketplaceSearchForm({ register, errors, isValid, handleSubmit,
           inputMode="numeric"
           error={errors.threshold?.message}
           suffix="%"
-          tooltip="Max % of eBay average price. Example: 80% = only show listings priced at 80% of eBay market value or less"
+          tooltip="Max % of eBay average price. Example: 80% shows only listings at 80% of market value or below."
         />
 
         <FormInputField
-          label="MAX_LISTINGS"
+          label="MAX_LOOT"
           id="maxListings"
           type="text"
           placeholder="10"
@@ -96,21 +105,8 @@ export function MarketplaceSearchForm({ register, errors, isValid, handleSubmit,
           digitsOnly
           inputMode="numeric"
           error={errors.maxListings?.message}
-          tooltip="Max listings to scan. Fewer = faster."
+          tooltip="Maximum number of listings to scan; fewer is faster."
         />
-      </div>
-
-      <div className="flex items-center justify-between border border-border bg-secondary/50 px-4 py-3">
-        <div className="flex items-center gap-3">
-          <ToggleSwitch
-            checked={watch("extractDescriptions")}
-            onChange={(checked) => setValue("extractDescriptions", checked, { shouldValidate: true })}
-            label="EXTRACT_DESCRIPTIONS"
-          />
-        </div>
-        <span className="text-xs text-muted-foreground/70" title="Extract full descriptions from each listing (slower but more accurate)">
-          ⓘ
-        </span>
       </div>
 
       <button
