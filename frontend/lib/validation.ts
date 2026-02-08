@@ -11,10 +11,10 @@ function preprocessNumber(val: unknown): number | undefined {
 
 /**
  * Validation schema for the marketplace search form.
- * Validates query (required), zipCode (digits only, exactly 5), radius (1-500 miles), and threshold (0-100%).
- * Uses Zod's preprocess to handle empty string inputs from number fields before converting to numbers.
- * Provides specific error messages for different failure types: missing input, non-numeric characters,
- * wrong length, and out-of-range values.
+ * Validates query (required), zipCode (digits only, exactly 5), radius (1-500 miles),
+ * threshold (0-100%), and maxListings (1-200). Uses Zod's preprocess to handle empty
+ * string inputs from number fields before converting to numbers. Provides specific
+ * error messages for missing input, non-numeric characters, wrong length, and out-of-range values.
  */
 export const formSchema = z.object({
   query: z.string().min(1, "Query is required"),
@@ -34,6 +34,12 @@ export const formSchema = z.object({
     z.number({ required_error: "Threshold is required" })
       .min(0, "Threshold must be between 0% and 100%")
       .max(100, "Threshold must be between 0% and 100%")
+  ),
+  maxListings: z.preprocess(
+    preprocessNumber,
+    z.number({ required_error: "Max listings is required" })
+      .min(1, "Max listings must be between 1 and 200")
+      .max(200, "Max listings must be between 1 and 200")
   ),
 });
 

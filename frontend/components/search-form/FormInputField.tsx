@@ -118,7 +118,6 @@ export function FormInputField({
               <div className="invisible absolute bottom-full left-1/2 mb-3 w-72 -translate-x-1/2 rounded-lg border-2 border-accent/30 bg-gradient-to-br from-card to-secondary/80 px-4 py-3 font-mono text-xs text-foreground shadow-[0_4px_12px_rgba(0,0,0,0.15)] backdrop-blur-sm group-hover:visible z-20">
                 <div className="absolute -bottom-1 left-1/2 h-2 w-2 -translate-x-1/2 rotate-45 border-r-2 border-b-2 border-accent/30 bg-gradient-to-br from-card to-secondary/80"></div>
                 <div className="relative">
-                  <span className="text-primary font-bold">{"//"}</span>{" "}
                   <span className="text-foreground">{main}.</span>
                   {example && (
                     <>
