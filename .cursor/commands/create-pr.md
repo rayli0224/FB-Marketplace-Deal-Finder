@@ -5,7 +5,7 @@ A PR already exists for the current branch. Find it and modify it using MCP (do 
 ## Title rules
 - Start with bracketed topics (e.g. `[Results] [SSE]`).
 - Follow with a short, imperative description of the change.
-- For multiple logical changes: make the title a collection; separate with HTML comments (e.g. `<!-- change 1 -->`, `<!-- change 2 -->`).
+- Use only plain text: no HTML, no comment syntax, no other symbols (e.g. `<!-- -->`). For multiple logical changes, use "and" or a comma (e.g. `[Auth] In-app login and session-expiry handling`).
 
 ## Description rules
 - Use **only** changes introduced in this branch.
