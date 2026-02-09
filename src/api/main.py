@@ -17,9 +17,8 @@ from src.scrapers.fb_marketplace_scraper import search_marketplace as search_fb_
 from src.scrapers.ebay_scraper import get_market_price
 from src.api.deal_calculator import score_listings
 from src.utils.listing_processor import process_single_listing
-from src.utils.colored_logger import setup_colored_logger
+from src.utils.colored_logger import setup_colored_logger, log_step_sep, log_step_title, log_error_short, wait_status
 
-# Configure colored logging with module prefix (auto-detects DEBUG from env/--debug flag)
 logger = setup_colored_logger("api")
 
 app = FastAPI(title="FB Marketplace Deal Finder API")
@@ -108,7 +107,7 @@ def cookies_status():
     try:
         with open(cookies_file, "r") as f:
             cookies = json.load(f)
-    except (json.JSONDecodeError, Exception):
+    except (json.JSONDecodeError, OSError):
         return {"configured": False, "reason": "invalid_file"}
 
     if not isinstance(cookies, list) or len(cookies) == 0:
@@ -164,7 +163,7 @@ def save_cookies(request: SaveCookiesRequest):
         logger.info(f"✅ Facebook login data saved ({len(cookies)} entries)")
         return {"success": True}
     except Exception as e:
-        logger.error(f"❌ Failed to save cookies: {e}")
+        log_error_short(logger, f"Failed to save cookies: {e}")
         return {"success": False, "error": "Couldn't save login data. Please try again."}
 
 
@@ -173,10 +172,8 @@ def search_deals(request: SearchRequest):
     """
     Search Facebook Marketplace and calculate deal scores using eBay market data.
     """
-    logger.info(f"▶️  Step 1: Starting search - query='{request.query}', zip={request.zipCode}, radius={request.radius}mi")
-    
-    # Try to scrape Facebook Marketplace
-    logger.info("▶️  Step 2: Scraping Facebook Marketplace")
+    log_step_sep(logger, f"Step 1: Starting search — query='{request.query}', zip={request.zipCode}, radius={request.radius}mi")
+    log_step_sep(logger, "Step 2: Scraping Facebook Marketplace")
     fb_listings = []
     try:
         fb_listings = search_fb_marketplace(
@@ -185,9 +182,10 @@ def search_deals(request: SearchRequest):
             radius=request.radius,
             max_listings=request.maxListings,
             headless=True,
-            extract_descriptions=request.extractDescriptions
+            extract_descriptions=request.extractDescriptions,
+            step_sep="sub",
         )
-        logger.info(f"✅ Step 2 complete: Found {len(fb_listings)} listings")
+        logger.info(f"Found {len(fb_listings)} listings")
     except FacebookNotLoggedInError:
         logger.warning("🔒 Facebook session expired during non-streaming search")
         return JSONResponse(
@@ -195,51 +193,43 @@ def search_deals(request: SearchRequest):
             content={"error": "auth_error", "message": "Facebook session expired"}
         )
     except Exception as e:
-        logger.error(f"❌ Step 2 failed: {str(e)[:100]}")
-        # Continue without FB listings - will return empty results
-    
+        log_error_short(logger, f"Step 2 failed: {e}")
     scanned_count = len(fb_listings)
-    
     if scanned_count == 0:
-        logger.warning("⚠️  Step 2: No listings found - login may be required")
+        log_step_title(logger, "⚠️  Step 2: No listings found - login may be required", level=logging.WARNING)
         return SearchResponse(
             listings=[],
             scannedCount=0,
             evaluatedCount=0
         )
-    
-    # Get eBay price statistics
-    logger.info("▶️  Step 3: Fetching eBay prices")
+
+    log_step_sep(logger, "Step 3: Fetching eBay prices")
     ebay_stats = None
     try:
-        ebay_stats = get_market_price(
-            search_term=request.query,
-            n_items=50,
-        )
+        with wait_status(logger, "eBay prices"):
+            ebay_stats = get_market_price(
+                search_term=request.query,
+                n_items=50,
+            )
     except Exception as e:
-        logger.error(f"❌ Step 3 failed: {str(e)[:100]}")
-    
-    # If eBay stats available, filter listings by price threshold and score them
+        log_error_short(logger, f"Step 3 failed: {e}")
     if ebay_stats:
-        logger.info("▶️  Step 4: Calculating deal scores")
+        log_step_sep(logger, "Step 4: Calculating deal scores")
         scored_listings = score_listings(
             fb_listings=fb_listings,
             ebay_stats=ebay_stats,
             threshold=request.threshold
         )
         evaluated_count = len(scored_listings)
-        logger.info(f"✅ Step 4 complete: Found {evaluated_count} deals")
-        logger.info(f"{'='*60}")
-        logger.info(f"🎯 Step 5: Search completed - {scanned_count} scanned, {evaluated_count} deals found")
-        logger.info(f"{'='*60}")
-        
+        logger.info(f"Found {evaluated_count} deals")
+        log_step_sep(logger, f"Step 5: Search completed — {scanned_count} scanned, {evaluated_count} deals found")
         return SearchResponse(
             listings=[ListingResponse(**listing) for listing in scored_listings],
             scannedCount=scanned_count,
             evaluatedCount=evaluated_count
         )
     
-    logger.warning("⚠️  Step 3: No eBay stats available - skipping deal scoring")
+    logger.warning("No eBay stats — skipping deal scoring")
     all_listings = [
         ListingResponse(
             title=listing.title,
@@ -250,10 +240,7 @@ def search_deals(request: SearchRequest):
         )
         for listing in fb_listings
     ]
-    
-    logger.info(f"{'='*60}")
-    logger.info(f"🎯 Step 5: Search completed - {scanned_count} scanned, {len(all_listings)} returned")
-    logger.info(f"{'='*60}")
+    log_step_sep(logger, f"Step 5: Search completed — {scanned_count} scanned, {len(all_listings)} returned")
     return SearchResponse(
         listings=all_listings,
         scannedCount=scanned_count,
@@ -285,8 +272,7 @@ def search_deals_stream(request: SearchRequest):
     Cancellation: When the client disconnects, the generator detects it and signals
     cancellation to stop all processing (scraping thread and listing evaluation).
     """
-    logger.info(f"🔍 Received search request: query='{request.query}', zip={request.zipCode}, radius={request.radius}mi")
-    
+    log_step_sep(logger, f"Search request — query='{request.query}', zip={request.zipCode}, radius={request.radius}mi")
     event_queue = queue.Queue()
     fb_listings = []
     cancelled = threading.Event()
@@ -309,7 +295,8 @@ def search_deals_stream(request: SearchRequest):
                 max_listings=request.maxListings,
                 headless=True,
                 on_listing_found=on_listing_found,
-                extract_descriptions=request.extractDescriptions
+                extract_descriptions=request.extractDescriptions,
+                step_sep=None,
             )
         except FacebookNotLoggedInError:
             auth_failed = True
@@ -318,7 +305,7 @@ def search_deals_stream(request: SearchRequest):
                 event_queue.put({"type": "auth_error"})
         except Exception as e:
             if not cancelled.is_set():
-                logger.error(f"❌ Step 2 failed: {str(e)[:100]}")
+                log_error_short(logger, f"Step 2 failed: {e}")
         finally:
             if not cancelled.is_set() and not auth_failed:
                 event_queue.put({"type": "scrape_done"})
@@ -326,10 +313,8 @@ def search_deals_stream(request: SearchRequest):
     def event_generator():
         nonlocal cancelled
         try:
-            logger.info(f"▶️  Step 1: Starting search - query='{request.query}', zip={request.zipCode}, radius={request.radius}mi")
-            
-            # Phase 1: Scraping Facebook
-            logger.info("▶️  Step 2: Scraping Facebook Marketplace")
+            log_step_sep(logger, f"Step 1: Starting search — query='{request.query}', zip={request.zipCode}, radius={request.radius}mi")
+            log_step_sep(logger, "Step 2: Scraping Facebook Marketplace")
             yield f"data: {json.dumps({'type': 'phase', 'phase': 'scraping'})}\n\n"
             
             thread = threading.Thread(target=scrape_worker)
@@ -391,21 +376,13 @@ def search_deals_stream(request: SearchRequest):
                 logger.info("⚠️  Search cancelled - aborting processing")
                 return
             
-            logger.info(f"✅ Step 2 complete: Found {len(fb_listings)} listings")
-            
-            # Phase 2: Processing each listing individually
+            logger.info(f"Found {len(fb_listings)} listings")
             yield f"data: {json.dumps({'type': 'phase', 'phase': 'evaluating'})}\n\n"
-            
             scored_listings = []
             evaluated_count = 0
-            
+
             if fb_listings:
-                logger.info("")
-                logger.info("╔" + "═" * 78 + "╗")
-                logger.info(f"║  Processing {len(fb_listings)} FB listings individually...")
-                logger.info("╚" + "═" * 78 + "╝")
-                logger.info("")
-                
+                log_step_sep(logger, f"Processing {len(fb_listings)} FB listings individually")
                 for idx, listing in enumerate(fb_listings, 1):
                     # Check for cancellation before processing each listing
                     if cancelled.is_set():
@@ -454,15 +431,10 @@ def search_deals_stream(request: SearchRequest):
                             cancelled.set()
                             raise
             else:
-                logger.warning("⚠️  Step 2: No listings found - login may be required")
-            
+                log_step_title(logger, "⚠️  Step 2: No listings found - login may be required", level=logging.WARNING)
             if cancelled.is_set():
                 return
-            
-            # Send completion event
-            logger.info(f"{'='*60}")
-            logger.info(f"🎯 Step 5: Search completed - {len(fb_listings)} scanned, {len(scored_listings)} deals found")
-            logger.info(f"{'='*60}")
+            log_step_sep(logger, f"Step 5: Search completed — {len(fb_listings)} scanned, {len(scored_listings)} deals found")
             done_event = {
                 "type": "done",
                 "scannedCount": len(fb_listings),
@@ -478,7 +450,7 @@ def search_deals_stream(request: SearchRequest):
             raise
         except Exception as e:
             # Other errors - still signal cancellation to stop background work
-            logger.error(f"❌ Error in event generator: {e}")
+            log_error_short(logger, f"Error in event generator: {e}")
             cancelled.set()
             raise
     
@@ -495,16 +467,17 @@ def ebay_active_listings(request: EbayStatsRequest):
     Directly call the eBay active listings API.
     Returns average price from active listings.
     """
-    logger.info(f"▶️  Step 1: eBay test request - query='{request.query}', nItems={request.nItems}")
+    log_step_title(logger, f"▶️  Step 1: eBay test request - query='{request.query}', nItems={request.nItems}")
 
     try:
-        stats = get_market_price(
-            search_term=request.query,
-            n_items=request.nItems,
-        )
-        logger.info(f"✅ Step 2: eBay test completed - {stats.sample_size if stats else 0} items analyzed")
+        with wait_status(logger, "eBay test"):
+            stats = get_market_price(
+                search_term=request.query,
+                n_items=request.nItems,
+            )
+        log_step_title(logger, f"✅ Step 2: eBay test completed - {stats.sample_size if stats else 0} items analyzed")
     except Exception as e:
-        logger.error(f"❌ Step 2 failed: {str(e)[:100]}")
+        log_error_short(logger, f"Step 2 failed: {e}")
         return EbayStatsResponse(stats=None)
 
     if not stats:

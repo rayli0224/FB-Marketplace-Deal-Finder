@@ -16,16 +16,11 @@ import time
 
 import requests
 
-from src.utils.colored_logger import setup_colored_logger
+from src.utils.colored_logger import setup_colored_logger, log_error_short
 
-# Configure colored logging with module prefix (auto-detects DEBUG from env/--debug flag)
 logger = setup_colored_logger("ebay_scraper")
-
-# eBay API credentials (get from developer.ebay.com)
 EBAY_APP_ID = os.environ.get("EBAY_APP_ID", "")
 EBAY_CLIENT_SECRET = os.environ.get("EBAY_CLIENT_SECRET", "")
-
-# Check credentials (only log when actually needed)
 
 
 @dataclass
@@ -63,32 +58,23 @@ class EbayBrowseAPIClient:
     BASE_URL = "https://api.ebay.com/buy/browse/v1/item_summary/search"
     
     def __init__(self, app_id: str = None, client_secret: str = None):
-        """
-        Initialize the eBay Browse API client. Uses EBAY_APP_ID and EBAY_CLIENT_SECRET
-        from environment if not provided.
-        """
+        """Initialize with app_id and client_secret, or from EBAY_APP_ID and EBAY_CLIENT_SECRET env if not provided."""
         self.app_id = app_id or EBAY_APP_ID
         self.client_secret = client_secret or EBAY_CLIENT_SECRET
         self._access_token = None
         self._token_expiry = 0
-        
-        if not self.app_id or not self.client_secret:
-            pass
-    
+
     def _get_access_token(self) -> Optional[str]:
         """Get or refresh OAuth 2.0 access token using Client Credentials flow."""
         import base64
-        
-        # Check if token is still valid
         if self._access_token and time.time() < self._token_expiry:
             return self._access_token
         
         if not self.app_id or not self.client_secret:
-            logger.error("❌ eBay credentials missing")
+            logger.error("eBay credentials missing")
             return None
         
         try:
-            # Create Basic auth header
             credentials = f"{self.app_id}:{self.client_secret}"
             encoded_credentials = base64.b64encode(credentials.encode()).decode()
             
@@ -247,7 +233,7 @@ class EbayBrowseAPIClient:
         Get average price from active eBay listings using Browse API.
         Returns PriceStats with average and raw prices, or None if insufficient data.
         """
-        logger.info(f"🔍 Searching eBay for: '{search_term}'")
+        logger.info(f"Searching eBay: '{search_term}'")
         logger.debug("Note: Browse API returns ACTIVE listings only, not sold items")
         
         items = self.search_active_listings(
@@ -259,13 +245,13 @@ class EbayBrowseAPIClient:
         )
         
         if not items or len(items) < 3:
-            logger.warning(f"Not enough data from Browse API: only found {len(items) if items else 0} items (minimum 3 required for statistical significance)")
+            logger.warning(f"Not enough eBay data: {len(items) if items else 0} items (min 3 required)")
             return None
         
         valid_items = [item for item in items if item.get("price", 0) > 0]
         prices = [item["price"] for item in valid_items]
         if len(prices) < 3:
-            logger.error(f"⚠️  Insufficient prices - {len(prices)} valid")
+            log_error_short(logger, f"Insufficient prices: {len(prices)} valid")
             return None
 
         item_summaries = [
@@ -281,7 +267,7 @@ class EbayBrowseAPIClient:
             item_summaries=item_summaries,
         )
         
-        logger.info(f"✅ Found {stats.sample_size} eBay listings | Avg: ${stats.average:.2f}")
+        logger.info(f"Found {stats.sample_size} eBay listings, avg ${stats.average:.2f}")
         return stats
 
 
@@ -296,7 +282,7 @@ def get_market_price(
     or None if failed. headless parameter is deprecated and ignored.
     """
     if not EBAY_APP_ID or not EBAY_CLIENT_SECRET:
-        logger.error("❌ eBay credentials not configured")
+        logger.error("eBay credentials not configured")
         return None
     
     browse_client = EbayBrowseAPIClient()

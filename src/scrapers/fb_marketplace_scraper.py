@@ -17,9 +17,8 @@ from dataclasses import dataclass
 from typing import Optional, List
 from playwright.sync_api import sync_playwright, Browser, Page, BrowserContext, TimeoutError as PlaywrightTimeoutError
 from src.scrapers.utils import random_delay, parse_price, is_valid_listing_price
-from src.utils.colored_logger import setup_colored_logger
+from src.utils.colored_logger import setup_colored_logger, log_step_sep, log_substep_sep, log_data_line, log_step_title, set_step_indent, clear_step_indent, wait_status
 
-# Configure colored logging with module prefix (auto-detects DEBUG from env/--debug flag)
 logger = setup_colored_logger("fb_scraper")
 
 # Default cookie file path
@@ -608,33 +607,30 @@ class FBMarketplaceScraper:
         except Exception:
             return None
     
-    def _extract_listings(self, max_listings: int = 20, on_listing_found=None, extract_descriptions: bool = False) -> List[Listing]:
+    def _extract_listings(
+        self,
+        max_listings: int = 20,
+        on_listing_found=None,
+        extract_descriptions: bool = False,
+    ) -> List[Listing]:
         """
         Extract up to max_listings from the current Marketplace results page.
 
         Scrolls to load content, locates listing DOM elements, then iterates
-        up to max_listings of them and parses each into a Listing. Only valid
-        listings are appended; the callback, if given, is called for each with
-        (listing, current_count). Failures during scroll or parse are ignored
-        and the collected list is returned.
+        up to max_listings of them and parses each into a Listing.
         """
         listings = []
-        
         try:
             self._scroll_page_to_load_content()
             listing_elements = self._find_listing_elements()
-            
             for element in listing_elements[:max_listings]:
                 listing = self._extract_listing_from_element(element, extract_descriptions=extract_descriptions)
                 if listing:
-                    logger.debug(
-                        f"Extracted FB listing:\n"
-                        f"  Title: {listing.title}\n"
-                        f"  Price: ${listing.price:.2f}\n"
-                        f"  Location: {listing.location}\n"
-                        f"  URL: {listing.url}\n"
-                        f"  Description: {listing.description}"
+                    log_data_line(
+                        logger, "Retrieved",
+                        title=listing.title, price=listing.price, location=listing.location, url=listing.url,
                     )
+                    logger.debug(f"Description: {listing.description}")
                     listings.append(listing)
                     if on_listing_found:
                         on_listing_found(listing, len(listings))
@@ -644,39 +640,48 @@ class FBMarketplaceScraper:
         
         return listings
     
-    def search_marketplace(self, query: str, zip_code: str, radius: int = 25, max_listings: int = 20, on_listing_found=None, extract_descriptions: bool = False) -> List[Listing]:
+    def search_marketplace(
+        self,
+        query: str,
+        zip_code: str,
+        radius: int = 25,
+        max_listings: int = 20,
+        on_listing_found=None,
+        extract_descriptions: bool = False,
+        step_sep: Optional[str] = "main",
+    ) -> List[Listing]:
         """
         Run a Marketplace search and return up to max_listings results.
 
-        Sets location from zip_code and radius, performs the search, then extracts
-        listing data from the page. Only the first max_listings elements are
-        processed. If on_listing_found is provided, it is invoked for each
-        successfully extracted listing with (listing, count).
+        step_sep: "main" = main step separator line; "sub" = sub-step separator; None = plain title line only.
         """
-        logger.info("")
-        logger.info("╔" + "═" * 78 + "╗")
-        logger.info(f"║  🔍 Starting FB Marketplace Search")
-        logger.info(f"║  Query: '{query}' | Zip: {zip_code} | Radius: {radius}mi | Max: {max_listings}")
+        title = f"FB Marketplace search — '{query}' | zip={zip_code} | {radius}mi | max={max_listings}"
         if extract_descriptions:
-            logger.info(f"║  ⚠️  Description extraction enabled (slower)")
-        logger.info("╚" + "═" * 78 + "╝")
-        logger.info("")
-        
+            title += " | descriptions on"
+        if step_sep == "main":
+            log_step_sep(logger, title)
+        elif step_sep == "sub":
+            log_substep_sep(logger, title)
+            set_step_indent("  ")
+        else:
+            logger.info(title)
         try:
-            if not self.browser:
-                self._create_browser()
-            
-            self._set_location(zip_code, radius)
-            self._search(query)
-            listings = self._extract_listings(max_listings=max_listings, on_listing_found=on_listing_found, extract_descriptions=extract_descriptions)
-            
-            logger.info("")
-            logger.info(f"✅ Search completed. Found {len(listings)} listings")
-            logger.info("")
+            with wait_status(logger, "Facebook Marketplace search"):
+                if not self.browser:
+                    self._create_browser()
+                self._set_location(zip_code, radius)
+                self._search(query)
+                listings = self._extract_listings(
+                    max_listings=max_listings,
+                    on_listing_found=on_listing_found,
+                    extract_descriptions=extract_descriptions,
+                )
+            log_step_title(logger, f"Search done: {len(listings)} listings")
             return listings
-            
         except Exception:
             raise
+        finally:
+            clear_step_indent()
     
     def close(self):
         """Close the browser and cleanup resources."""
@@ -696,18 +701,22 @@ def search_marketplace(
     headless: bool = None,
     on_listing_found=None,
     extract_descriptions: bool = False,
+    step_sep: Optional[str] = "main",
 ) -> List[Listing]:
     """
     Run a one-off Facebook Marketplace search and return the results.
 
-    Creates a browser scraper, runs the search with the given query, location,
-    and cap on how many listings to extract, then closes the scraper. The
-    on_listing_found callback, if provided, is invoked for each listing as
-    it is found so callers can show progress.
+    step_sep: "main" = main step separator; "sub" = sub-step separator; None = plain title only.
     """
     scraper = FBMarketplaceScraper(headless=headless)
     try:
-        return scraper.search_marketplace(query, zip_code, radius, max_listings=max_listings, on_listing_found=on_listing_found, extract_descriptions=extract_descriptions)
+        return scraper.search_marketplace(
+            query, zip_code, radius,
+            max_listings=max_listings,
+            on_listing_found=on_listing_found,
+            extract_descriptions=extract_descriptions,
+            step_sep=step_sep,
+        )
     finally:
         scraper.close()
 

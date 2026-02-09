@@ -13,10 +13,9 @@ from src.scrapers.fb_marketplace_scraper import Listing
 from src.scrapers.ebay_scraper import get_market_price
 from src.api.deal_calculator import calculate_deal_score
 from src.utils.openai_helpers import generate_ebay_query_for_listing, filter_ebay_results_with_openai
-from src.utils.colored_logger import setup_colored_logger
+from src.utils.colored_logger import setup_colored_logger, log_substep_sep, log_data_line, log_step_title, set_step_indent, clear_step_indent, wait_status
 import statistics
 
-# Configure colored logging with module prefix
 logger = setup_colored_logger("listing_processor")
 
 
@@ -68,129 +67,114 @@ def process_single_listing(
     Returns listing dict with dealScore. When eBay stats are missing or calculation
     fails, dealScore is None so the UI shows "--".
     """
-    progress_info = ""
-    if listing_index is not None and total_listings is not None:
-        progress_info = f"[{listing_index}/{total_listings}] "
-    
-    logger.info("")
-    logger.info("=" * 80)
-    logger.info(f"{progress_info}📋 FB Listing: '{listing.title}'")
-    logger.info(f"   💰 Price: ${listing.price:.2f} | 📍 Location: {listing.location}")
-    logger.info("=" * 80)
-    logger.debug(
-        f"Full FB listing details:\n"
-        f"  Title: {listing.title}\n"
-        f"  Price: ${listing.price:.2f}\n"
-        f"  Location: {listing.location}\n"
-        f"  URL: {listing.url}\n"
-        f"  Description: {listing.description}"
-    )
-    
-    logger.info("🔍 Step 1: Generating eBay search query with OpenAI...")
-    query_result = generate_ebay_query_for_listing(listing, original_query)
-    if not query_result:
-        logger.warning(f"❌ Failed to generate eBay query - including listing with unknown deal score")
-        logger.info("")
-        return _listing_result(listing, None)
+    progress = f"[{listing_index}/{total_listings}] " if (listing_index is not None and total_listings is not None) else ""
+    log_substep_sep(logger, f"{progress}FB listing: {listing.title}")
+    set_step_indent("  ")
+    try:
+        log_data_line(logger, "Data", price=listing.price, location=listing.location, url=listing.url)
+        logger.debug(f"Description: {listing.description}")
 
-    enhanced_query, exclusion_keywords = query_result
-    
-    logger.info(f"🔍 Step 2: Fetching eBay price data for query: '{enhanced_query}'...")
-    ebay_stats = get_market_price(
-        search_term=enhanced_query,
-        n_items=n_items,
-        excluded_keywords=exclusion_keywords,
-    )
-    
-    if not ebay_stats:
-        logger.warning(f"❌ No eBay stats found (insufficient data) - including listing with unknown deal score")
-        logger.info("")
-        return _listing_result(listing, None)
+        log_step_title(logger, "Step 1: Generating eBay query")
+        with wait_status(logger, "eBay query (OpenAI)"):
+            query_result = generate_ebay_query_for_listing(listing, original_query)
+        if not query_result:
+            logger.warning("Failed to generate eBay query — unknown deal score")
+            return _listing_result(listing, None)
 
-    logger.info(f"   ✓ Found {ebay_stats.sample_size} eBay listings | Avg price: ${ebay_stats.average:.2f}")
-    
-    # Filter eBay results to keep only comparable items
-    logger.info("🔍 Step 3: Filtering eBay results with OpenAI to ensure comparability...")
-    ebay_items = getattr(ebay_stats, "item_summaries", None)
-    all_items_with_filter_flag = None
-    if ebay_items:
-        filtered_items = filter_ebay_results_with_openai(listing, ebay_items)
-        if filtered_items is not None:
-            # Create a set of filtered item URLs for quick lookup
-            filtered_urls = {item.get("url", "") for item in filtered_items}
-            
-            # Mark all items with filtered flag
-            all_items_with_filter_flag = [
-                {**item, "filtered": item.get("url", "") not in filtered_urls}
-                for item in ebay_items
-            ]
-            
-            if len(filtered_items) != len(ebay_items):
-                # Recalculate stats from filtered items (even if below minimum)
-                filtered_prices = [item["price"] for item in filtered_items]
-                if len(filtered_prices) >= 3:
-                    ebay_stats.raw_prices = sorted(filtered_prices)
-                    ebay_stats.average = statistics.mean(filtered_prices)
-                    ebay_stats.sample_size = len(filtered_prices)
-                    # Use all items (with filter flags) for display, but stats are from filtered only
-                    ebay_stats.item_summaries = all_items_with_filter_flag
-                    logger.info(f"   ✓ Filtered to {ebay_stats.sample_size} comparable listings | Avg price: ${ebay_stats.average:.2f}")
-                elif len(filtered_prices) > 0:
-                    # Use filtered items even if below minimum - better than using non-comparable items
-                    ebay_stats.raw_prices = sorted(filtered_prices)
-                    ebay_stats.average = statistics.mean(filtered_prices)
-                    ebay_stats.sample_size = len(filtered_prices)
-                    ebay_stats.item_summaries = all_items_with_filter_flag
-                    logger.warning(f"   ⚠️  Filtering reduced items below minimum (3) - using {ebay_stats.sample_size} filtered items (small sample size)")
+        enhanced_query, exclusion_keywords = query_result
+
+        log_step_title(logger, f"Step 2: Fetching eBay prices — '{enhanced_query}'")
+        with wait_status(logger, "eBay prices"):
+            ebay_stats = get_market_price(
+                search_term=enhanced_query,
+                n_items=n_items,
+                excluded_keywords=exclusion_keywords,
+            )
+
+        if not ebay_stats:
+            logger.warning("No eBay stats — unknown deal score")
+            return _listing_result(listing, None)
+        logger.info(f"Found {ebay_stats.sample_size} eBay listings, avg ${ebay_stats.average:.2f}")
+
+        log_step_title(logger, "Step 3: Filtering eBay results for comparability")
+        ebay_items = getattr(ebay_stats, "item_summaries", None)
+        all_items_with_filter_flag = None
+        if ebay_items:
+            with wait_status(logger, "Filtering eBay results (OpenAI)"):
+                filtered_items = filter_ebay_results_with_openai(listing, ebay_items)
+            if filtered_items is not None:
+                # Create a set of filtered item URLs for quick lookup
+                filtered_urls = {item.get("url", "") for item in filtered_items}
+
+                # Mark all items with filtered flag
+                all_items_with_filter_flag = [
+                    {**item, "filtered": item.get("url", "") not in filtered_urls}
+                    for item in ebay_items
+                ]
+
+                if len(filtered_items) != len(ebay_items):
+                    # Recalculate stats from filtered items (even if below minimum)
+                    filtered_prices = [item["price"] for item in filtered_items]
+                    if len(filtered_prices) >= 3:
+                        ebay_stats.raw_prices = sorted(filtered_prices)
+                        ebay_stats.average = statistics.mean(filtered_prices)
+                        ebay_stats.sample_size = len(filtered_prices)
+                        # Use all items (with filter flags) for display, but stats are from filtered only
+                        ebay_stats.item_summaries = all_items_with_filter_flag
+                        logger.info(f"Filtered to {ebay_stats.sample_size} comparable, avg ${ebay_stats.average:.2f}")
+                    elif len(filtered_prices) > 0:
+                        # Use filtered items even if below minimum - better than using non-comparable items
+                        ebay_stats.raw_prices = sorted(filtered_prices)
+                        ebay_stats.average = statistics.mean(filtered_prices)
+                        ebay_stats.sample_size = len(filtered_prices)
+                        ebay_stats.item_summaries = all_items_with_filter_flag
+                        logger.warning(f"Filtering left {ebay_stats.sample_size} items (below minimum 3)")
+                    else:
+                        # No items passed filtering - cannot calculate meaningful stats
+                        # Still show all items with filter flags so user can see what was filtered
+                        logger.warning("All items filtered out — cannot calculate comparison")
+                        # Invalidate stats so deal_score calculation will fail
+                        ebay_stats.average = 0
+                        ebay_stats.sample_size = 0
+                        ebay_stats.raw_prices = []
+                        ebay_stats.item_summaries = all_items_with_filter_flag
                 else:
-                    # No items passed filtering - cannot calculate meaningful stats
-                    # Still show all items with filter flags so user can see what was filtered
-                    logger.warning(f"   ⚠️  All items were filtered out - cannot calculate comparison")
-                    # Invalidate stats so deal_score calculation will fail
-                    ebay_stats.average = 0
-                    ebay_stats.sample_size = 0
-                    ebay_stats.raw_prices = []
+                    logger.debug(f"   All items deemed comparable")
+                    # All items are comparable, mark none as filtered
+                    all_items_with_filter_flag = [
+                        {**item, "filtered": False}
+                        for item in ebay_items
+                    ]
                     ebay_stats.item_summaries = all_items_with_filter_flag
             else:
-                logger.debug(f"   All items deemed comparable")
-                # All items are comparable, mark none as filtered
-                all_items_with_filter_flag = [
-                    {**item, "filtered": False}
-                    for item in ebay_items
-                ]
-                ebay_stats.item_summaries = all_items_with_filter_flag
+                logger.debug("   Filtering unavailable (OpenAI not configured) - using original results")
+                # Mark all items as not filtered when filtering is unavailable
+                if ebay_items:
+                    all_items_with_filter_flag = [
+                        {**item, "filtered": False}
+                        for item in ebay_items
+                    ]
+
+        log_step_title(logger, "Step 4: Calculating deal score")
+        deal_score = calculate_deal_score(listing.price, ebay_stats)
+        if deal_score is None:
+            logger.warning("Could not calculate deal score — unknown")
+            return _listing_result(listing, None)
+
+        logger.info(f"Deal score: {deal_score:.1f}% savings vs eBay avg")
+        if deal_score >= threshold:
+            logger.info(f"Deal: {deal_score:.1f}% (FB ${listing.price:.2f} vs eBay avg ${ebay_stats.average:.2f})")
         else:
-            logger.debug("   Filtering unavailable (OpenAI not configured) - using original results")
-            # Mark all items as not filtered when filtering is unavailable
-            if ebay_items:
-                all_items_with_filter_flag = [
-                    {**item, "filtered": False}
-                    for item in ebay_items
-                ]
-    
-    logger.info("🔍 Step 4: Calculating deal score...")
-    deal_score = calculate_deal_score(listing.price, ebay_stats)
-    
-    if deal_score is None:
-        logger.warning(f"❌ Could not calculate deal score - including listing with unknown deal score")
-        logger.info("")
-        return _listing_result(listing, None)
+            logger.info(f"Below threshold ({deal_score:.1f}% < {threshold}%)")
 
-    logger.info(f"   ✓ Deal score: {deal_score:.1f}% savings vs eBay average")
-    if deal_score >= threshold:
-        logger.info(f"✅ DEAL FOUND! {deal_score:.1f}% savings (FB: ${listing.price:.2f} vs eBay avg: ${ebay_stats.average:.2f})")
-    else:
-        logger.info(f"⏭️  Deal score {deal_score:.1f}% below threshold {threshold}% - including anyway")
-    logger.info("")
-
-    # Use items with filter flags if available, otherwise use original
-    comp_items = all_items_with_filter_flag if all_items_with_filter_flag is not None else getattr(ebay_stats, "item_summaries", None)
-    
-    return _listing_result(
-        listing,
-        deal_score,
-        ebay_search_query=enhanced_query,
-        comp_price=ebay_stats.average,
-        comp_prices=ebay_stats.raw_prices,
-        comp_items=comp_items,
-    )
+        comp_items = all_items_with_filter_flag if all_items_with_filter_flag is not None else getattr(ebay_stats, "item_summaries", None)
+        return _listing_result(
+            listing,
+            deal_score,
+            ebay_search_query=enhanced_query,
+            comp_price=ebay_stats.average,
+            comp_prices=ebay_stats.raw_prices,
+            comp_items=comp_items,
+        )
+    finally:
+        clear_step_indent()
