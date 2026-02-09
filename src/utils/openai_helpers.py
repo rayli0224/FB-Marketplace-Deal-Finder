@@ -30,16 +30,14 @@ OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 def generate_ebay_query_for_listing(
     listing: Listing,
     original_query: str
-) -> Optional[Tuple[str, List[str]]]:
+) -> Optional[Tuple[str, Optional[dict]]]:
     """
-    Generate an optimized eBay search query and exclusion keywords for a specific FB listing.
-    Uses OpenAI to analyze the listing title, price, description, and original query; returns
-    (enhanced_query, exclusion_keywords) or None if the library is missing, API key is unset, or the call fails.
+    Generate an optimized eBay search query and optional Browse API parameters for a FB listing.
+    Returns (enhanced_query, browse_api_parameters) or None if the library is missing, API key is unset, or the call fails.
     """
     if not OpenAI:
         logger.error("OpenAI library not installed — pip install openai")
         return None
-    
     if not OPENAI_API_KEY:
         logger.warning("OPENAI_API_KEY not set — skipping query enhancement")
         return None
@@ -48,7 +46,6 @@ def generate_ebay_query_for_listing(
     
     description_text = listing.description if listing.description else "No description provided"
     prompt = get_query_generation_prompt(
-        original_query=original_query,
         listing_title=listing.title,
         listing_price=listing.price,
         listing_location=listing.location,
@@ -74,7 +71,6 @@ def generate_ebay_query_for_listing(
         }
         
         logger.debug(f"OpenAI API Request - Model: {api_params['model']}, Messages: {json.dumps(messages, indent=2)}")
-        
         response = client.chat.completions.create(
             model=api_params["model"],
             messages=messages,
@@ -93,7 +89,6 @@ def generate_ebay_query_for_listing(
             logger.debug(f"OpenAI API Response - Could not serialize response: {e}")
             logger.debug(f"OpenAI API Response - Raw response: {str(response)}")
         content = response.choices[0].message.content.strip()
-        # Strip markdown code fences if OpenAI wrapped the JSON
         if content.startswith("```json"):
             content = content[7:]
         if content.startswith("```"):
@@ -103,15 +98,13 @@ def generate_ebay_query_for_listing(
         content = content.strip()
         result = json.loads(content)
         enhanced_query = result.get("enhanced_query", original_query)
-        exclusion_keywords = result.get("exclusion_keywords", [])
-        
-        if not isinstance(exclusion_keywords, list):
-            exclusion_keywords = []
-        
-        logger.info(f"eBay query: '{enhanced_query}' | exclusions: {exclusion_keywords}")
-        
-        return (enhanced_query, exclusion_keywords)
-        
+        browse_api_parameters = result.get("browse_api_parameters")
+        if not isinstance(browse_api_parameters, dict):
+            browse_api_parameters = None
+        logger.info(f"eBay query: '{enhanced_query}'")
+        if browse_api_parameters:
+            logger.debug(f"Browse API parameters: {browse_api_parameters}")
+        return (enhanced_query, browse_api_parameters)
     except json.JSONDecodeError as e:
         log_error_short(logger, f"Parse OpenAI response JSON: {e}")
         logger.debug(f"Response content: {content}")
@@ -126,10 +119,8 @@ def filter_ebay_results_with_openai(
     ebay_items: List[dict]
 ) -> Optional[List[dict]]:
     """
-    Filter eBay results to items comparable to the FB listing using OpenAI. Compares each item's
-    title to the listing title, description, and price; drops accessories, different models, and
-    non-comparable items. Returns filtered list (same format as input) or None on failure (caller
-    may fall back to original list).
+    Filter eBay results to items comparable to the FB listing using OpenAI. Returns filtered list
+    (same format as input) or None on failure (caller may fall back to original list).
     """
     if not OpenAI:
         logger.debug("OpenAI library not installed - skipping eBay result filtering")
@@ -176,8 +167,6 @@ def filter_ebay_results_with_openai(
         )
         
         content = response.choices[0].message.content.strip()
-        
-        # Strip markdown code fences if OpenAI wrapped the JSON
         if content.startswith("```json"):
             content = content[7:]
         if content.startswith("```"):
@@ -187,7 +176,6 @@ def filter_ebay_results_with_openai(
         content = content.strip()
         result = json.loads(content)
         comparable_indices = result.get("comparable_indices", [])
-        
         if not isinstance(comparable_indices, list):
             logger.warning("Invalid comparable_indices — skipping filter")
             return ebay_items
