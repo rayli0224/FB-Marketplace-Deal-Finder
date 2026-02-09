@@ -106,6 +106,8 @@ Facebook Marketplace listing:
 eBay search results:
 {ebay_items_text}
 
+Note: Each eBay item includes its title, price, condition (if available), and description (if available). Use all available information to make accurate comparability decisions.
+
 Your task: Identify which eBay items are actually comparable to the FB listing. Internally, reason carefully about each item one by one and provide a short justification for each item's accept/reject decision. 
 
 Search on the web for specific product names as needed in order to inform your decision. Do NOT use images or other visual information to make your decision.
@@ -115,9 +117,10 @@ An eBay item is comparable if and only if:
 1. Core Product Match  
 - It refers to the **same core product/model** (same brand, product line, generation, or series).
 - If the FB listing is **specific** (contains clear identifying tokens such as brand, model, generation, size, capacity, etc.), then:
-  - Those key tokens must also appear in the eBay title or description.
+  - Those key tokens must also appear in the eBay title, description, or item aspects.
+  - Use the detailed description and condition information when available to make more accurate comparisons.
   - If they do not, exclude the item.
-- If the FB listing is **vague or generic**, use best judgment based on overall similarity.
+- If the FB listing is **vague or generic**, use best judgment based on overall similarity, leveraging description details when available.
 
 2. Condition Match  
 - The **condition is similar** (e.g. both new, both used, both working).

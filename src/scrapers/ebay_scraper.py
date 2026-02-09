@@ -56,6 +56,7 @@ class EbayBrowseAPIClient:
     
     TOKEN_URL = "https://api.ebay.com/identity/v1/oauth2/token"
     BASE_URL = "https://api.ebay.com/buy/browse/v1/item_summary/search"
+    GET_ITEM_URL = "https://api.ebay.com/buy/browse/v1/item"
     
     def __init__(self, app_id: str = None, client_secret: str = None):
         """Initialize with app_id and client_secret, or from EBAY_APP_ID and EBAY_CLIENT_SECRET env if not provided."""
@@ -294,6 +295,7 @@ class EbayBrowseAPIClient:
                                 "title": item.get("title", ""),
                                 "price": price_value,
                                 "url": item.get("itemWebUrl", ""),
+                                "itemId": item.get("itemId", ""),
                             })
                     except (KeyError, ValueError, TypeError):
                         continue
@@ -314,6 +316,100 @@ class EbayBrowseAPIClient:
                 break
         
         return all_items[:max_items] if all_items else None
+    
+    def get_item_details(self, item_id: str, marketplace: str = "EBAY_US") -> Optional[dict]:
+        """
+        Fetch detailed item information using eBay Browse API getItem endpoint.
+        
+        Args:
+            item_id: eBay item ID in format v1|#|#
+            marketplace: Marketplace ID (default: EBAY_US)
+        
+        Returns:
+            Dictionary with detailed item information or None if failed
+        """
+        token = self._get_access_token()
+        if not token:
+            return None
+        
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "X-EBAY-C-MARKETPLACE-ID": marketplace,
+        }
+        
+        try:
+            url = f"{self.GET_ITEM_URL}/{item_id}"
+            response = requests.get(url, headers=headers, timeout=30)
+            
+            if response.status_code == 401:
+                # Token expired, refresh and retry once
+                self._access_token = None
+                token = self._get_access_token()
+                if token:
+                    headers["Authorization"] = f"Bearer {token}"
+                    response = requests.get(url, headers=headers, timeout=30)
+            
+            response.raise_for_status()
+            return response.json()
+        except requests.exceptions.RequestException as e:
+            logger.debug(f"Failed to fetch item details for {item_id}: {e}")
+            return None
+    
+    def enhance_items_with_details(
+        self,
+        items: List[dict],
+        marketplace: str = "EBAY_US",
+    ) -> List[dict]:
+        """
+        Enhance item summaries with detailed information from getItem API.
+        
+        Fetches detailed information for each item and merges it into the item dict.
+        Adds fields like description, condition, seller info, etc.
+        
+        Args:
+            items: List of item dicts with at least itemId field
+            marketplace: Marketplace ID (default: EBAY_US)
+        
+        Returns:
+            List of enhanced item dicts with additional fields from getItem
+        """
+        enhanced_items = []
+        success_count = 0
+        
+        for idx, item in enumerate(items):
+            item_id = item.get("itemId")
+            if not item_id:
+                # If no itemId, keep original item without enhancement
+                enhanced_items.append(item)
+                continue
+            
+            details = self.get_item_details(item_id, marketplace)
+            if details:
+                # Merge details into item dict, preserving original fields
+                enhanced_item = {
+                    **item,
+                    "description": details.get("shortDescription", ""),
+                    "condition": details.get("condition", ""),
+                    "conditionId": details.get("conditionId"),
+                    "itemLocation": details.get("itemLocation", {}),
+                    "seller": details.get("seller", {}),
+                    "shippingOptions": details.get("shippingOptions", []),
+                    "returnTerms": details.get("returnTerms", {}),
+                    "itemAspects": details.get("itemAspects", []),
+                }
+                enhanced_items.append(enhanced_item)
+                success_count += 1
+            else:
+                # If getItem failed, keep original item
+                enhanced_items.append(item)
+            
+            # Rate limiting: be nice to the API
+            time.sleep(0.2)
+        
+        if success_count < len(items):
+            logger.debug(f"Successfully enhanced {success_count}/{len(items)} items with getItem details")
+        
+        return enhanced_items
     
     def get_active_listing_stats(
         self,
@@ -343,14 +439,36 @@ class EbayBrowseAPIClient:
             return None
         
         valid_items = [item for item in items if item.get("price", 0) > 0]
-        prices = [item["price"] for item in valid_items]
+        
+        # Enhance items with detailed information from getItem API
+        api_marketplace = browse_api_parameters.get("marketplace", "EBAY_US") if browse_api_parameters else "EBAY_US"
+        logger.debug(f"Enhancing {len(valid_items)} items with detailed information from getItem API")
+        enhanced_items = self.enhance_items_with_details(valid_items, marketplace=api_marketplace)
+        logger.debug(f"Enhanced {len(enhanced_items)} items with detailed information")
+        
+        prices = [item["price"] for item in enhanced_items]
+        
+        # Preserve all enhanced fields for filtering, but keep core fields for UI compatibility
+        item_summaries = []
+        for item in enhanced_items:
+            item_summary = {
+                "title": item.get("title", ""),
+                "price": item["price"],
+                "url": item.get("url", ""),
+            }
+            # Add enhanced fields if available (for filtering)
+            if "description" in item:
+                item_summary["description"] = item.get("description", "")
+            if "condition" in item:
+                item_summary["condition"] = item.get("condition", "")
+            if "conditionId" in item:
+                item_summary["conditionId"] = item.get("conditionId")
+            if "itemAspects" in item:
+                item_summary["itemAspects"] = item.get("itemAspects", [])
+            item_summaries.append(item_summary)
         
         if len(prices) < 3:
             logger.warning(f"Not enough data from Browse API: only found {len(prices)} items (minimum 3 required for statistical significance)")
-            item_summaries = [
-                {"title": item.get("title", ""), "price": item["price"], "url": item.get("url", "")}
-                for item in valid_items
-            ]
             avg_price = statistics.mean(prices) if prices else 0.0
             stats = PriceStats(
                 search_term=search_term,
@@ -360,11 +478,6 @@ class EbayBrowseAPIClient:
                 item_summaries=item_summaries,
             )
             return stats
-
-        item_summaries = [
-            {"title": item.get("title", ""), "price": item["price"], "url": item.get("url", "")}
-            for item in valid_items
-        ]
         # Calculate average price
         stats = PriceStats(
             search_term=search_term,

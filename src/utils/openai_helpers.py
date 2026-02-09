@@ -146,10 +146,26 @@ def filter_ebay_results_with_openai(
     
     client = OpenAI(api_key=OPENAI_API_KEY)
     description_text = listing.description if listing.description else "No description provided"
-    ebay_items_text = "\n".join([
-        f"{i+1}. {item.get('title', '')} - ${item.get('price', 0):.2f}"
-        for i, item in enumerate(ebay_items)
-    ])
+    
+    # Format eBay items with enhanced details (description, condition) if available
+    ebay_items_text_parts = []
+    for i, item in enumerate(ebay_items):
+        title = item.get('title', '')
+        price = item.get('price', 0)
+        description = item.get('description', '')
+        condition = item.get('condition', '')
+        
+        item_text = f"{i+1}. {title} - ${price:.2f}"
+        if condition:
+            item_text += f" | Condition: {condition}"
+        if description:
+            # Truncate description to avoid overly long prompts
+            desc_preview = description[:200] + "..." if len(description) > 200 else description
+            item_text += f"\n   Description: {desc_preview}"
+        
+        ebay_items_text_parts.append(item_text)
+    
+    ebay_items_text = "\n".join(ebay_items_text_parts)
     
     prompt = get_result_filtering_prompt(
         listing_title=listing.title,
