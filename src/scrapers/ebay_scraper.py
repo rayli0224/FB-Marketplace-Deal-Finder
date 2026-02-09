@@ -109,27 +109,24 @@ class EbayBrowseAPIClient:
             
             return self._access_token
             
-        except requests.exceptions.RequestException as e:
-            pass
+        except requests.exceptions.RequestException:
             return None
     
     def search_active_listings(
         self,
         keywords: str,
         max_items: int = 100,
-        excluded_keywords: Optional[List[str]] = None,
         min_price: Optional[float] = None,
         max_price: Optional[float] = None,
         browse_api_parameters: Optional[dict] = None,
     ) -> Optional[List[dict]]:
         """
         Search for active eBay listings using Browse API. Returns ACTIVE listings
-        only (not sold items). Supports exclusion keywords, price filters, and Browse API parameters.
+        only (not sold items). Supports price filters and Browse API parameters.
         
         Args:
             keywords: Search keywords
             max_items: Maximum number of items to fetch
-            excluded_keywords: Keywords to exclude from search
             min_price: Optional minimum price filter
             max_price: Optional maximum price filter
             browse_api_parameters: Optional dict with Browse API parameters (filter, marketplace, sort, limit)
@@ -164,11 +161,8 @@ class EbayBrowseAPIClient:
         else:
             logger.debug("   No Browse API parameters provided, using defaults")
         
-        # Build search query with exclusions
+        # Use keywords directly as search query (eBay API doesn't support exclusion syntax)
         search_query = keywords
-        if excluded_keywords:
-            search_query += " -" + " -".join(excluded_keywords)
-            logger.debug(f"   Search query with exclusions: '{search_query}'")
         
         while len(all_items) < max_items:
             # Calculate how many items we still need
@@ -340,7 +334,6 @@ class EbayBrowseAPIClient:
         self,
         search_term: str,
         n_items: int = 100,
-        excluded_keywords: Optional[List[str]] = None,
         min_price: Optional[float] = None,
         max_price: Optional[float] = None,
         browse_api_parameters: Optional[dict] = None,
@@ -352,7 +345,6 @@ class EbayBrowseAPIClient:
         Args:
             search_term: eBay search query
             n_items: Maximum number of items to fetch
-            excluded_keywords: Keywords to exclude from search
             min_price: Optional minimum price filter
             max_price: Optional maximum price filter
             browse_api_parameters: Optional dict with Browse API parameters (filter, marketplace, sort, limit)
@@ -363,7 +355,6 @@ class EbayBrowseAPIClient:
         items = self.search_active_listings(
             keywords=search_term,
             max_items=n_items,
-            excluded_keywords=excluded_keywords,
             min_price=min_price,
             max_price=max_price,
             browse_api_parameters=browse_api_parameters,
@@ -414,7 +405,6 @@ class EbayBrowseAPIClient:
 def get_market_price(
     search_term: str,
     n_items: int = 100,
-    excluded_keywords: Optional[list[str]] = None,
     headless: bool = None,  # Deprecated, kept for backwards compatibility
     browse_api_parameters: Optional[dict] = None,
 ) -> Optional[PriceStats]:
@@ -425,7 +415,6 @@ def get_market_price(
     Args:
         search_term: eBay search query
         n_items: Maximum number of items to fetch
-        excluded_keywords: Keywords to exclude from search
         headless: Deprecated, ignored
         browse_api_parameters: Optional dict with Browse API parameters (filter, marketplace, sort, limit)
     """
@@ -437,6 +426,5 @@ def get_market_price(
     return browse_client.get_active_listing_stats(
         search_term=search_term,
         n_items=n_items,
-        excluded_keywords=excluded_keywords,
         browse_api_parameters=browse_api_parameters,
     )

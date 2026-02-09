@@ -13,7 +13,6 @@ RESULT_FILTERING_SYSTEM_MESSAGE = "You are an expert at comparing products acros
 
 
 def get_query_generation_prompt(listing_title: str, listing_price: float, listing_location: str, description_text: str) -> str:
-  
     return f"""
 You are an expert at generating highly effective eBay Browse API search queries for product comparison.
 
@@ -26,9 +25,8 @@ Facebook Marketplace listing:
 Your task:
 1. Extract the **core product attributes** that matter for comparison: brand, model, product type, generation, storage/capacity if relevant.
 2. Generate a **high-recall eBay search query** suitable for the Browse API.
-3. Provide **HARD exclusion keywords** to filter out clearly irrelevant listings.
-4. **ALWAYS provide Browse API parameters** to improve search quality. Include:
-   - `filter`: Use ONLY "conditionIds:{{1000}}" for New or "conditionIds:{{3000}}" for Used (no other condition IDs allowed). If the listing is ambiguous, include both "conditionsIds:{{1000|3000}}
+3. **ALWAYS provide Browse API parameters** to improve search quality. Include:
+   - `filter`: Use ONLY "conditionIds:{{1000}}" for New or "conditionIds:{{3000}}" for Used (no other condition IDs allowed). If the listing is ambiguous, include both "conditionIds:{{1000|3000}}"
    - `marketplace`: Use "EBAY_US" unless location indicates otherwise
    - `sort`: Use "bestMatch" for most searches
    - `limit`: Use 50 for good statistical coverage
@@ -43,16 +41,6 @@ Guidelines:
 - Queries should be **short and broad**, ideally 1–3 core terms.
 - Include common alternative spellings or abbreviations if relevant.
 
-### Exclusion Keywords (HARD)
-- for parts
-- broken
-- not working
-- empty box
-- manual
-- packaging
-- lot
-- bundle
-
 ### Examples
 - "Nintendo DS Lite Pink" → "Nintendo DS Lite"
 - "iPhone 13 Pro 256GB cracked screen" → "iPhone 13 Pro"
@@ -60,7 +48,7 @@ Guidelines:
 - "Keychron K7 Wireless Mechanical Keyboard" → "Keychron K7"
 
 ### Browse API Parameter Guidelines
-- **Filter:** ONLY use `conditionIds:{{1000}}` for New or `conditionIds:{{3000}}` for Used. No other condition IDs allowed. If the listing is ambiguous, include both "conditionsIds:{{1000|3000}}.
+- **Filter:** ONLY use `conditionIds:{{1000}}` for New or `conditionIds:{{3000}}` for Used. No other condition IDs allowed. If the listing is ambiguous, include both "conditionIds:{{1000|3000}}"
 - **Marketplace:** Always include. Use "EBAY_US" unless location indicates otherwise.
 - **Sort:** Always include. Use "bestMatch" for most searches.
 - **Limit:** Always include. Use 50 for good statistical coverage.
@@ -70,7 +58,6 @@ Return ONLY a JSON object exactly like this:
 
 {{
   "enhanced_query": "optimized eBay search query",
-  "exclusion_keywords": ["keyword1", "keyword2", "keyword3"],
   "browse_api_parameters": {{
       "filter": "conditionIds:{{1000|3000}}",
       "marketplace": "EBAY_US",

@@ -93,7 +93,7 @@ def process_single_listing(
         logger.info("")
         return _listing_result(listing, None)
 
-    enhanced_query, exclusion_keywords, browse_api_parameters = query_result
+    enhanced_query, browse_api_parameters = query_result
     
     logger.info(f"🔍 Step 2: Fetching eBay price data for query: '{enhanced_query}'...")
     if browse_api_parameters:
@@ -101,7 +101,6 @@ def process_single_listing(
     ebay_stats = get_market_price(
         search_term=enhanced_query,
         n_items=n_items,
-        excluded_keywords=exclusion_keywords,
         browse_api_parameters=browse_api_parameters,
     )
     
