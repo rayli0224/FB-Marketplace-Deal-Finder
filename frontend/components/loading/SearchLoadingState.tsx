@@ -21,11 +21,12 @@ const LOADING_CANCEL_BUTTON_CLASS =
 
 export type SearchPhase = "scraping" | "evaluating";
 
-function formatHeistClock(seconds: number): string {
-  const m = Math.floor(seconds / 60);
-  const s = seconds % 60;
-  return `${m}:${s.toString().padStart(2, "0")}`;
-}
+const PHASE_MESSAGES: Record<SearchPhase, string> = {
+  scraping: "Infiltrating the marketplace for treasures...",
+  evaluating: "Appraising each piece of loot...",
+};
+
+const FALLBACK_PHASE_MESSAGE = "Getting the crew ready...";
 
 export interface SearchLoadingStateProps {
   phase: SearchPhase;
@@ -34,12 +35,11 @@ export interface SearchLoadingStateProps {
   onCancel?: () => void;
 }
 
-const PHASE_MESSAGES: Record<SearchPhase, string> = {
-  scraping: "Infiltrating the marketplace for treasures...",
-  evaluating: "Appraising each piece of loot...",
-};
-
-const FALLBACK_PHASE_MESSAGE = "Getting the crew ready...";
+function formatHeistClock(seconds: number): string {
+  const m = Math.floor(seconds / 60);
+  const s = seconds % 60;
+  return `${m}:${s.toString().padStart(2, "0")}`;
+}
 
 function getPhaseMessage(phase: SearchPhase): string {
   return PHASE_MESSAGES[phase] ?? FALLBACK_PHASE_MESSAGE;

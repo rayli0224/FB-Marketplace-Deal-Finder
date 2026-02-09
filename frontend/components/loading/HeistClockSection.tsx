@@ -7,6 +7,9 @@ import { CONTENT_TEXT_CLASS, CONTENT_TEXT_SM_CLASS } from "@/lib/ui-constants";
 /** Interval in ms for updating the heist clock display. */
 const HEIST_CLOCK_TICK_MS = 1000;
 
+/** Outer bordered box for the standalone heist clock section. */
+const HEIST_CLOCK_SECTION_BOX_CLASS = "border border-border bg-secondary px-6 py-5";
+
 function formatHeistClock(seconds: number): string {
   const m = Math.floor(seconds / 60);
   const s = seconds % 60;
@@ -28,7 +31,7 @@ export function HeistClockSection() {
   }, []);
 
   return (
-    <div className="border border-border bg-secondary px-6 py-5">
+    <div className={HEIST_CLOCK_SECTION_BOX_CLASS}>
       <div className={`flex items-center gap-5 ${CONTENT_TEXT_SM_CLASS}`}>
         <HeistTimerAnimation />
         <span>

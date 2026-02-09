@@ -1,6 +1,6 @@
 /**
  * Generic shared UI styling constants: layout, typography, colors.
- * Reusable across the app. Feature-specific constants live in that feature (e.g. components/loading/constants).
+ * Reusable across the app. Bespoke constants live at the top of the component file that uses them.
  */
 
 /** Full-brightness text; use for all on-screen content so nothing appears faded. */
