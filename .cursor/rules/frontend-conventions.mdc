@@ -1,16 +1,23 @@
 ---
-description: Frontend conventions — imports, component abstraction, and React patterns
+description: Frontend conventions — imports, styling constants, component abstraction, and React patterns
 globs: frontend/**/*.{ts,tsx}
 alwaysApply: false
 ---
 
 # Frontend Conventions
 
+## Styling Constants
+
+- **Share as many UI constants as possible.** Put **generic** style/class strings (layout, typography, colors, borders, reusable component patterns) in a dedicated shared module (e.g. under lib or config). Constants there must be generic—reusable across multiple components or screens. Import and use them instead of duplicating style strings in markup.
+- **Bespoke constants live in the component that uses them.** If a constant is specific to one component (or used only there), define it at the top of that component file. Do not add a separate constants file in the same directory (e.g. no `feature/constants.ts`); keep bespoke constants colocated with the component.
+- **Consistent text and tokens.** Use shared design tokens or style constants for content text (e.g. brightness, size variants) so appearance is consistent; avoid one-off muted or opacity variants for body content unless they are part of the design system.
+- **Group constants by concern.** Put timing/intervals in a module named for that concern (e.g. timing, intervals); put styling in a styling-focused module. Animation or component-specific config (e.g. keyframe names, transform origin) may stay at the top of the component file if used only there.
+- **No generic constants file.** Use specific module names that describe the content (e.g. styling, timing). Do not add a catch-all like `constants.ts`; it creates semantic confusion with the specific modules.
+
 ## Import Paths
 
-- **Always use absolute import paths** with the `@/` prefix
-- Never use relative imports (e.g., `./Component`, `../Component`)
-- Example: `@/components/search-form/MarketplaceSearchForm` instead of `./MarketplaceSearchForm`
+- **Prefer absolute import paths** using the project's path alias (e.g. `@/` or similar)
+- Avoid deep relative imports across many levels; use the alias for clarity and refactor-safety
 
 ## Component Abstraction
 
@@ -21,8 +28,8 @@ alwaysApply: false
 - **UI primitives**: Buttons, modals, toggles, inputs
 
 ### Organization
-- Reusable UI components go in `@/components/ui/`
-- Domain-specific components go in subdirectories (e.g., `@/components/results/`, `@/components/search-form/`)
+- Reusable UI primitives go in a shared UI directory (e.g. `components/ui/` or equivalent)
+- Domain- or feature-specific components go in subdirectories that match the feature
 - Each component should have a single, focused responsibility
 
 ### Structure
@@ -34,4 +41,4 @@ alwaysApply: false
 - Use semantically clear names that describe what the component does or represents
 - Avoid technical jargon or ambiguous terms (e.g., `OverlayPanel` instead of `Modal`)
 - Names should be self-explanatory without needing to read the implementation
-- Prefer descriptive names over generic ones (e.g., `SearchResultsTable` over `Table`)
+- Prefer descriptive names over generic ones so the component's role is clear from the name
