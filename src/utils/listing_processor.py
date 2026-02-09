@@ -96,6 +96,8 @@ def process_single_listing(
         if not ebay_stats:
             logger.warning("No eBay stats — unknown deal score")
             return _listing_result(listing, None)
+        if ebay_stats.sample_size < 3:
+            logger.warning(f"Found only {ebay_stats.sample_size} eBay listing(s) (small sample size)")
         logger.info(f"Found {ebay_stats.sample_size} eBay listings, avg ${ebay_stats.average:.2f}")
 
         log_step_title(logger, "Step 3: Filtering eBay results for comparability")
