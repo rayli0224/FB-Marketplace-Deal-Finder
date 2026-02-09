@@ -96,7 +96,7 @@ function ListingCompsPanel({ listing }: { listing: Listing }) {
                         <span className="text-xs text-red-500/70 shrink-0">(filtered)</span>
                       )}
                       {item.filterReason && (
-                        <span className={`text-xs shrink-0 ${isFiltered ? 'text-red-500/70' : 'text-muted-foreground'}`}>
+                        <span className={`text-xs break-words pl-4 -ml-4 min-w-0 ${isFiltered ? 'text-red-500/70' : 'text-muted-foreground'}`}>
                           — {item.filterReason}
                         </span>
                       )}

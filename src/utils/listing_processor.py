@@ -126,17 +126,27 @@ def process_single_listing(
             filtered_urls = {item.get("url", "") for item in filtered_items}
             
             # Mark all items with filtered flag and attach reasons
+            # If no items passed filtering, all items should be marked as filtered
+            all_items_filtered = len(filtered_items) == 0
+            if all_items_filtered:
+                logger.debug(f"All {len(ebay_items)} items were filtered out - marking all as filtered")
             all_items_with_filter_flag = []
             for i, item in enumerate(ebay_items):
                 item_idx = str(i + 1)  # 1-based index for reasons dict
                 reason = filter_reasons.get(item_idx, "")
+                # Explicitly mark as filtered if all items were filtered, or if this item's URL is not in filtered_urls
+                is_filtered = all_items_filtered or (item.get("url", "") not in filtered_urls)
                 item_with_flags = {
                     **item,
-                    "filtered": item.get("url", "") not in filtered_urls,
+                    "filtered": is_filtered,
                 }
                 if reason:
                     item_with_flags["filterReason"] = reason
                 all_items_with_filter_flag.append(item_with_flags)
+            
+            # Debug: count how many items are marked as filtered
+            filtered_count = sum(1 for item in all_items_with_filter_flag if item.get("filtered") is True)
+            logger.debug(f"Marked {filtered_count} out of {len(all_items_with_filter_flag)} items as filtered")
             
             if len(filtered_items) != len(ebay_items):
                 # Recalculate stats from filtered items (even if below minimum)

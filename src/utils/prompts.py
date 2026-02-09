@@ -108,6 +108,8 @@ eBay search results:
 
 Your task: Identify which eBay items are actually comparable to the FB listing. Internally, reason for longer about each item one by one and provide a short justification for each item's accept/reject decision. 
 
+Search on the web for specific product names as needed in order to inform your decision. Do NOT use images or other visual information to make your decision.
+
 An eBay item is comparable if and only if:
 
 1. Core Product Match  
@@ -136,13 +138,15 @@ An eBay item is comparable if and only if:
   - locked vs unlocked
   - mini vs pro vs max
   - wrong generation
-- Minor differences (color, storage, cosmetic wear) are acceptable only if the core product is clearly the same.
+- Minor differences are acceptable only if the core product is clearly the same.
+  - color (red vs blue vs unspecified color of the same product)
+  - cosmetic wear (scratches, dents, etc.)
 
 5. Size Differences
 - Different sizes are acceptable for clothing items because it doesn't affect price. For example, a size 10 Arc'teryx jacket is comparable to a size 12 Arc'teryx jacket.
 - For other items such as electronics, different sizes are not acceptable. For example, a 13 inch MacBook Pro is not comparable to a 16 inch MacBook Pro due to large price difference.
 
-Be **strict**. If there is ambiguity, missing information, or reasonable doubt, exclude the item.
+Be **strict**. If there is ambiguity, too much missing key information, or reasonable doubt, exclude the item.
 
 Justification must be concise and include the key factors that led to the decision. If relevant, add the exact distinction made between the FB listing and the eBay item in parentheses.
 
@@ -165,10 +169,10 @@ Justification must be concise and include the key factors that led to the decisi
     4. "MacBook Pro 2019 16 inch i9 missing charger" → Accept: "Core product matches, minor missing accessory (charger)"
     5. "MacBook Air 2019 13 inch i5" → Reject: "Different model entirely (MacBook Air vs MacBook Pro)"
 
-- FB Title: "Nike Air Jordan 1 Retro High OG size 10 red"
+- FB Title: "Nike Air Jordan 1 Retro High OG size 10"
   FB Description: "Worn twice, excellent condition."
   eBay Results:
-    1. "Air Jordan 1 Retro High OG size 10 black" → Accept: "Core model matches, color irrelevant (black vs red)"
+    1. "Air Jordan 1 Retro High OG size 10 black" → Accept: "Core model matches, color irrelevant (black vs unknown)"
     2. "Air Jordan 1 Mid OG size 10" → Reject: "Different variant (Mid vs High)"
     3. "Air Jordan 1 Retro High OG size 9" → Accept: "Size class is irrelevant (9 vs 10)"
     4. "Air Jordan 1 Retro High OG size 10 red, new" → Accept: "Same model (Air Jordan 1 Retro High OG) and size (10)"
