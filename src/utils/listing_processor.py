@@ -93,13 +93,16 @@ def process_single_listing(
         logger.info("")
         return _listing_result(listing, None)
 
-    enhanced_query, exclusion_keywords = query_result
+    enhanced_query, exclusion_keywords, browse_api_parameters = query_result
     
     logger.info(f"🔍 Step 2: Fetching eBay price data for query: '{enhanced_query}'...")
+    if browse_api_parameters:
+        logger.info(f"   Using Browse API parameters from OpenAI")
     ebay_stats = get_market_price(
         search_term=enhanced_query,
         n_items=n_items,
         excluded_keywords=exclusion_keywords,
+        browse_api_parameters=browse_api_parameters,
     )
     
     if not ebay_stats:
@@ -107,6 +110,8 @@ def process_single_listing(
         logger.info("")
         return _listing_result(listing, None)
 
+    if ebay_stats.sample_size < 3:
+        logger.warning(f"   ⚠️  Found only {ebay_stats.sample_size} eBay listing(s) (small sample size)")
     logger.info(f"   ✓ Found {ebay_stats.sample_size} eBay listings | Avg price: ${ebay_stats.average:.2f}")
     
     # Filter eBay results to keep only comparable items
@@ -167,14 +172,27 @@ def process_single_listing(
                     {**item, "filtered": False}
                     for item in ebay_items
                 ]
+                # Update ebay_stats to include filter flags
+                ebay_stats.item_summaries = all_items_with_filter_flag
     
     logger.info("🔍 Step 4: Calculating deal score...")
     deal_score = calculate_deal_score(listing.price, ebay_stats)
     
+    # Use items with filter flags if available, otherwise use original
+    comp_items = all_items_with_filter_flag if all_items_with_filter_flag is not None else getattr(ebay_stats, "item_summaries", None)
+    
     if deal_score is None:
         logger.warning(f"❌ Could not calculate deal score - including listing with unknown deal score")
         logger.info("")
-        return _listing_result(listing, None)
+        # Still include eBay data for transparency even when deal score can't be calculated
+        return _listing_result(
+            listing,
+            None,
+            ebay_search_query=enhanced_query,
+            comp_price=ebay_stats.average if ebay_stats.average > 0 else None,
+            comp_prices=ebay_stats.raw_prices if ebay_stats.raw_prices else None,
+            comp_items=comp_items,
+        )
 
     logger.info(f"   ✓ Deal score: {deal_score:.1f}% savings vs eBay average")
     if deal_score >= threshold:
@@ -182,9 +200,6 @@ def process_single_listing(
     else:
         logger.info(f"⏭️  Deal score {deal_score:.1f}% below threshold {threshold}% - including anyway")
     logger.info("")
-
-    # Use items with filter flags if available, otherwise use original
-    comp_items = all_items_with_filter_flag if all_items_with_filter_flag is not None else getattr(ebay_stats, "item_summaries", None)
     
     return _listing_result(
         listing,

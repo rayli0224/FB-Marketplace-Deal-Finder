@@ -33,21 +33,23 @@ OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 def generate_ebay_query_for_listing(
     listing: Listing,
     original_query: str
-) -> Optional[Tuple[str, List[str]]]:
+) -> Optional[Tuple[str, List[str], Optional[dict]]]:
     """
     Generate an optimized eBay search query and exclusion keywords for a specific FB listing.
     
     Uses OpenAI to analyze the listing title, price, description, and original search query to create
     a targeted eBay search query that will find similar items. Also generates exclusion
-    keywords to filter out accessories, broken items, and unrelated listings.
+    keywords to filter out accessories, broken items, and unrelated listings. May also return
+    Browse API parameters (filter, marketplace, sort, limit) for improved search quality.
     
     Args:
         listing: Facebook Marketplace listing with title, price, location, url, and description
         original_query: The original user search query (e.g., "nintendo ds")
         
     Returns:
-        Tuple of (enhanced_ebay_query, exclusion_keywords) if successful, None if failed.
-        Example: ("nintendo ds lite", ["case", "pen", "stylus", "broken"])
+        Tuple of (enhanced_ebay_query, exclusion_keywords, browse_api_parameters) if successful, None if failed.
+        browse_api_parameters is a dict with optional keys: filter, marketplace, sort, limit
+        Example: ("nintendo ds lite", ["case", "pen", "stylus", "broken"], {"filter": "price:[25..75]", "marketplace": "EBAY_US"})
         
     Example:
         >>> listing = Listing(
@@ -58,9 +60,10 @@ def generate_ebay_query_for_listing(
         ...     description="Great condition, comes with charger and stylus"
         ... )
         >>> result = generate_ebay_query_for_listing(listing, "nintendo ds")
-        >>> enhanced_query, exclusions = result
+        >>> enhanced_query, exclusions, api_params = result
         >>> print(enhanced_query)  # "nintendo ds lite"
         >>> print(exclusions)  # ["case", "pen", "stylus", "broken", "for parts"]
+        >>> print(api_params)  # {"filter": "price:[25..75]", "marketplace": "EBAY_US", "sort": "bestMatch", "limit": 50}
     """
     if not OpenAI:
         logger.error("OpenAI library not installed. Install with: pip install openai")
@@ -74,7 +77,6 @@ def generate_ebay_query_for_listing(
     
     description_text = listing.description if listing.description else "No description provided"
     prompt = get_query_generation_prompt(
-        original_query=original_query,
         listing_title=listing.title,
         listing_price=listing.price,
         listing_location=listing.location,
@@ -99,7 +101,17 @@ def generate_ebay_query_for_listing(
             "max_tokens": 200,
         }
         
-        logger.debug(f"OpenAI API Request - Model: {api_params['model']}, Messages: {json.dumps(messages, indent=2)}")
+        # Log the prompt being sent
+        logger.debug(f"📝 Prompt sent to OpenAI (model: {api_params['model']}):")
+        logger.debug(f"   System message: {messages[0]['content']}")
+        logger.debug(f"   User prompt ({len(messages[1]['content'])} chars):")
+        # Log the full user prompt, but break it into readable chunks
+        user_prompt = messages[1]['content']
+        prompt_lines = user_prompt.split('\n')
+        for line in prompt_lines[:10]:  # Show first 10 lines
+            logger.debug(f"      {line}")
+        if len(prompt_lines) > 10:
+            logger.debug(f"      ... ({len(prompt_lines) - 10} more lines)")
         
         response = client.chat.completions.create(
             model=api_params["model"],
@@ -116,7 +128,13 @@ def generate_ebay_query_for_listing(
                 response_dict = response.dict()
             else:
                 response_dict = {"id": getattr(response, 'id', None), "model": getattr(response, 'model', None), "choices": [{"message": {"content": response.choices[0].message.content if response.choices else None}}]}
-            logger.debug(f"OpenAI API Response - Full response: {json.dumps(response_dict, indent=2)}")
+            
+            # Access dictionary with bracket notation, not dot notation
+            if response_dict and "choices" in response_dict and len(response_dict["choices"]) > 0:
+                content = response_dict["choices"][0]["message"]["content"]
+                logger.debug(f"OpenAI API Response - Response content: {json.dumps(content, indent=2)}")
+            else:
+                logger.debug(f"OpenAI API Response - Response structure: {json.dumps(response_dict, indent=2)}")
         except Exception as e:
             logger.debug(f"OpenAI API Response - Could not serialize response: {e}")
             logger.debug(f"OpenAI API Response - Raw response: {str(response)}")
@@ -138,13 +156,31 @@ def generate_ebay_query_for_listing(
         
         enhanced_query = result.get("enhanced_query", original_query)
         exclusion_keywords = result.get("exclusion_keywords", [])
+        browse_api_parameters = result.get("browse_api_parameters")
         
         if not isinstance(exclusion_keywords, list):
             exclusion_keywords = []
         
-        logger.info(f"Generated eBay query: '{enhanced_query}' | Exclusions: {exclusion_keywords}")
+        if not isinstance(browse_api_parameters, dict):
+            browse_api_parameters = None
         
-        return (enhanced_query, exclusion_keywords)
+        logger.info(f"✅ Generated eBay query: '{enhanced_query}'")
+        logger.debug(f"   Exclusions: {exclusion_keywords}")
+        if browse_api_parameters:
+            logger.debug(f"   Browse API parameters:")
+            if browse_api_parameters.get("filter"):
+                logger.debug(f"      Filter: {browse_api_parameters['filter']}")
+            if browse_api_parameters.get("marketplace"):
+                logger.debug(f"      Marketplace: {browse_api_parameters['marketplace']}")
+            if browse_api_parameters.get("sort"):
+                logger.debug(f"      Sort: {browse_api_parameters['sort']}")
+            if browse_api_parameters.get("limit"):
+                logger.debug(f"      Limit: {browse_api_parameters['limit']}")
+            logger.debug(f"   Full browse_api_parameters: {json.dumps(browse_api_parameters, indent=2)}")
+        else:
+            logger.debug("   No browse_api_parameters provided by OpenAI")
+        
+        return (enhanced_query, exclusion_keywords, browse_api_parameters)
         
     except json.JSONDecodeError as e:
         logger.error(f"Failed to parse OpenAI response as JSON: {e}")

@@ -12,23 +12,11 @@ QUERY_GENERATION_SYSTEM_MESSAGE = "You are an expert at creating precise search 
 RESULT_FILTERING_SYSTEM_MESSAGE = "You are an expert at comparing products across marketplaces. Always respond with valid JSON only."
 
 
-def get_query_generation_prompt(original_query: str, listing_title: str, listing_price: float, listing_location: str, description_text: str) -> str:
-    """
-    Generate the prompt for creating an optimized eBay search query from a FB listing.
-    
-    Args:
-        original_query: The original user search query
-        listing_title: Facebook Marketplace listing title
-        listing_price: Listing price
-        listing_location: Listing location
-        description_text: Listing description (or "No description provided")
-    
-    Returns:
-        Formatted prompt string
-    """
-    return f"""You are helping to find accurate price comparisons on eBay for a Facebook Marketplace listing.
+def get_query_generation_prompt(listing_title: str, listing_price: float, listing_location: str, description_text: str) -> str:
+  
+    return f"""
+You are an expert at generating highly effective eBay Browse API search queries for product comparison.
 
-Original user search query: "{original_query}"
 Facebook Marketplace listing:
 - Title: "{listing_title}"
 - Price: ${listing_price:.2f}
@@ -36,48 +24,61 @@ Facebook Marketplace listing:
 - Description: "{description_text}"
 
 Your task:
-1. Generate an optimized eBay search query that will find similar items to this listing.
-2. Provide exclusion keywords to filter out unrelated listings (accessories, incompatible items, etc).
+1. Extract the **core product attributes** that matter for comparison: brand, model, product type, generation, storage/capacity if relevant.
+2. Generate a **high-recall eBay search query** suitable for the Browse API.
+3. Provide **HARD exclusion keywords** to filter out clearly irrelevant listings.
+4. **ALWAYS provide Browse API parameters** to improve search quality. Include:
+   - `filter`: Use ONLY "conditionIds:{{1000}}" for New or "conditionIds:{{3000}}" for Used (no other condition IDs allowed). If the listing is ambiguous, include both "conditionsIds:{{1000|3000}}
+   - `marketplace`: Use "EBAY_US" unless location indicates otherwise
+   - `sort`: Use "bestMatch" for most searches
+   - `limit`: Use 50 for good statistical coverage
 
-Abstraction rules:
+Guidelines:
 
-PRESERVE (always include if present):
-- Brand
-- Product type
-- Model / product line
-- Functional condition (e.g. "for parts", "broken", "not working", "refurbished", "new")
+### Query Construction (High Recall)
+- Include **brand, model, and product type**.
+- Include **generation / year / variant** only if it strongly differentiates the product.
+- **Exclude** color, cosmetic descriptors, minor accessories, bundle/lot details.
+- Avoid condition terms (used, new, broken) in the query—they can be applied as a filter.
+- Queries should be **short and broad**, ideally 1–3 core terms.
+- Include common alternative spellings or abbreviations if relevant.
 
-INCLUDE ONLY IF THEY MATERIALLY AFFECT PRICE:
-- Storage / capacity (e.g. 128GB, 1TB)
-- Pro/Max/Ultra variants
-- Generation / year
+### Exclusion Keywords (HARD)
+- for parts
+- broken
+- not working
+- empty box
+- manual
+- packaging
+- lot
+- bundle
 
-IGNORE OR GENERALIZE:
-- Color
-- Cosmetic descriptors
-- Seller adjectives (rare, amazing, mint)
-- Minor accessories
-- Bundle details unless they dominate value
-
-Important:
-- The goal is to find many comparable items, not exact matches.
-- Do NOT make the query overly specific.
-- However, if the listing is for parts / broken, the query MUST reflect that.
-- The enhanced_query should typically be 3–6 tokens long, unless functional condition requires more.
-
-Focus on the MAIN PRODUCT, not accessories.
-Examples:
+### Examples
 - "Nintendo DS Lite Pink" → "Nintendo DS Lite"
-- "iPhone 13 Pro 256GB cracked screen" → "iPhone 13 Pro for parts"
+- "iPhone 13 Pro 256GB cracked screen" → "iPhone 13 Pro"
 - "MacBook Pro 2019 16 inch i9" → "MacBook Pro 2019"
+- "Keychron K7 Wireless Mechanical Keyboard" → "Keychron K7"
 
-Return your response as a JSON object with exactly this structure:
+### Browse API Parameter Guidelines
+- **Filter:** ONLY use `conditionIds:{{1000}}` for New or `conditionIds:{{3000}}` for Used. No other condition IDs allowed. If the listing is ambiguous, include both "conditionsIds:{{1000|3000}}.
+- **Marketplace:** Always include. Use "EBAY_US" unless location indicates otherwise.
+- **Sort:** Always include. Use "bestMatch" for most searches.
+- **Limit:** Always include. Use 50 for good statistical coverage.
+
+### Output Format
+Return ONLY a JSON object exactly like this:
+
 {{
   "enhanced_query": "optimized eBay search query",
-  "exclusion_keywords": ["keyword1", "keyword2", "keyword3"]
+  "exclusion_keywords": ["keyword1", "keyword2", "keyword3"],
+  "browse_api_parameters": {{
+      "filter": "conditionIds:{{1000|3000}}",
+      "marketplace": "EBAY_US",
+      "sort": "bestMatch",
+      "limit": 50
+  }}
 }}
-
-Only return the JSON object, no other text."""
+"""
 
 
 def get_result_filtering_prompt(listing_title: str, listing_price: float, description_text: str, ebay_items_text: str) -> str:
