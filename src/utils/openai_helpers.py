@@ -177,7 +177,6 @@ def generate_ebay_query_for_listing(
                 logger.debug(f"      Sort: {browse_api_parameters['sort']}")
             if browse_api_parameters.get("limit"):
                 logger.debug(f"      Limit: {browse_api_parameters['limit']}")
-            logger.debug(f"   Full browse_api_parameters: {json.dumps(browse_api_parameters, indent=2)}")
         else:
             logger.debug("   No browse_api_parameters provided by OpenAI")
         
@@ -195,7 +194,7 @@ def generate_ebay_query_for_listing(
 def filter_ebay_results_with_openai(
     listing: Listing,
     ebay_items: List[dict]
-) -> Optional[List[dict]]:
+) -> Optional[Tuple[List[dict], dict]]:
     """
     Filter eBay search results to keep only items comparable to the Facebook Marketplace listing.
     
@@ -204,8 +203,9 @@ def filter_ebay_results_with_openai(
     not comparable. This improves price comparison accuracy by ensuring only truly similar items
     are used for calculating the market average.
     
-    Returns filtered list of eBay items (same format: [{title, price, url}, ...]) or None if
-    filtering fails (caller should fall back to original items).
+    Returns tuple of (filtered list of eBay items, reasons dict) or None if filtering fails.
+    The reasons dict maps 1-based item indices to short reason strings explaining accept/reject decisions.
+    Format: [{title, price, url}, ...], {"1": "reason", "2": "reason", ...}
     """
     if not OpenAI:
         logger.debug("OpenAI library not installed - skipping eBay result filtering")
@@ -216,7 +216,7 @@ def filter_ebay_results_with_openai(
         return None
     
     if not ebay_items or len(ebay_items) == 0:
-        return ebay_items
+        return (ebay_items, {})
     
     client = OpenAI(api_key=OPENAI_API_KEY)
     
@@ -250,8 +250,40 @@ def filter_ebay_results_with_openai(
             model="gpt-4o-mini",
             messages=messages,
             temperature=0.2,
-            max_tokens=500,
+            max_tokens=1000,
         )
+        
+        # Log full response for debugging
+        try:
+            if hasattr(response, 'model_dump'):
+                response_dict = response.model_dump()
+            elif hasattr(response, 'dict'):
+                response_dict = response.dict()
+            else:
+                response_dict = {
+                    "id": getattr(response, 'id', None),
+                    "model": getattr(response, 'model', None),
+                    "choices": [{
+                        "message": {
+                            "content": response.choices[0].message.content if response.choices else None
+                        }
+                    }]
+                }
+            
+            # Access dictionary with bracket notation, not dot notation
+            if response_dict and "choices" in response_dict and len(response_dict["choices"]) > 0:
+                raw_content = response_dict["choices"][0]["message"]["content"]
+                # Truncate to first 5 lines for logging
+                content_lines = raw_content.split('\n')
+                truncated_content = '\n'.join(content_lines[:5])
+                if len(content_lines) > 5:
+                    truncated_content += f"\n... ({len(content_lines) - 5} more lines)"
+                logger.debug(f"OpenAI Filtering Response - Raw content (first 5 lines):\n{truncated_content}")
+            else:
+                logger.debug(f"OpenAI Filtering Response - Response structure: {json.dumps(response_dict, indent=2)}")
+        except Exception as e:
+            logger.debug(f"OpenAI Filtering Response - Could not serialize response: {e}")
+            logger.debug(f"OpenAI Filtering Response - Raw response: {str(response)}")
         
         content = response.choices[0].message.content.strip()
         
@@ -267,10 +299,15 @@ def filter_ebay_results_with_openai(
         # Parse JSON
         result = json.loads(content)
         comparable_indices = result.get("comparable_indices", [])
+        reasons = result.get("reasons", {})
         
         if not isinstance(comparable_indices, list):
             logger.warning("OpenAI returned invalid comparable_indices format - skipping filter")
-            return ebay_items
+            return None
+        
+        if not isinstance(reasons, dict):
+            logger.debug("OpenAI did not return reasons dict - continuing without reasons")
+            reasons = {}
         
         # Filter items (indices are 1-based, convert to 0-based)
         filtered_items = [
@@ -285,7 +322,13 @@ def filter_ebay_results_with_openai(
         else:
             logger.debug(f"All {len(ebay_items)} eBay items were deemed comparable")
         
-        return filtered_items if filtered_items else ebay_items
+        # Log reasons for debugging
+        if reasons:
+            logger.debug(f"Received reasons for {len(reasons)} items. First 3 reasons:")
+            for idx, reason in list(reasons.items())[:3]:  # Log first 3 reasons
+                logger.debug(f"   Item {idx}: {reason}")
+        
+        return (filtered_items if filtered_items else ebay_items, reasons)
         
     except json.JSONDecodeError as e:
         logger.warning(f"Failed to parse OpenAI filter response as JSON: {e} - using original items")

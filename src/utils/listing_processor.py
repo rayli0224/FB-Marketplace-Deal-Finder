@@ -118,16 +118,25 @@ def process_single_listing(
     ebay_items = getattr(ebay_stats, "item_summaries", None)
     all_items_with_filter_flag = None
     if ebay_items:
-        filtered_items = filter_ebay_results_with_openai(listing, ebay_items)
-        if filtered_items is not None:
+        filter_result = filter_ebay_results_with_openai(listing, ebay_items)
+        if filter_result is not None:
+            filtered_items, filter_reasons = filter_result
+            logger.debug(f"Received filter_reasons dict with {len(filter_reasons)} entries")
             # Create a set of filtered item URLs for quick lookup
             filtered_urls = {item.get("url", "") for item in filtered_items}
             
-            # Mark all items with filtered flag
-            all_items_with_filter_flag = [
-                {**item, "filtered": item.get("url", "") not in filtered_urls}
-                for item in ebay_items
-            ]
+            # Mark all items with filtered flag and attach reasons
+            all_items_with_filter_flag = []
+            for i, item in enumerate(ebay_items):
+                item_idx = str(i + 1)  # 1-based index for reasons dict
+                reason = filter_reasons.get(item_idx, "")
+                item_with_flags = {
+                    **item,
+                    "filtered": item.get("url", "") not in filtered_urls,
+                }
+                if reason:
+                    item_with_flags["filterReason"] = reason
+                all_items_with_filter_flag.append(item_with_flags)
             
             if len(filtered_items) != len(ebay_items):
                 # Recalculate stats from filtered items (even if below minimum)
@@ -157,11 +166,15 @@ def process_single_listing(
                     ebay_stats.item_summaries = all_items_with_filter_flag
             else:
                 logger.debug(f"   All items deemed comparable")
-                # All items are comparable, mark none as filtered
-                all_items_with_filter_flag = [
-                    {**item, "filtered": False}
-                    for item in ebay_items
-                ]
+                # All items are comparable, mark none as filtered but attach reasons
+                all_items_with_filter_flag = []
+                for i, item in enumerate(ebay_items):
+                    item_idx = str(i + 1)  # 1-based index for reasons dict
+                    reason = filter_reasons.get(item_idx, "")
+                    item_with_flags = {**item, "filtered": False}
+                    if reason:
+                        item_with_flags["filterReason"] = reason
+                    all_items_with_filter_flag.append(item_with_flags)
                 ebay_stats.item_summaries = all_items_with_filter_flag
         else:
             logger.debug("   Filtering unavailable (OpenAI not configured) - using original results")

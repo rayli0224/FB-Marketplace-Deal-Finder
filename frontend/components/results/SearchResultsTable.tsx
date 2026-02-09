@@ -8,6 +8,7 @@ export interface CompItem {
   price: number;
   url: string;
   filtered?: boolean;  // True if this item was filtered out as non-comparable
+  filterReason?: string;  // Short reason explaining why item was accepted or rejected
 }
 
 export interface Listing {
@@ -93,6 +94,11 @@ function ListingCompsPanel({ listing }: { listing: Listing }) {
                       </span>
                       {isFiltered && (
                         <span className="text-xs text-red-500/70 shrink-0">(filtered)</span>
+                      )}
+                      {item.filterReason && (
+                        <span className={`text-xs shrink-0 ${isFiltered ? 'text-red-500/70' : 'text-muted-foreground'}`}>
+                          — {item.filterReason}
+                        </span>
                       )}
                     </li>
                   );
