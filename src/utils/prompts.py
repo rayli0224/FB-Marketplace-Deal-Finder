@@ -19,6 +19,7 @@ You are an expert at generating highly effective eBay Browse API search queries 
 
 Facebook Marketplace listing:
 - Title: "{listing_title}"
+- Price: ${listing_price:.2f}
 - Location: {listing_location}
 - Description: "{description_text}"
 
@@ -60,7 +61,7 @@ Guidelines:
 - "Keychron K7 Wireless Mechanical Keyboard" → "Keychron K7"
 
 ### Browse API Parameter Guidelines
-- **Condition:** Prefer to include `New` or `Used` if the listing clearly implies condition.
+- **Filter (ConditionIDs):** Prefer to include `New` or `Used` if the listing clearly implies condition. Use code 1000 for items clearly indicated as new. Use code 3000 for items clearly indicated as used.
 - **Marketplace:** Use the US marketplace unless location indicates otherwise.
 - **Sort:** Recommend `bestMatch`.
 - **Limit:** Recommend 50 if you want enough items for statistics.
@@ -72,6 +73,7 @@ Return ONLY a JSON object exactly like this:
   "enhanced_query": "optimized eBay search query",
   "exclusion_keywords": ["keyword1", "keyword2", "keyword3"],
   "browse_api_parameters": {{
+      filter=conditionIds:{{3000}},
       "marketplace": "EBAY_US",
       "sort": "bestMatch",
       "limit": 50
