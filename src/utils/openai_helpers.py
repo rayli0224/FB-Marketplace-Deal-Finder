@@ -374,7 +374,7 @@ def filter_ebay_results_with_openai(
             for idx, reason in list(reasons.items())[:3]:  # Log first 3 reasons
                 logger.debug(f"   Item {idx}: {reason}")
         
-        return (filtered_items if filtered_items else ebay_items, reasons)
+        return (filtered_items, reasons)
         
     except json.JSONDecodeError as e:
         # This should not happen now since we handle it above, but keep as fallback

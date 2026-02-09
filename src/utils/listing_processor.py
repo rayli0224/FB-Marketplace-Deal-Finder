@@ -135,7 +135,12 @@ def process_single_listing(
                 item_idx = str(i + 1)  # 1-based index for reasons dict
                 reason = filter_reasons.get(item_idx, "")
                 # Explicitly mark as filtered if all items were filtered, or if this item's URL is not in filtered_urls
-                is_filtered = all_items_filtered or (item.get("url", "") not in filtered_urls)
+                if all_items_filtered:
+                    # When all items are filtered, mark all as filtered
+                    is_filtered = True
+                else:
+                    # Otherwise, check if this specific item's URL is in the filtered set
+                    is_filtered = item.get("url", "") not in filtered_urls
                 item_with_flags = {
                     **item,
                     "filtered": is_filtered,
@@ -147,8 +152,25 @@ def process_single_listing(
             # Debug: count how many items are marked as filtered
             filtered_count = sum(1 for item in all_items_with_filter_flag if item.get("filtered") is True)
             logger.debug(f"Marked {filtered_count} out of {len(all_items_with_filter_flag)} items as filtered")
+            if all_items_filtered and filtered_count != len(all_items_with_filter_flag):
+                logger.warning(f"BUG: All items should be filtered but only {filtered_count} out of {len(all_items_with_filter_flag)} are marked as filtered!")
+                # Fix it immediately
+                for item in all_items_with_filter_flag:
+                    item["filtered"] = True
             
-            if len(filtered_items) != len(ebay_items):
+            # Handle the case where all items were filtered out first
+            if all_items_filtered:
+                # No items passed filtering - cannot calculate meaningful stats
+                logger.warning(f"   ⚠️  All items were filtered out - cannot calculate comparison")
+                # Invalidate stats so deal_score calculation will fail
+                ebay_stats.average = 0
+                ebay_stats.sample_size = 0
+                ebay_stats.raw_prices = []
+                # Ensure all items are marked as filtered
+                for item in all_items_with_filter_flag:
+                    item["filtered"] = True
+                ebay_stats.item_summaries = all_items_with_filter_flag
+            elif len(filtered_items) != len(ebay_items):
                 # Recalculate stats from filtered items (even if below minimum)
                 filtered_prices = [item["price"] for item in filtered_items]
                 if len(filtered_prices) >= 3:
@@ -166,17 +188,22 @@ def process_single_listing(
                     ebay_stats.item_summaries = all_items_with_filter_flag
                     logger.warning(f"   ⚠️  Filtering reduced items below minimum (3) - using {ebay_stats.sample_size} filtered items (small sample size)")
                 else:
-                    # No items passed filtering - cannot calculate meaningful stats
-                    # Still show all items with filter flags so user can see what was filtered
-                    logger.warning(f"   ⚠️  All items were filtered out - cannot calculate comparison")
-                    # Invalidate stats so deal_score calculation will fail
+                    # This should not happen if all_items_filtered check above works, but handle it as fallback
+                    logger.warning(f"   ⚠️  No items passed filtering (fallback case)")
                     ebay_stats.average = 0
                     ebay_stats.sample_size = 0
                     ebay_stats.raw_prices = []
+                    # Ensure all items are marked as filtered
+                    for item in all_items_with_filter_flag:
+                        item["filtered"] = True
                     ebay_stats.item_summaries = all_items_with_filter_flag
             else:
+                # This branch only runs when len(filtered_items) == len(ebay_items) AND all_items_filtered is False
+                # This means all items passed filtering (all are comparable)
                 logger.debug(f"   All items deemed comparable")
                 # All items are comparable, mark none as filtered but attach reasons
+                # Use the already-built all_items_with_filter_flag (which should have filtered: False for all)
+                # but rebuild to ensure consistency
                 all_items_with_filter_flag = []
                 for i, item in enumerate(ebay_items):
                     item_idx = str(i + 1)  # 1-based index for reasons dict
