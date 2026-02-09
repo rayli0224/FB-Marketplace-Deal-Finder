@@ -109,8 +109,7 @@ class EbayBrowseAPIClient:
             
             return self._access_token
             
-        except requests.exceptions.RequestException as e:
-            pass
+        except requests.exceptions.RequestException:
             return None
     
     def search_active_listings(

@@ -13,7 +13,6 @@ RESULT_FILTERING_SYSTEM_MESSAGE = "You are an expert at comparing products acros
 
 
 def get_query_generation_prompt(listing_title: str, listing_price: float, listing_location: str, description_text: str) -> str:
-  
     return f"""
 You are an expert at generating highly effective eBay Browse API search queries for product comparison.
 
@@ -27,7 +26,7 @@ Your task:
 1. Extract the **core product attributes** that matter for comparison: brand, model, product type, generation, storage/capacity if relevant.
 2. Generate a **high-recall eBay search query** suitable for the Browse API.
 3. **ALWAYS provide Browse API parameters** to improve search quality. Include:
-   - `filter`: Use ONLY "conditionIds:{{1000}}" for New or "conditionIds:{{3000}}" for Used (no other condition IDs allowed). If the listing is ambiguous, include both "conditionsIds:{{1000|3000}}
+   - `filter`: Use ONLY "conditionIds:{{1000}}" for New or "conditionIds:{{3000}}" for Used (no other condition IDs allowed). If the listing is ambiguous, include both "conditionIds:{{1000|3000}}"
    - `marketplace`: Use "EBAY_US" unless location indicates otherwise
    - `sort`: Use "bestMatch" for most searches
    - `limit`: Use 50 for good statistical coverage
@@ -49,7 +48,7 @@ Guidelines:
 - "Keychron K7 Wireless Mechanical Keyboard" → "Keychron K7"
 
 ### Browse API Parameter Guidelines
-- **Filter:** ONLY use `conditionIds:{{1000}}` for New or `conditionIds:{{3000}}` for Used. No other condition IDs allowed. If the listing is ambiguous, include both "conditionsIds:{{1000|3000}}.
+- **Filter:** ONLY use `conditionIds:{{1000}}` for New or `conditionIds:{{3000}}` for Used. No other condition IDs allowed. If the listing is ambiguous, include both "conditionIds:{{1000|3000}}"
 - **Marketplace:** Always include. Use "EBAY_US" unless location indicates otherwise.
 - **Sort:** Always include. Use "bestMatch" for most searches.
 - **Limit:** Always include. Use 50 for good statistical coverage.

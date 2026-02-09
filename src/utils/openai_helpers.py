@@ -125,7 +125,15 @@ def generate_ebay_query_for_listing(
             elif hasattr(response, 'dict'):
                 response_dict = response.dict()
             else:
-                response_dict = {"id": getattr(response, 'id', None), "model": getattr(response, 'model', None), "choices": [{"message": {"content": response.choices[0].message.content if response.choices else None}}]}
+                response_dict = {
+                    "id": getattr(response, 'id', None),
+                    "model": getattr(response, 'model', None),
+                    "choices": [{
+                        "message": {
+                            "content": response.choices[0].message.content if response.choices else None
+                        }
+                    }]
+                }
             
             # Access dictionary with bracket notation, not dot notation
             if response_dict and "choices" in response_dict and len(response_dict["choices"]) > 0:
