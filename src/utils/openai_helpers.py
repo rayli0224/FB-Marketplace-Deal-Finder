@@ -112,7 +112,6 @@ def generate_ebay_query_for_listing(
             logger.debug(f"      {line}")
         if len(prompt_lines) > 10:
             logger.debug(f"      ... ({len(prompt_lines) - 10} more lines)")
-        logger.debug(f"Full messages JSON: {json.dumps(messages, indent=2)}")
         
         response = client.chat.completions.create(
             model=api_params["model"],
@@ -129,7 +128,13 @@ def generate_ebay_query_for_listing(
                 response_dict = response.dict()
             else:
                 response_dict = {"id": getattr(response, 'id', None), "model": getattr(response, 'model', None), "choices": [{"message": {"content": response.choices[0].message.content if response.choices else None}}]}
-            logger.debug(f"OpenAI API Response - Full response: {json.dumps(response_dict, indent=2)}")
+            
+            # Access dictionary with bracket notation, not dot notation
+            if response_dict and "choices" in response_dict and len(response_dict["choices"]) > 0:
+                content = response_dict["choices"][0]["message"]["content"]
+                logger.debug(f"OpenAI API Response - Response content: {json.dumps(content, indent=2)}")
+            else:
+                logger.debug(f"OpenAI API Response - Response structure: {json.dumps(response_dict, indent=2)}")
         except Exception as e:
             logger.debug(f"OpenAI API Response - Could not serialize response: {e}")
             logger.debug(f"OpenAI API Response - Raw response: {str(response)}")

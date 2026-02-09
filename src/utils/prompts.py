@@ -27,12 +27,11 @@ Your task:
 1. Extract the **core product attributes** that matter for comparison: brand, model, product type, generation, storage/capacity if relevant.
 2. Generate a **high-recall eBay search query** suitable for the Browse API.
 3. Provide **HARD exclusion keywords** to filter out clearly irrelevant listings.
-4. Suggest **optional Browse API parameters** that would improve search quality, including:
-   - Reasonable `filter` parameters (condition, brand)
-   - `marketplace` (e.g., US)
-   - `sort` (e.g., bestMatch)
-   - `limit` (max number of results to return)
-   Only include these parameters if they are likely to improve precision without eliminating valid results.
+4. **ALWAYS provide Browse API parameters** to improve search quality. Include:
+   - `filter`: Use ONLY "conditionIds:{{1000}}" for New or "conditionIds:{{3000}}" for Used (no other condition IDs allowed). If the listing is ambiguous, include both "conditionsIds:{{1000|3000}}
+   - `marketplace`: Use "EBAY_US" unless location indicates otherwise
+   - `sort`: Use "bestMatch" for most searches
+   - `limit`: Use 50 for good statistical coverage
 
 Guidelines:
 
@@ -61,10 +60,10 @@ Guidelines:
 - "Keychron K7 Wireless Mechanical Keyboard" → "Keychron K7"
 
 ### Browse API Parameter Guidelines
-- **Filter (ConditionIDs):** Prefer to include `New` or `Used` if the listing clearly implies condition. Use code 1000 for items clearly indicated as new. Use code 3000 for items clearly indicated as used.
-- **Marketplace:** Use the US marketplace unless location indicates otherwise.
-- **Sort:** Recommend `bestMatch`.
-- **Limit:** Recommend 50 if you want enough items for statistics.
+- **Filter:** ONLY use `conditionIds:{{1000}}` for New or `conditionIds:{{3000}}` for Used. No other condition IDs allowed. If the listing is ambiguous, include both "conditionsIds:{{1000|3000}}.
+- **Marketplace:** Always include. Use "EBAY_US" unless location indicates otherwise.
+- **Sort:** Always include. Use "bestMatch" for most searches.
+- **Limit:** Always include. Use 50 for good statistical coverage.
 
 ### Output Format
 Return ONLY a JSON object exactly like this:
@@ -73,7 +72,7 @@ Return ONLY a JSON object exactly like this:
   "enhanced_query": "optimized eBay search query",
   "exclusion_keywords": ["keyword1", "keyword2", "keyword3"],
   "browse_api_parameters": {{
-      filter=conditionIds:{{3000}},
+      "filter": "conditionIds:{{1000|3000}}",
       "marketplace": "EBAY_US",
       "sort": "bestMatch",
       "limit": 50

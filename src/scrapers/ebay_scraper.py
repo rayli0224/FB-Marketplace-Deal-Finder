@@ -20,6 +20,9 @@ from src.utils.colored_logger import setup_colored_logger
 # Configure colored logging with module prefix (auto-detects DEBUG from env/--debug flag)
 logger = setup_colored_logger("ebay_scraper")
 
+# Valid eBay Browse API condition IDs - only 1000 (New) and 3000 (Used) are allowed
+VALID_CONDITION_IDS = {1000, 3000}
+
 # eBay API credentials (get from developer.ebay.com)
 EBAY_APP_ID = os.environ.get("EBAY_APP_ID", "")
 EBAY_CLIENT_SECRET = os.environ.get("EBAY_CLIENT_SECRET", "")
@@ -188,30 +191,80 @@ class EbayBrowseAPIClient:
             if api_sort:
                 params["sort"] = api_sort
             
-            # Build filter list:
-            # - Fixed price only (no auctions)
-            # - All conditions except FOR_PARTS_OR_NOT_WORKING (whitelist common good conditions)
-            filters: List[str] = [
-                "buyingOptions:{FIXED_PRICE}",
-                "itemCondition:{NEW|NEW_OTHER|NEW_WITH_DEFECTS|CERTIFIED_REFURBISHED|EXCELLENT_REFURBISHED|VERY_GOOD_REFURBISHED|USED}",
-            ]
+            # Build filter list
+            filters: List[str] = []
             
-            # Merge API-provided filter if available
+            # Process API-provided filter if available
             if api_filter:
-                # Parse the filter string and merge with existing filters
+                # Handle both string and dict formats
+                if isinstance(api_filter, dict):
+                    # Convert dict format to filter string format
+                    # Example: {'conditionIds': [2000]} -> "conditionIds:{2000}"
+                    # eBay Browse API uses numeric condition IDs, not string names
+                    filter_parts = []
+                    if "conditionIds" in api_filter:
+                        condition_ids = api_filter["conditionIds"]
+                        if condition_ids:
+                            # Filter out invalid condition IDs
+                            valid_ids = [cond_id for cond_id in condition_ids if cond_id in VALID_CONDITION_IDS]
+                            invalid_ids = [cond_id for cond_id in condition_ids if cond_id not in VALID_CONDITION_IDS]
+                            if invalid_ids:
+                                logger.warning(f"   Removed invalid condition IDs from OpenAI response: {invalid_ids}")
+                            if valid_ids:
+                                # Convert list of IDs to pipe-separated string
+                                id_string = "|".join(str(cond_id) for cond_id in valid_ids)
+                                filter_parts.append(f"conditionIds:{{{id_string}}}")
+                    api_filter = ",".join(filter_parts) if filter_parts else None
+                
+                # Parse the filter string and validate condition IDs
                 # The API filter might be a comma-separated string or a single filter
-                api_filters = [f.strip() for f in api_filter.split(",")]
-                filters.extend(api_filters)
+                if api_filter and isinstance(api_filter, str):
+                    api_filters = [f.strip() for f in api_filter.split(",")]
+                    validated_filters = []
+                    for filter_str in api_filters:
+                        # Check if this is a conditionIds filter and validate it
+                        if filter_str.startswith("conditionIds:"):
+                            # Extract condition IDs from format like "conditionIds:{1000|2000}"
+                            try:
+                                # Parse conditionIds:{1000|2000} or conditionIds:{4000}
+                                ids_part = filter_str.split(":", 1)[1]
+                                ids_part = ids_part.strip("{}")
+                                condition_ids = [int(id_str.strip()) for id_str in ids_part.split("|")]
+                                
+                                # Filter out invalid IDs
+                                valid_ids = [cid for cid in condition_ids if cid in VALID_CONDITION_IDS]
+                                invalid_ids = [cid for cid in condition_ids if cid not in VALID_CONDITION_IDS]
+                                
+                                if invalid_ids:
+                                    logger.warning(f"   Removed invalid condition IDs from OpenAI response: {invalid_ids}")
+                                
+                                if valid_ids:
+                                    # Reconstruct filter with only valid IDs
+                                    id_string = "|".join(str(cid) for cid in valid_ids)
+                                    validated_filters.append(f"conditionIds:{{{id_string}}}")
+                                # If no valid IDs remain, skip this filter entirely
+                            except (ValueError, IndexError) as e:
+                                logger.warning(f"   Failed to parse conditionIds filter '{filter_str}': {e}, skipping")
+                        else:
+                            # Not a conditionIds filter, add as-is
+                            validated_filters.append(filter_str)
+                    
+                    filters.extend(validated_filters)
             
-            # Add price filters if specified (these override any price filters in api_filter)
-            if min_price is not None:
-                # Remove any existing price filters and add our own
-                filters = [f for f in filters if not f.startswith("price:")]
-                filters.append(f"price:[{min_price}..]")
-            if max_price is not None:
-                # Remove any existing price filters and add our own
-                filters = [f for f in filters if not f.startswith("price:")]
-                filters.append(f"price:[..{max_price}]")
+            # Only add default filters if no API-provided filters were given
+            # This allows OpenAI to have full control over filtering when it provides parameters
+            if not filters:
+                # Default filters: Fixed price only (no auctions) and common good conditions
+                filters = [
+                    "buyingOptions:{FIXED_PRICE}",
+                    "itemCondition:{NEW|NEW_OTHER|NEW_WITH_DEFECTS|CERTIFIED_REFURBISHED|EXCELLENT_REFURBISHED|VERY_GOOD_REFURBISHED|USED}",
+                ]
+            else:
+                # If OpenAI provided filters, only add buyingOptions if not already present
+                # This ensures we still filter out auctions unless OpenAI explicitly wants them
+                has_buying_options = any("buyingOptions:" in f for f in filters)
+                if not has_buying_options:
+                    filters.insert(0, "buyingOptions:{FIXED_PRICE}")
             
             if filters:
                 params["filter"] = ",".join(filters)

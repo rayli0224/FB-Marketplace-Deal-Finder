@@ -412,14 +412,61 @@ class FBMarketplaceScraper:
         
         return ""
     
+    def _is_valid_description(self, text: str) -> bool:
+        """
+        Validate that extracted text is a real description and not Facebook internal code.
+        
+        Filters out JSON/script content, Facebook internal identifiers, and other non-description
+        content. Returns True if the text appears to be a valid listing description.
+        """
+        if not text or len(text.strip()) < 10:
+            return False
+        
+        text_lower = text.lower()
+        
+        # Filter out JSON-like content
+        if text.strip().startswith("{") or text.strip().startswith("["):
+            return False
+        
+        # Filter out Facebook internal identifiers
+        facebook_internal_patterns = [
+            "require",
+            "cometssrmergedcontentinjector",
+            "onpayloadreceived",
+            "fizzrootid",
+            "render_pass",
+            "payloadtype",
+            "readypreloaders",
+            "clientrendererrors",
+            "productrecoverableerrors",
+            "adp_",
+            "ssrb_root_content",
+        ]
+        
+        for pattern in facebook_internal_patterns:
+            if pattern in text_lower:
+                return False
+        
+        # Filter out content that's mostly JSON structure
+        if text.count("{") > 2 or text.count("}") > 2 or text.count("[") > 2:
+            return False
+        
+        # Valid descriptions should have some normal text (letters, spaces, punctuation)
+        # Not just special characters or JSON structure
+        if not re.search(r'[A-Za-z]{3,}', text):
+            return False
+        
+        return True
+    
     def _extract_description_from_detail_page(self, url: str) -> str:
         """
         Navigate to listing detail page and extract description text under 'Details' section.
         
         Opens the listing URL in a new page, waits for it to load, finds the 'Details' text,
         and extracts the description content that appears underneath it. Tries multiple strategies:
-        finding sibling elements, parent containers, and text analysis. Returns empty string
-        if description cannot be found or if navigation fails.
+        finding sibling elements, parent containers, and text analysis. Filters out Facebook
+        internal JSON/script content. Returns empty string if description cannot be found or
+        if navigation fails.
         """
         description = ""
         
@@ -446,13 +493,27 @@ class FBMarketplaceScraper:
                             next_sibling = details_element.locator("xpath=following-sibling::*[1]")
                             if next_sibling.count() > 0:
                                 sibling_text = next_sibling.inner_text().strip()
-                                if sibling_text and len(sibling_text) > 10:  # Reasonable description length
+                                if self._is_valid_description(sibling_text):
                                     description = sibling_text
                                     break
                         except:
                             pass
                         
-                        # Strategy 2: Get parent container and extract text after "Details"
+                        # Strategy 2: Try to find description in following siblings (not just immediate)
+                        try:
+                            for i in range(1, 4):  # Check next 3 siblings
+                                sibling = details_element.locator(f"xpath=following-sibling::*[{i}]")
+                                if sibling.count() > 0:
+                                    sibling_text = sibling.inner_text().strip()
+                                    if self._is_valid_description(sibling_text):
+                                        description = sibling_text
+                                        break
+                            if description:
+                                break
+                        except:
+                            pass
+                        
+                        # Strategy 3: Get parent container and extract text after "Details"
                         try:
                             parent = details_element.locator("xpath=..")
                             full_text = parent.inner_text().strip()
@@ -463,8 +524,33 @@ class FBMarketplaceScraper:
                                 description_candidate = full_text[details_index + len("Details"):].strip()
                                 # Remove any leading colons, dashes, or whitespace
                                 description_candidate = description_candidate.lstrip(":-\n\r\t ")
-                                if description_candidate and len(description_candidate) > 10:
+                                # Take first reasonable chunk (stop at common separators or new sections)
+                                lines = description_candidate.split("\n")
+                                description_parts = []
+                                for line in lines[:10]:  # Limit to first 10 lines
+                                    line = line.strip()
+                                    if not line:
+                                        continue
+                                    # Stop if we hit another section header (all caps or common patterns)
+                                    if re.match(r'^[A-Z\s]{10,}$', line) and len(line) > 15:
+                                        break
+                                    description_parts.append(line)
+                                
+                                description_candidate = "\n".join(description_parts).strip()
+                                if self._is_valid_description(description_candidate):
                                     description = description_candidate
+                                    break
+                        except:
+                            pass
+                        
+                        # Strategy 4: Look for description in nearby div/span elements
+                        try:
+                            # Try to find a div or span that contains substantial text near Details
+                            nearby_elements = detail_page.locator("xpath=//span[contains(text(), 'Details')]/following::div[1] | //div[contains(text(), 'Details')]/following::div[1] | //h2[contains(text(), 'Details')]/following::div[1]")
+                            if nearby_elements.count() > 0:
+                                nearby_text = nearby_elements.first.inner_text().strip()
+                                if self._is_valid_description(nearby_text):
+                                    description = nearby_text
                                     break
                         except:
                             pass
