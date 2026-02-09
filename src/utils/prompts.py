@@ -106,7 +106,7 @@ Facebook Marketplace listing:
 eBay search results:
 {ebay_items_text}
 
-Your task: Identify which eBay items are actually comparable to the FB listing. Internally, reason for longer about each item one by one and provide a short justification for each item's accept/reject decision. 
+Your task: Identify which eBay items are actually comparable to the FB listing. Internally, reason carefully about each item one by one and provide a short justification for each item's accept/reject decision. 
 
 Search on the web for specific product names as needed in order to inform your decision. Do NOT use images or other visual information to make your decision.
 
