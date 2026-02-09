@@ -37,13 +37,24 @@ alwaysApply: true
 - Comments should explain "why" or provide context, not restate what the code does
 - Keep comments that explain non-obvious logic, important context, or design decisions
 
+## Abstractions
+
+- **We need clear abstractions.** Do not mix multiple concerns in one module or class. Each module/class should have a single, well-defined responsibility (e.g. "scraping" vs "session/login checks" vs "API endpoints").
+- **Extract distinct concerns into their own modules.** If a file is doing two different kinds of work (e.g. both "am I logged in?" and "scrape listings"), split them: put session/auth logic in a dedicated module and keep the scraper focused on scraping only. Call into the abstraction from the caller; don't embed the other concern inside.
+- **Name modules by what they own.** `fb_marketplace_scraper` = scraping. `facebook_session` = login status / session checks. When adding new behavior, ask: does this belong here, or in a separate abstraction?
+- **Prefer "X uses Y" over "X does Y and Z".** A scraper should use a session check; it shouldn't implement session logic. The API should use both; it shouldn't reimplement either.
+
 ## Code Organization
 
 - Prefer robust, maintainable solutions over fragile, clever code
-- Use layered fallback strategies when dealing with unreliable external data
-- Design for failure: assume things will go wrong and handle gracefully
+- **No fallbacks**: Do not add fallback code paths (e.g. "if X fails, try Y instead"). Fix the root cause so the primary path works every time. Configure the environment, dependencies, or design so the intended behavior is the only path.
+- When dealing with unreliable external data, make the integration reliable (retries, clear errors, correct config) rather than falling back to a different strategy.
 - When choosing between performance and reliability/maintainability, prefer the latter
 - Document significant performance trade-offs when they're made
+
+## User-Facing Copy
+
+- User-visible text must be **non-technical** (no jargon in instructions or errors) and **preserve the app's pirate theme** in the UI. See the `user-facing-copy` rule for details.
 
 ## General Principles
 

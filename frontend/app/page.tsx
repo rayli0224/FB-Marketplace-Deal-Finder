@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { formSchema, type FormData as ValidationFormData } from "@/lib/validation";
@@ -10,9 +10,10 @@ import { MarketplaceSearchForm } from "@/components/search-form/MarketplaceSearc
 import { SearchLoadingState, type SearchPhase } from "@/components/loading/SearchLoadingState";
 import { SearchErrorState } from "@/components/results/SearchErrorState";
 import { SearchResultsTable } from "@/components/results/SearchResultsTable";
+import { CookieSetupGuide } from "@/components/auth/CookieSetupGuide";
 import type { Listing } from "@/components/results/SearchResultsTable";
 
-type AppState = "form" | "loading" | "done" | "error";
+type AppState = "setup" | "form" | "loading" | "done" | "error";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
@@ -20,6 +21,7 @@ type SSEDispatchHandlers = {
   handlePhaseUpdate: (phase: SearchPhase) => void;
   handleProgressUpdate: (scannedCount: number) => void;
   handleCompletion: (data: { scannedCount: number; evaluatedCount: number; listings: Listing[]; threshold?: number }) => void;
+  handleAuthError: () => void;
   setEvaluatedCount: (n: number) => void;
 };
 
@@ -29,7 +31,9 @@ type SSEDispatchHandlers = {
  */
 function dispatchSSEEvent(payloadString: string, handlers: SSEDispatchHandlers): void {
   const data = JSON.parse(payloadString) as { type: string; phase?: SearchPhase; scannedCount?: number; evaluatedCount?: number; listings?: Listing[]; threshold?: number };
-  if (data.type === "phase" && data.phase != null) {
+  if (data.type === "auth_error") {
+    handlers.handleAuthError();
+  } else if (data.type === "phase" && data.phase != null) {
     handlers.handlePhaseUpdate(data.phase);
   } else if (data.type === "progress" && typeof data.scannedCount === "number") {
     handlers.handleProgressUpdate(data.scannedCount);
@@ -46,7 +50,8 @@ function dispatchSSEEvent(payloadString: string, handlers: SSEDispatchHandlers):
 }
 
 export default function Home() {
-  const [appState, setAppState] = useState<AppState>("form");
+  const [appState, setAppState] = useState<AppState>("setup");
+  const [cookiesChecked, setCookiesChecked] = useState(false);
   const {
     register,
     handleSubmit: handleFormSubmit,
@@ -59,6 +64,31 @@ export default function Home() {
     mode: "onTouched",
   });
   const formData = watch();
+
+  /**
+   * Checks whether Facebook login data is already configured by hitting the
+   * cookies status endpoint. If configured, skips straight to the search form.
+   * If not (or if the check fails), shows the setup guide.
+   */
+  useEffect(() => {
+    async function checkCookies() {
+      try {
+        const res = await fetch(`${API_URL}/api/cookies/status`);
+        const data = await res.json();
+        if (data.configured) {
+          setAppState("form");
+        } else {
+          setAppState("setup");
+        }
+      } catch {
+        // Can't reach the backend — show setup so user can try again
+        setAppState("setup");
+      } finally {
+        setCookiesChecked(true);
+      }
+    }
+    checkCookies();
+  }, []);
   const [scannedCount, setScannedCount] = useState(0);
   const [evaluatedCount, setEvaluatedCount] = useState(0);
   const [csvBlob, setCsvBlob] = useState<Blob | null>(null);
@@ -123,6 +153,21 @@ export default function Home() {
   }, []);
 
   /**
+   * Handles an auth_error event from the backend, indicating the Facebook session has expired.
+   * Resets the search state and sends the user back to the cookie setup guide so they can
+   * re-connect their Facebook account.
+   */
+  const handleAuthError = useCallback(() => {
+    isSearchingRef.current = false;
+    setIsSearching(false);
+    setScannedCount(0);
+    setEvaluatedCount(0);
+    setPhase("scraping");
+    setError("Your Facebook session has expired. Please re-connect your account to keep searching.");
+    setAppState("setup");
+  }, []);
+
+  /**
    * Applies the final search result: sets listings, counts, threshold, generates CSV blob,
    * and switches the app to the done state so the results table is shown.
    */
@@ -169,6 +214,7 @@ export default function Home() {
                   handlePhaseUpdate,
                   handleProgressUpdate,
                   handleCompletion,
+                  handleAuthError,
                   setEvaluatedCount,
                 });
               } catch (parseErr) {
@@ -185,6 +231,7 @@ export default function Home() {
                   handlePhaseUpdate,
                   handleProgressUpdate,
                   handleCompletion,
+                  handleAuthError,
                   setEvaluatedCount,
                 });
               } catch {
@@ -211,7 +258,7 @@ export default function Home() {
         reader.releaseLock();
       }
     },
-    [handlePhaseUpdate, handleProgressUpdate, handleCompletion]
+    [handlePhaseUpdate, handleProgressUpdate, handleCompletion, handleAuthError]
   );
 
   /**
@@ -388,15 +435,31 @@ export default function Home() {
           </div>
 
           <div className="p-6">
-            {appState === "form" && (
-              <MarketplaceSearchForm
-                register={register}
-                errors={errors}
-                isValid={isValid}
-                handleSubmit={handleSubmit}
-                watch={watch}
-                setValue={setValue}
+            {appState === "setup" && cookiesChecked && (
+              <CookieSetupGuide
+                onSuccess={() => { setError(null); setAppState("form"); }}
+                sessionExpiredMessage={error}
               />
+            )}
+
+            {appState === "form" && (
+              <>
+                <MarketplaceSearchForm
+                  register={register}
+                  errors={errors}
+                  isValid={isValid}
+                  handleSubmit={handleSubmit}
+                  watch={watch}
+                  setValue={setValue}
+                />
+                <button
+                  type="button"
+                  onClick={() => setAppState("setup")}
+                  className="mt-4 w-full font-mono text-[11px] text-muted-foreground/60 hover:text-muted-foreground transition-colors cursor-pointer"
+                >
+                  {"// re-connect Facebook account"}
+                </button>
+              </>
             )}
 
             {appState === "loading" && (
