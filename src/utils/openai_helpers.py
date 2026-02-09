@@ -7,6 +7,7 @@ search queries and filter eBay results to match Facebook Marketplace listings.
 
 import os
 import json
+import re
 from typing import Optional, Tuple, List
 
 try:
@@ -296,10 +297,55 @@ def filter_ebay_results_with_openai(
             content = content[:-3]
         content = content.strip()
         
-        # Parse JSON
-        result = json.loads(content)
-        comparable_indices = result.get("comparable_indices", [])
-        reasons = result.get("reasons", {})
+        # Parse JSON with better error handling
+        try:
+            result = json.loads(content)
+        except json.JSONDecodeError as json_err:
+            # Log the error location and surrounding content
+            error_line = getattr(json_err, 'lineno', None)
+            error_col = getattr(json_err, 'colno', None)
+            error_pos = getattr(json_err, 'pos', None)
+            
+            logger.warning(f"Failed to parse OpenAI filter response as JSON: {json_err}")
+            if error_line:
+                content_lines = content.split('\n')
+                logger.warning(f"Error at line {error_line}, column {error_col}")
+                # Show context around the error
+                start_line = max(0, error_line - 3)
+                end_line = min(len(content_lines), error_line + 2)
+                logger.warning(f"Content around error (lines {start_line + 1}-{end_line}):")
+                for i in range(start_line, end_line):
+                    marker = ">>> " if i == error_line - 1 else "    "
+                    logger.warning(f"{marker}{i + 1}: {content_lines[i]}")
+            elif error_pos:
+                # Show content around the error position
+                start_pos = max(0, error_pos - 100)
+                end_pos = min(len(content), error_pos + 100)
+                logger.warning(f"Content around error position {error_pos}:")
+                logger.warning(f"  ...{content[start_pos:end_pos]}...")
+            else:
+                # Fallback: show first 500 chars
+                logger.warning(f"Content preview (first 500 chars): {content[:500]}")
+            
+            # Try to extract what we can - look for comparable_indices even in malformed JSON
+            indices_match = re.search(r'"comparable_indices"\s*:\s*\[([\d\s,]+)\]', content)
+            if indices_match:
+                try:
+                    indices_str = indices_match.group(1)
+                    comparable_indices = [int(x.strip()) for x in indices_str.split(',') if x.strip()]
+                    logger.info(f"Recovered comparable_indices from malformed JSON: {comparable_indices}")
+                    # Use empty reasons dict since we can't parse it
+                    reasons = {}
+                except ValueError:
+                    logger.warning("Could not recover comparable_indices from malformed JSON")
+                    return None
+            else:
+                logger.warning("Could not find comparable_indices in malformed JSON - using original items")
+                return None
+        else:
+            # Successfully parsed JSON
+            comparable_indices = result.get("comparable_indices", [])
+            reasons = result.get("reasons", {})
         
         if not isinstance(comparable_indices, list):
             logger.warning("OpenAI returned invalid comparable_indices format - skipping filter")
@@ -331,6 +377,7 @@ def filter_ebay_results_with_openai(
         return (filtered_items if filtered_items else ebay_items, reasons)
         
     except json.JSONDecodeError as e:
+        # This should not happen now since we handle it above, but keep as fallback
         logger.warning(f"Failed to parse OpenAI filter response as JSON: {e} - using original items")
         return None
     except Exception as e:
