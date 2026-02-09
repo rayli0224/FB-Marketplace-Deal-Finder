@@ -39,10 +39,18 @@ alwaysApply: true
 
 ## Abstractions
 
-- **We need clear abstractions.** Do not mix multiple concerns in one module or class. Each module/class should have a single, well-defined responsibility (e.g. "scraping" vs "session/login checks" vs "API endpoints").
-- **Extract distinct concerns into their own modules.** If a file is doing two different kinds of work (e.g. both "am I logged in?" and "scrape listings"), split them: put session/auth logic in a dedicated module and keep the scraper focused on scraping only. Call into the abstraction from the caller; don't embed the other concern inside.
-- **Name modules by what they own.** `fb_marketplace_scraper` = scraping. `facebook_session` = login status / session checks. When adding new behavior, ask: does this belong here, or in a separate abstraction?
-- **Prefer "X uses Y" over "X does Y and Z".** A scraper should use a session check; it shouldn't implement session logic. The API should use both; it shouldn't reimplement either.
+- **Clear abstractions.** Do not mix multiple concerns in one module or class. Each module/class should have a single, well-defined responsibility.
+- **Extract distinct concerns into their own modules.** If a file does two different kinds of work, split them: put each concern in a dedicated module and have the caller use both. Do not embed one concern inside another.
+- **Name modules by what they own.** The filename or module name should describe its responsibility. When adding new behavior, ask: does this belong here, or in a separate abstraction?
+- **No generic file when a specific one exists.** If you have (or introduce) specific-named modules for specific concerns, do not create a generic-named module for the same kind of content. Use only specific names so it's clear where things go and avoid semantic confusion.
+- **Prefer "X uses Y" over "X does Y and Z".** A module that needs another capability should depend on a dedicated module for it, not implement that capability itself.
+
+## Constants and Literals
+
+- **Define constants at the top of the file** (after imports). Group and order them so they are easy to find and change.
+- **Avoid magic numbers and string literals** where meaning would be unclear. Use named constants (or enums) so the purpose is obvious and values can be changed in one place.
+- Use constants for: numeric or string values that represent configuration (durations, sizes, limits), repeated literals, and any value whose meaning isn’t obvious from context.
+- **Styling constants**: Shared UI styling must be abstracted. Put **generic** (reusable) style/class strings in a dedicated shared module and import where needed. Constants that are not generic—specific to one component or feature—go in that file instead of the shared one.
 
 ## Code Organization
 
@@ -54,7 +62,7 @@ alwaysApply: true
 
 ## User-Facing Copy
 
-- User-visible text must be **non-technical** (no jargon in instructions or errors) and **preserve the app's pirate theme** in the UI. See the `user-facing-copy` rule for details.
+- User-visible text must be **non-technical** (no jargon in instructions or errors). Preserve the app's chosen tone and theme in the UI; see any project-specific rule for copy and voice.
 
 ## General Principles
 

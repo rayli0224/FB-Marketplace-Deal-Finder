@@ -1,0 +1,52 @@
+---
+description: Logging style and conventions — concise logs, separator lines, no module prefix, transparent data
+alwaysApply: true
+---
+
+# Logging Preferences
+
+## Principles
+
+- **Clear and concise**: No unneeded information. One idea per line where possible.
+- **No module prefix**: Log output is `LEVEL: message` only. Do not add or reintroduce `[module_name]` in the formatter.
+- **Errors stand out**: WARNING and ERROR use distinct colors (yellow, bold red). INFO and DEBUG are uncolored (black).
+
+## Step and Sub-step Breaks
+
+- Use **long full-width separator lines** to break between steps and sub-steps, not inline text in the title.
+- Pattern: (1) a full line of dashes, (2) the step/sub-step title on its own line, (3) another full line of dashes.
+- **Step titles are bold** (when stdout is a TTY) so steps are easy to spot; the helpers in `colored_logger` apply this automatically.
+- Use the shared helpers from `src.utils.colored_logger`:
+  - **`log_step_sep(logger, title)`** — main step (e.g. "Step 2: Scraping Facebook Marketplace").
+  - **`log_substep_sep(logger, title)`** — sub-step (e.g. "FB Marketplace search — ...").
+  - **`log_step_title(logger, message, level=logging.INFO)`** — step/section titles with separator lines above and below (same pattern as step/substep seps). Bold when TTY; use for any bold section (e.g. "Step 1: Generating eBay query", "Search done: N listings"), including sub-content.
+- **Indent sub-step content**: After a sub-step separator, call **`set_step_indent("  ")`** so subsequent log lines are indented; call **`clear_step_indent()`** in a `finally` when the sub-step block ends. This makes it easy to see what belongs under each sub-step.
+- Do not use boxes, borders, or inline wrappers (e.g. `──────── title ────────`) around the title.
+
+## Waiting / Loading Status
+
+- For API requests and other long-running work, use **`wait_status(logger, label)`** as a context manager. It logs "Waiting for {label}...", then every few seconds "  … {label} (Ns)", then "Done: {label} (N.Ns)" when the block exits. Use a short, user-friendly label (e.g. "eBay prices", "Facebook Marketplace search", "eBay query (OpenAI)").
+
+## Transparent Data
+
+- Log what is **retrieved** from external sources (e.g. FB Marketplace) and what is **processed** so it’s visible at default log level.
+- Use **`log_data_line(logger, label, **kwargs)`** for one-line key=value data (e.g. "Retrieved: title=... | price=... | location=... | url=...").
+- Keep verbose or debug-only detail in `logger.debug()`.
+
+## Reusable Helpers
+
+- Use the abstractions in `src.utils.colored_logger` so behavior stays consistent and reusable:
+  - `log_step_sep`, `log_substep_sep` — step/sub-step separator lines.
+  - `log_step_title` — bold inline step/section titles (e.g. "Step 1: ...", "Search done: ...").
+  - `set_step_indent`, `clear_step_indent` — indent sub-step content (thread-local; clear in `finally`).
+  - `wait_status` — context manager for long-running work; logs waiting message and elapsed time every few seconds.
+  - `log_data_line` — one-line key=value data.
+  - `log_error_short` — errors with consistent truncation (no raw `logger.error` with manual truncation).
+- When adding new logging, prefer these helpers over ad-hoc `logger.info`/`logger.error` patterns.
+
+## What to Avoid
+
+- Do not add box-drawing or nested-box logic.
+- Do not add a module/source prefix (e.g. `[api]`, `[fb_scraper]`) to log output.
+- Do not use empty `logger.info("")` for spacing; use separator lines instead.
+- Do not truncate step titles inline with ".." when using separators; the title is on its own line.

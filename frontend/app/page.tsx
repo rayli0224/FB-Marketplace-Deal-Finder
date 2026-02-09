@@ -20,7 +20,7 @@ const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 type SSEDispatchHandlers = {
   handlePhaseUpdate: (phase: SearchPhase) => void;
   handleProgressUpdate: (scannedCount: number) => void;
-  handleCompletion: (data: { scannedCount: number; evaluatedCount: number; listings: Listing[]; threshold?: number }) => void;
+  handleCompletion: (data: { scannedCount: number; evaluatedCount: number; listings: Listing[]; threshold?: number; averageConfidence?: number | null }) => void;
   handleAuthError: () => void;
   setEvaluatedCount: (n: number) => void;
 };
@@ -30,7 +30,7 @@ type SSEDispatchHandlers = {
  * Throws if JSON is invalid so the stream parser can surface the error.
  */
 function dispatchSSEEvent(payloadString: string, handlers: SSEDispatchHandlers): void {
-  const data = JSON.parse(payloadString) as { type: string; phase?: SearchPhase; scannedCount?: number; evaluatedCount?: number; listings?: Listing[]; threshold?: number };
+  const data = JSON.parse(payloadString) as { type: string; phase?: SearchPhase; scannedCount?: number; evaluatedCount?: number; listings?: Listing[]; threshold?: number; averageConfidence?: number | null };
   if (data.type === "auth_error") {
     handlers.handleAuthError();
   } else if (data.type === "phase" && data.phase != null) {

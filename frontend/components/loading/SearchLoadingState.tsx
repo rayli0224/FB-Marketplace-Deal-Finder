@@ -1,8 +1,32 @@
 "use client";
 
+import { useEffect, useState } from "react";
+import { HeistTimerAnimation } from "@/components/loading/HeistTimerAnimation";
+import { LoadingBox } from "@/components/loading/LoadingBox";
 import { ProgressBar } from "@/components/loading/ProgressBar";
+import { CONTENT_TEXT_CLASS, CONTENT_TEXT_XS_CLASS } from "@/lib/ui-constants";
 
-export type SearchPhase = "scraping" | "ebay" | "calculating" | "evaluating";
+/** Interval in ms for updating the heist clock display. */
+const HEIST_CLOCK_TICK_MS = 1000;
+
+/** Loading section flex layout (wrap, gap). */
+const LOADING_LAYOUT_CLASS = "flex flex-wrap items-stretch gap-3";
+
+/** Stack of loading sections (column gap). */
+const LOADING_STACK_CLASS = "flex flex-col gap-3 min-w-0 flex-1";
+
+/** Loading cancel button (outline style, primary color). */
+const LOADING_CANCEL_BUTTON_CLASS =
+  "mt-2 w-full border-2 border-primary bg-transparent px-2 py-1 font-mono text-xs font-bold text-primary transition-all hover:bg-primary hover:text-primary-foreground";
+
+export type SearchPhase = "scraping" | "evaluating";
+
+const PHASE_MESSAGES: Record<SearchPhase, string> = {
+  scraping: "Infiltrating the marketplace for treasures...",
+  evaluating: "Appraising each piece of loot...",
+};
+
+const FALLBACK_PHASE_MESSAGE = "Getting the crew ready...";
 
 export interface SearchLoadingStateProps {
   phase: SearchPhase;
@@ -11,87 +35,75 @@ export interface SearchLoadingStateProps {
   onCancel?: () => void;
 }
 
-/**
- * Returns the main message and description for a given search phase.
- * Provides pirate-themed messaging that matches the current phase of the search process.
- */
-function getPhaseMessages(phase: SearchPhase): { main: string; description: string } {
-  const messages: Record<SearchPhase, { main: string; description: string }> = {
-    scraping: {
-      main: "🔍 Searching Facebook Marketplace...",
-      description: "Infiltrating the marketplace for treasures...",
-    },
-    ebay: {
-      main: "📊 Fetching eBay prices...",
-      description: "Checking market values on eBay...",
-    },
-    calculating: {
-      main: "🧮 Calculating deals...",
-      description: "Crunching numbers to find the best deals...",
-    },
-    evaluating: {
-      main: "🤖 Evaluating listings with AI...",
-      description: "Using AI to find accurate price comparisons...",
-    },
-  };
-  return messages[phase] || messages.scraping; // Fallback to scraping if phase is invalid
+function formatHeistClock(seconds: number): string {
+  const m = Math.floor(seconds / 60);
+  const s = seconds % 60;
+  return `${m}:${s.toString().padStart(2, "0")}`;
+}
+
+function getPhaseMessage(phase: SearchPhase): string {
+  return PHASE_MESSAGES[phase] ?? FALLBACK_PHASE_MESSAGE;
 }
 
 /**
  * Loading state component displaying progress during marketplace search.
- * Shows current phase with animated dots, phase description, and progress bars
- * for scanned and evaluated listings. Includes a cancel button to abort the search.
+ * Shows current phase with heist clock (radar + elapsed time), phase description,
+ * and progress bars for scanned and evaluated listings. Includes a cancel button.
  */
 export function SearchLoadingState({ phase, scannedCount, evaluatedCount, onCancel }: SearchLoadingStateProps) {
-  const phaseMessages = getPhaseMessages(phase) || {
-    main: "🔄 Processing...",
-    description: "Working on your request...",
-  };
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
+
+  useEffect(() => {
+    const startedAt = Date.now();
+    const tick = () => setElapsedSeconds(Math.floor((Date.now() - startedAt) / HEIST_CLOCK_TICK_MS));
+    const id = setInterval(tick, HEIST_CLOCK_TICK_MS);
+    return () => clearInterval(id);
+  }, []);
+
+  const phaseMessage = getPhaseMessage(phase);
 
   return (
-    <div className="space-y-6">
-      <div className="border border-border bg-secondary p-4">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="flex gap-1">
-              <span className="inline-block h-2 w-2 animate-bounce bg-primary" style={{ animationDelay: "0ms" }} />
-              <span className="inline-block h-2 w-2 animate-bounce bg-primary" style={{ animationDelay: "150ms" }} />
-              <span className="inline-block h-2 w-2 animate-bounce bg-primary" style={{ animationDelay: "300ms" }} />
-            </div>
-            <span className="font-mono text-sm text-muted-foreground">
-              {phaseMessages.main}
-            </span>
-          </div>
-          {onCancel && (
-            <button
-              type="button"
-              onClick={onCancel}
-              className="border-2 border-primary bg-transparent px-3 py-1.5 font-mono text-xs font-bold text-primary transition-all hover:bg-primary hover:text-primary-foreground"
-            >
-              CANCEL
-            </button>
-          )}
+    <div className={LOADING_LAYOUT_CLASS}>
+      <LoadingBox className="shrink-0 w-fit">
+        <div className={CONTENT_TEXT_XS_CLASS}>
+          {phaseMessage}
         </div>
-        <div className="mt-3 font-mono text-xs text-muted-foreground/60">
-          {phaseMessages.description}
+        <div className="mt-2 flex flex-col items-center gap-1">
+          <HeistTimerAnimation />
+          <span className={CONTENT_TEXT_XS_CLASS}>
+            Heist clock: <span className={`tabular-nums font-medium ${CONTENT_TEXT_CLASS}`}>{formatHeistClock(elapsedSeconds)}</span>
+          </span>
         </div>
-      </div>
+        {onCancel && (
+          <button
+            type="button"
+            onClick={onCancel}
+            className={LOADING_CANCEL_BUTTON_CLASS}
+          >
+            CANCEL
+          </button>
+        )}
+      </LoadingBox>
 
-      <div className="space-y-4">
-        <ProgressBar 
-          label="Infiltrating listings" 
-          count={scannedCount}
-          maxCount={scannedCount || 100}
-          suffix="scanned" 
-          icon="~"
-        />
-        <ProgressBar 
-          label="Evaluating loot value" 
-          count={evaluatedCount}
-          maxCount={scannedCount || 100}
-          suffix="assessed" 
-          icon="*"
-        />
+      <div className={LOADING_STACK_CLASS}>
+        <LoadingBox>
+          <ProgressBar
+            label="Infiltrating listings"
+            count={scannedCount}
+            maxCount={scannedCount || 100}
+            suffix="scanned"
+            icon="~"
+          />
+        </LoadingBox>
+        <LoadingBox>
+          <ProgressBar
+            label="Evaluating loot value"
+            count={evaluatedCount}
+            maxCount={scannedCount || 100}
+            suffix="assessed"
+            icon="*"
+          />
+        </LoadingBox>
       </div>
     </div>
   );
