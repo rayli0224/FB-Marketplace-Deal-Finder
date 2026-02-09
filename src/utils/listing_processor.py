@@ -105,13 +105,26 @@ def process_single_listing(
         all_items_with_filter_flag = None
         if ebay_items:
             with wait_status(logger, "Filtering eBay results (OpenAI)"):
-                filtered_items = filter_ebay_results_with_openai(listing, ebay_items)
-            if filtered_items is not None:
-                filtered_urls = {item.get("url", "") for item in filtered_items}
-                all_items_with_filter_flag = [
-                    {**item, "filtered": item.get("url", "") not in filtered_urls}
-                    for item in ebay_items
-                ]
+                filter_result = filter_ebay_results_with_openai(listing, ebay_items)
+            if filter_result is not None:
+                comparable_indices, filtered_items, filter_reasons = filter_result
+                
+                # Mark items based on whether their 1-based index is in comparable_indices
+                comparable_indices_set = set(comparable_indices)
+                all_items_with_filter_flag = []
+                for i, item in enumerate(ebay_items):
+                    item_idx = i + 1  # 1-based index
+                    reason = filter_reasons.get(str(item_idx), "")
+                    is_filtered = item_idx not in comparable_indices_set
+                    item_with_flags = {
+                        **item,
+                        "filtered": is_filtered,
+                    }
+                    if reason:
+                        item_with_flags["filterReason"] = reason
+                    all_items_with_filter_flag.append(item_with_flags)
+                
+                # Recalculate stats from filtered items
                 if len(filtered_items) != len(ebay_items):
                     filtered_prices = [item["price"] for item in filtered_items]
                     if len(filtered_prices) >= 3:
@@ -134,10 +147,6 @@ def process_single_listing(
                         ebay_stats.item_summaries = all_items_with_filter_flag
                 else:
                     logger.debug("All items deemed comparable")
-                    all_items_with_filter_flag = [
-                        {**item, "filtered": False}
-                        for item in ebay_items
-                    ]
                     ebay_stats.item_summaries = all_items_with_filter_flag
             else:
                 logger.debug("Filtering unavailable (OpenAI not configured) - using original results")

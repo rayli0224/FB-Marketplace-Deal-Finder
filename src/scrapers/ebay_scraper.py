@@ -105,8 +105,6 @@ class EbayBrowseAPIClient:
         self,
         keywords: str,
         max_items: int = 100,
-        min_price: Optional[float] = None,
-        max_price: Optional[float] = None,
         browse_api_parameters: Optional[dict] = None,
     ) -> Optional[List[dict]]:
         """
@@ -116,8 +114,6 @@ class EbayBrowseAPIClient:
         Args:
             keywords: Search keywords
             max_items: Maximum number of items to fetch
-            min_price: Optional minimum price filter
-            max_price: Optional maximum price filter
             browse_api_parameters: Optional dict with Browse API parameters (filter, marketplace, sort, limit)
         """
         token = self._get_access_token()
@@ -323,8 +319,6 @@ class EbayBrowseAPIClient:
         self,
         search_term: str,
         n_items: int = 100,
-        min_price: Optional[float] = None,
-        max_price: Optional[float] = None,
         browse_api_parameters: Optional[dict] = None,
     ) -> Optional[PriceStats]:
         """
@@ -334,8 +328,6 @@ class EbayBrowseAPIClient:
         Args:
             search_term: eBay search query
             n_items: Maximum number of items to fetch
-            min_price: Optional minimum price filter
-            max_price: Optional maximum price filter
             browse_api_parameters: Optional dict with Browse API parameters (filter, marketplace, sort, limit)
         """
         logger.info(f"Searching eBay: '{search_term}'")
@@ -344,8 +336,6 @@ class EbayBrowseAPIClient:
         items = self.search_active_listings(
             keywords=search_term,
             max_items=n_items,
-            min_price=min_price,
-            max_price=max_price,
             browse_api_parameters=browse_api_parameters,
         )
         if not items:

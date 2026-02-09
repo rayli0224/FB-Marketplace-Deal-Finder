@@ -24,7 +24,7 @@ Facebook Marketplace listing:
 
 Your task:
 1. Extract the **core product attributes** that matter for comparison: brand, model, product type, generation, storage/capacity if relevant.
-2. Generate a **high-recall eBay search query** suitable for the Browse API.
+2. Generate an **effective eBay search query** suitable for the Browse API.
 3. **ALWAYS provide Browse API parameters** to improve search quality. Include:
    - `filter`: Use ONLY "conditionIds:{{1000}}" for New or "conditionIds:{{3000}}" for Used (no other condition IDs allowed). If the listing is ambiguous, include both "conditionIds:{{1000|3000}}"
    - `marketplace`: Use "EBAY_US" unless location indicates otherwise
@@ -33,19 +33,34 @@ Your task:
 
 Guidelines:
 
-### Query Construction (High Recall)
+### Query Construction
 - Include **brand, model, and product type**.
 - Include **generation / year / variant** only if it strongly differentiates the product.
 - **Exclude** color, cosmetic descriptors, minor accessories, bundle/lot details.
 - Avoid condition terms (used, new, broken) in the query—they can be applied as a filter.
-- Queries should be **short and broad**, ideally 1–3 core terms.
-- Include common alternative spellings or abbreviations if relevant.
+- Queries should be **short**, ideally 1-5 core terms.
 
 ### Examples
-- "Nintendo DS Lite Pink" → "Nintendo DS Lite"
-- "iPhone 13 Pro 256GB cracked screen" → "iPhone 13 Pro"
-- "MacBook Pro 2019 16 inch i9" → "MacBook Pro 2019"
-- "Keychron K7 Wireless Mechanical Keyboard" → "Keychron K7"
+- Title: "My Stupidity is Your Gain! Sherwin Williams Paint 2 gals"  
+  Description: "2 gals of Sun Bleached Ochre Super Paint and Primer in one. One gal was opened to try on the wall as pictured. The other gal has not been opened. I paid $76.99 a gallon. You get 2 gallons for less than the price of one because I made a mistake in color!"  
+  → eBay Query: "Sherwin Williams Super Paint and Primer 2 gallon"
+
+- Title: "MacBook Pro 2019 16 inch i9 32GB RAM cracked corner"  
+  Description: "Works perfectly just cosmetic damage."  
+  → eBay Query: "MacBook Pro 2019 16 inch"
+
+- Title: "Beautiful solid wood farmhouse dining table set"  
+  Description: "Real oak, seats 6, includes 4 chairs."  
+  → eBay Query: "solid wood dining table"
+
+- Title: "DeWalt 20V Max XR Brushless Drill w battery"  
+  Description: "Model DCD791, barely used."  
+  → eBay Query: "DeWalt 20V Max XR DCD791"
+
+- Title: "Nike Air Jordan 1 Retro High OG size 10 red"  
+  Description: "Worn twice, great condition."  
+  → eBay Query: "Air Jordan 1 Retro High OG"
+
 
 ### Browse API Parameter Guidelines
 - **Filter:** ONLY use `conditionIds:{{1000}}` for New or `conditionIds:{{3000}}` for Used. No other condition IDs allowed. If the listing is ambiguous, include both "conditionIds:{{1000|3000}}"
@@ -91,9 +106,9 @@ Facebook Marketplace listing:
 eBay search results:
 {ebay_items_text}
 
-Your task: Identify which eBay items are actually comparable to the FB listing.
+Your task: Identify which eBay items are actually comparable to the FB listing. Internally, reason carefully about each item one by one and provide a short justification for each item's accept/reject decision. 
 
-Internally, reason about each item one by one and justify your decision, but do NOT output your reasoning.
+Search on the web for specific product names as needed in order to inform your decision. Do NOT use images or other visual information to make your decision.
 
 An eBay item is comparable if and only if:
 
@@ -122,17 +137,62 @@ An eBay item is comparable if and only if:
 - Exclude items that are a **different variant that materially affects price**, such as:
   - locked vs unlocked
   - mini vs pro vs max
-  - wrong size class or generation
-- Minor differences (color, storage, cosmetic wear) are acceptable only if the core product is clearly the same.
+  - wrong generation
+- Minor differences are acceptable only if the core product is clearly the same.
+  - color (red vs blue vs unspecified color of the same product)
+  - cosmetic wear (scratches, dents, etc.)
 
-Be **strict**. If there is ambiguity, missing information, or reasonable doubt, exclude the item.
+5. Size Differences
+- Different sizes are acceptable for clothing items because it doesn't affect price. For example, a size 10 Arc'teryx jacket is comparable to a size 12 Arc'teryx jacket.
+- For other items such as electronics, different sizes are not acceptable. For example, a 13 inch MacBook Pro is not comparable to a 16 inch MacBook Pro due to large price difference.
+
+Be **strict**. If there is ambiguity, too much missing key information, or reasonable doubt, exclude the item.
+
+Justification must be concise and include the key factors that led to the decision. If relevant, add the exact distinction made between the FB listing and the eBay item in parentheses.
+
+### Examples
+- FB Title: "Canon EOS Rebel T7 DSLR camera kit"
+  FB Description: "Includes camera body and 18-55mm lens. Used once."
+  eBay Results:
+    1. "Canon EOS Rebel T7 DSLR with 18-55mm lens bundle" → Accept: "Same model and full kit (18-55mm lens)"
+    2. "Canon EOS Rebel T6 camera body only" → Reject: "Different model (T6 vs T7)"
+    3. "Canon 50mm f/1.8 lens for Canon DSLR" → Reject: "Accessory (lens) is not full camera"
+    4. "Canon EOS Rebel T7 DSLR used, for parts" → Reject: "For parts / not working"
+    5. "Canon EOS Rebel T7 DSLR with extra battery" → Accept: "Same model, full product, minor accessory included (battery)"
+
+- FB Title: "MacBook Pro 2019 16 inch i9 32GB RAM"
+  FB Description: "Excellent condition, comes with charger."
+  eBay Results:
+    1. "MacBook Pro 2019 16 inch i9 32GB RAM" → Accept: "Exact model and specs"
+    2. "MacBook Pro 2020 16 inch i9" → Reject: "Different generation (2020 vs 2019)"
+    3. "MacBook Pro 2019 13 inch i7" → Reject: "Different size and CPU (13 inch vs 16 inch)"
+    4. "MacBook Pro 2019 16 inch i9 missing charger" → Accept: "Core product matches, minor missing accessory (charger)"
+    5. "MacBook Air 2019 13 inch i5" → Reject: "Different model entirely (MacBook Air vs MacBook Pro)"
+
+- FB Title: "Nike Air Jordan 1 Retro High OG size 10"
+  FB Description: "Worn twice, excellent condition."
+  eBay Results:
+    1. "Air Jordan 1 Retro High OG size 10 black" → Accept: "Core model matches, color irrelevant (black vs unknown)"
+    2. "Air Jordan 1 Mid OG size 10" → Reject: "Different variant (Mid vs High)"
+    3. "Air Jordan 1 Retro High OG size 9" → Accept: "Size class is irrelevant (9 vs 10)"
+    4. "Air Jordan 1 Retro High OG size 10 red, new" → Accept: "Same model (Air Jordan 1 Retro High OG) and size (10)"
+    5. "Air Jordan 1 Low OG size 10" → Reject: "Different variant (Low vs High)"
 
 Return your response as a JSON object with exactly this structure:
 {{
-  "comparable_indices": [1, 3, 5]
+  "comparable_indices": [1, 3],
+  "reasons": {{
+    "1": "Same model (Air Jordan 1 Retro High OG) and size (10) and condition",
+    "2": "Different product variant (Mid vs High)",
+    "3": "Matches core product (Air Jordan 1 Retro High OG)",
+    "4": "Accessory (lens) is not full camera"
+  }}
 }}
 
-Where comparable_indices are 1-based indices from the eBay results list.
+Where:
+- comparable_indices are 1-based indices from the eBay results list of the items that are suitable for accurate price comparison.  
+- reasons is an object mapping each 1-based index to a short reason (1-2 sentences max) explaining why it was accepted or rejected
 
-Only include items that are suitable for accurate price comparison.  
+Provide reasons for ALL items in the eBay results list, not just the comparable ones. Keep reasons concise and focused on the key factor that led to the decision.
+
 Return only the JSON object and no other text."""

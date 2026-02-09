@@ -8,6 +8,7 @@ export interface CompItem {
   price: number;
   url: string;
   filtered?: boolean;  // True if this item was filtered out as non-comparable
+  filterReason?: string;  // Short reason explaining why item was accepted or rejected
 }
 
 export interface Listing {
@@ -78,7 +79,7 @@ function ListingCompsPanel({ listing }: { listing: Listing }) {
               ? compItems.map((item, i) => {
                   const isFiltered = item.filtered === true;
                   return (
-                    <li key={i} className={`flex items-baseline gap-2 flex-wrap ${isFiltered ? 'opacity-60' : ''}`}>
+                    <li key={i} className={`flex items-baseline gap-2 flex-wrap ${isFiltered ? 'opacity-60' : ''}`} style={{ wordBreak: 'break-word', overflowWrap: 'anywhere' }}>
                       <a
                         href={item.url}
                         target="_blank"
@@ -93,6 +94,21 @@ function ListingCompsPanel({ listing }: { listing: Listing }) {
                       </span>
                       {isFiltered && (
                         <span className="text-xs text-red-500/70 shrink-0">(filtered)</span>
+                      )}
+                      {item.filterReason && (
+                        <span 
+                          className={`text-xs ${isFiltered ? 'text-red-500/70' : 'text-muted-foreground'}`}
+                          style={{
+                            wordBreak: 'break-word',
+                            overflowWrap: 'break-word',
+                            whiteSpace: 'normal',
+                            minWidth: 0,
+                            flex: '1 1 0%',
+                            maxWidth: '100%'
+                          }}
+                        >
+                          — {item.filterReason}
+                        </span>
                       )}
                     </li>
                   );
