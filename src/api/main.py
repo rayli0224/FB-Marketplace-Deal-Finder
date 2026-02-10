@@ -2,10 +2,11 @@
 FastAPI application for FB Marketplace Deal Finder.
 """
 
-import logging
 import json
+import logging
 import os
 import queue
+import sys
 import threading
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -20,6 +21,11 @@ from src.utils.listing_processor import process_single_listing
 from src.utils.colored_logger import setup_colored_logger, log_step_sep, log_step_title, log_error_short, wait_status
 
 logger = setup_colored_logger("api")
+
+DEBUG_MODE = (
+    os.environ.get("DEBUG", "").lower() in ("1", "true", "yes")
+    or "--debug" in sys.argv
+)
 
 app = FastAPI(title="FB Marketplace Deal Finder API")
 
@@ -316,7 +322,19 @@ def search_deals_stream(request: SearchRequest):
             log_step_sep(logger, f"Step 1: Starting search — query='{request.query}', zip={request.zipCode}, radius={request.radius}mi")
             log_step_sep(logger, "Step 2: Scraping Facebook Marketplace")
             yield f"data: {json.dumps({'type': 'phase', 'phase': 'scraping'})}\n\n"
-            
+            if DEBUG_MODE:
+                debug_mode_payload = {
+                    "type": "debug_mode",
+                    "debug": True,
+                    "query": request.query,
+                    "zipCode": request.zipCode,
+                    "radius": request.radius,
+                    "maxListings": request.maxListings,
+                    "threshold": request.threshold,
+                    "extractDescriptions": request.extractDescriptions,
+                }
+                yield f"data: {json.dumps(debug_mode_payload)}\n\n"
+
             thread = threading.Thread(target=scrape_worker)
             thread.start()
             
@@ -377,6 +395,18 @@ def search_deals_stream(request: SearchRequest):
                 return
             
             logger.info(f"Found {len(fb_listings)} listings")
+            if DEBUG_MODE:
+                debug_facebook_payload = [
+                    {
+                        "title": listing.title,
+                        "price": listing.price,
+                        "location": listing.location,
+                        "url": listing.url,
+                        "description": listing.description or "",
+                    }
+                    for listing in fb_listings
+                ]
+                yield f"data: {json.dumps({'type': 'debug_facebook', 'listings': debug_facebook_payload})}\n\n"
             yield f"data: {json.dumps({'type': 'phase', 'phase': 'evaluating'})}\n\n"
             scored_listings = []
             evaluated_count = 0
@@ -401,15 +431,18 @@ def search_deals_stream(request: SearchRequest):
                         )
                         
                         evaluated_count += 1
-                        
-                        # Stream progress after each listing is processed
+                        if DEBUG_MODE and result and result.get("ebaySearchQuery"):
+                            debug_ebay_payload = {
+                                "type": "debug_ebay_query",
+                                "fbTitle": listing.title,
+                                "ebayQuery": result["ebaySearchQuery"],
+                            }
+                            yield f"data: {json.dumps(debug_ebay_payload)}\n\n"
                         yield f"data: {json.dumps({
                             'type': 'listing_processed',
                             'evaluatedCount': evaluated_count,
                             'currentListing': listing.title
                         })}\n\n"
-                        
-                        # If listing meets threshold, add to results
                         if result:
                             scored_listings.append(result)
                             # Deal found logging is handled in listing_processor.py

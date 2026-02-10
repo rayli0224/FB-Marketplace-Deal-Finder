@@ -52,6 +52,11 @@ alwaysApply: true
 - Use constants for: numeric or string values that represent configuration (durations, sizes, limits), repeated literals, and any value whose meaning isn’t obvious from context.
 - **Styling constants**: Shared UI styling must be abstracted. Put **generic** (reusable) style/class strings in a dedicated shared module and import where needed. Constants that are not generic—specific to one component or feature—go in that file instead of the shared one.
 
+## Dead Code and Unused Logic
+
+- **Delete code that is no longer used.** If something is no longer part of core logic (e.g. a replaced feature, a removed UI path, or an obsolete helper), remove it rather than leaving it in the codebase. This includes unused components, types, handlers, and files.
+- Do not keep "might use later" or deprecated code; remove it. Version control preserves history if needed.
+
 ## Code Organization
 
 - Prefer robust, maintainable solutions over fragile, clever code
