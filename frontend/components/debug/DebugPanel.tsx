@@ -13,6 +13,8 @@ export type DebugFacebookListing = {
 
 export type DebugEbayQueryEntry = { fbTitle: string; ebayQuery: string };
 
+export type DebugLogEntry = { level: string; message: string };
+
 export interface DebugPanelProps {
   searchParams: DebugSearchParams | null;
   facebookListings: DebugFacebookListing[];
@@ -21,8 +23,8 @@ export interface DebugPanelProps {
 
 /**
  * Expandable panel shown only when the backend runs in debug mode. Displays search
- * request summary, Facebook data retrieved for the query, and the generated eBay
- * search queries from OpenAI. Persists for the duration of one search and resets on a new query.
+ * request summary, Facebook data retrieved, and the generated eBay search queries.
+ * Logs are shown in a separate floating panel. Persists for the duration of one search and resets on a new query.
  */
 export function DebugPanel({
   searchParams,

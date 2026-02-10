@@ -13,7 +13,7 @@ from src.scrapers.fb_marketplace_scraper import Listing
 from src.scrapers.ebay_scraper import get_market_price, DEFAULT_EBAY_ITEMS
 from src.api.deal_calculator import calculate_deal_score
 from src.utils.openai_helpers import generate_ebay_query_for_listing, filter_ebay_results_with_openai
-from src.utils.colored_logger import setup_colored_logger, log_substep_sep, log_data_line, log_step_title, set_step_indent, clear_step_indent, wait_status
+from src.utils.colored_logger import setup_colored_logger, log_data_block, log_listing_box_sep, set_step_indent, clear_step_indent, wait_status
 import statistics
 
 logger = setup_colored_logger("listing_processor")
@@ -67,25 +67,30 @@ def process_single_listing(
     Returns listing dict with dealScore. When eBay stats are missing or calculation
     fails, dealScore is None so the UI shows "--".
     """
-    progress = f"[{listing_index}/{total_listings}] " if (listing_index is not None and total_listings is not None) else ""
-    log_substep_sep(logger, f"{progress}FB listing: {listing.title}")
+    if listing_index is not None and total_listings is not None:
+        progress = f"[{listing_index}/{total_listings}] "
+    elif listing_index is not None:
+        progress = f"[{listing_index}/n] "
+    else:
+        progress = ""
+    log_listing_box_sep(logger)
+    logger.info(f"{progress}FB listing: {listing.title}")
     set_step_indent("  ")
     try:
-        log_data_line(logger, "Data", price=listing.price, location=listing.location, url=listing.url)
-        logger.debug(f"Description: {listing.description}")
+        log_data_block(logger, "Data", price=listing.price, location=listing.location, url=listing.url)
+        if listing.description:
+            logger.debug(f"  Description: {listing.description}")
 
-        log_step_title(logger, "Step 1: Generating eBay query")
-        with wait_status(logger, "eBay query (OpenAI)"):
+        logger.info("💡 Preparing eBay search")
+        with wait_status(logger, "eBay search"):
             query_result = generate_ebay_query_for_listing(listing, original_query)
         if not query_result:
-            logger.warning("Failed to generate eBay query — unknown deal score")
+            logger.warning("Could not prepare search — skipping deal score")
             return _listing_result(listing, None)
 
         enhanced_query, browse_api_parameters = query_result
 
-        log_step_title(logger, f"Step 2: Fetching eBay prices — '{enhanced_query}'")
-        if browse_api_parameters:
-            logger.info("Using Browse API parameters from OpenAI")
+        logger.info("💰 Searching eBay for similar items")
         with wait_status(logger, "eBay prices"):
             ebay_stats = get_market_price(
                 search_term=enhanced_query,
@@ -94,17 +99,17 @@ def process_single_listing(
             )
 
         if not ebay_stats:
-            logger.warning("No eBay stats — unknown deal score")
+            logger.warning("No eBay results — skipping deal score")
             return _listing_result(listing, None)
         if ebay_stats.sample_size < 3:
-            logger.warning(f"Found only {ebay_stats.sample_size} eBay listing(s) (small sample size)")
-        logger.info(f"Found {ebay_stats.sample_size} eBay listings, avg ${ebay_stats.average:.2f}")
+            logger.warning(f"Only {ebay_stats.sample_size} similar listing(s) — small sample")
+        logger.info(f"📋 {ebay_stats.sample_size} similar listings on eBay (avg ${ebay_stats.average:.2f})")
 
-        log_step_title(logger, "Step 3: Filtering eBay results for comparability")
+        logger.info("🔍 Keeping only true matches")
         ebay_items = getattr(ebay_stats, "item_summaries", None)
         all_items_with_filter_flag = None
         if ebay_items:
-            with wait_status(logger, "Filtering eBay results (OpenAI)"):
+            with wait_status(logger, "matching listings"):
                 filter_result = filter_ebay_results_with_openai(listing, ebay_items)
             if filter_result is not None:
                 comparable_indices, filtered_items, filter_reasons = filter_result
@@ -132,15 +137,15 @@ def process_single_listing(
                         ebay_stats.average = statistics.mean(filtered_prices)
                         ebay_stats.sample_size = len(filtered_prices)
                         ebay_stats.item_summaries = all_items_with_filter_flag
-                        logger.info(f"Filtered to {ebay_stats.sample_size} comparable, avg ${ebay_stats.average:.2f}")
+                        logger.info(f"📋 {ebay_stats.sample_size} matches (avg ${ebay_stats.average:.2f})")
                     elif len(filtered_prices) > 0:
                         ebay_stats.raw_prices = sorted(filtered_prices)
                         ebay_stats.average = statistics.mean(filtered_prices)
                         ebay_stats.sample_size = len(filtered_prices)
                         ebay_stats.item_summaries = all_items_with_filter_flag
-                        logger.warning(f"Filtering left {ebay_stats.sample_size} items (below minimum 3)")
+                        logger.warning(f"Only {ebay_stats.sample_size} matches (need at least 3 to compare)")
                     else:
-                        logger.warning("All items filtered out — cannot calculate comparison")
+                        logger.warning("No matching listings — can't compare price")
                         ebay_stats.average = 0
                         ebay_stats.sample_size = 0
                         ebay_stats.raw_prices = []
@@ -157,12 +162,12 @@ def process_single_listing(
                     ]
                     ebay_stats.item_summaries = all_items_with_filter_flag
 
-        log_step_title(logger, "Step 4: Calculating deal score")
+        logger.info("📊 Comparing price")
         deal_score = calculate_deal_score(listing.price, ebay_stats)
         comp_items = all_items_with_filter_flag if all_items_with_filter_flag is not None else getattr(ebay_stats, "item_summaries", None)
 
         if deal_score is None:
-            logger.warning("Could not calculate deal score — unknown")
+            logger.warning("Could not compare price")
             return _listing_result(
                 listing,
                 None,
@@ -172,11 +177,11 @@ def process_single_listing(
                 comp_items=comp_items,
             )
 
-        logger.info(f"Deal score: {deal_score:.1f}% savings vs eBay avg")
+        logger.info(f"📊 {deal_score:.1f}% below typical eBay price")
         if deal_score >= threshold:
-            logger.info(f"Deal: {deal_score:.1f}% (FB ${listing.price:.2f} vs eBay avg ${ebay_stats.average:.2f})")
+            logger.info(f"✅ Good deal: {deal_score:.1f}% (FB ${listing.price:.2f} vs eBay avg ${ebay_stats.average:.2f})")
         else:
-            logger.info(f"Below threshold ({deal_score:.1f}% < {threshold}%)")
+            logger.info(f"⚠️ Not a big enough deal (under {threshold}% savings)")
 
         return _listing_result(
             listing,
@@ -188,3 +193,4 @@ def process_single_listing(
         )
     finally:
         clear_step_indent()
+        log_listing_box_sep(logger)

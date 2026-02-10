@@ -8,45 +8,66 @@ alwaysApply: true
 ## Principles
 
 - **Clear and concise**: No unneeded information. One idea per line where possible.
-- **No module prefix**: Log output is `LEVEL: message` only. Do not add or reintroduce `[module_name]` in the formatter.
-- **Errors stand out**: WARNING and ERROR use distinct colors (yellow, bold red). INFO and DEBUG are uncolored (black).
+- **No level or module prefix**: Log output is the message only (no "INFO:", "DEBUG:", or module name). The formatter in `colored_logger` emits just the message; WARNING and ERROR messages use distinct colors (yellow, bold red) so they still stand out.
 
-## Step and Sub-step Breaks
+## Steps and Horizontal Lines
 
-- Use **long full-width separator lines** to break between steps and sub-steps, not inline text in the title.
-- Pattern: (1) a full line of dashes, (2) the step/sub-step title on its own line, (3) another full line of dashes.
-- **Step titles are bold** (when stdout is a TTY) so steps are easy to spot; the helpers in `colored_logger` apply this automatically.
-- Use the shared helpers from `src.utils.colored_logger`:
-  - **`log_step_sep(logger, title)`** — main step (e.g. "Step 2: Scraping Facebook Marketplace").
-  - **`log_substep_sep(logger, title)`** — sub-step (e.g. "FB Marketplace search — ...").
-  - **`log_step_title(logger, message, level=logging.INFO)`** — step/section titles with separator lines above and below (same pattern as step/substep seps). Bold when TTY; use for any bold section (e.g. "Step 1: Generating eBay query", "Search done: N listings"), including sub-content.
-- **Indent sub-step content**: After a sub-step separator, call **`set_step_indent("  ")`** so subsequent log lines are indented; call **`clear_step_indent()`** in a `finally` when the sub-step block ends. This makes it easy to see what belongs under each sub-step.
-- Do not use boxes, borders, or inline wrappers (e.g. `──────── title ────────`) around the title.
+- **"Step 1", "Step 2", …** are only for the **overall query** (e.g. "Step 1: Starting search", "Step 2: Scraping Facebook Marketplace", "Step 5: Search completed"). Do not use step numbers for per-listing analysis.
+- **Only the explicit main steps get horizontal separator lines.** Use **`log_step_sep(logger, title)`** only for Step 1, Step 2, Step 3, Step 4, Step 5 (and the initial "Search request" if desired). Do **not** use separator lines for: "Search done", "Found N listings", "FB Marketplace search", "Processing N listings", per-listing headers, or per-listing phases (Generating eBay query, Fetching eBay prices, etc.). Use plain **`logger.info(...)`** for those so the log is not cluttered with dividers.
+- **Indent section content**: When a block of lines belongs under a heading (e.g. FB Marketplace search fields, per-listing data), call **`set_step_indent("  ")`** before and **`clear_step_indent()`** in a `finally` when the block ends.
+- Do not use boxes, borders, or inline wrappers around titles.
 
 ## Waiting / Loading Status
 
-- For API requests and other long-running work, use **`wait_status(logger, label)`** as a context manager. It logs "Waiting for {label}...", then every few seconds "  … {label} (Ns)", then "Done: {label} (N.Ns)" when the block exits. Use a short, user-friendly label (e.g. "eBay prices", "Facebook Marketplace search", "eBay query (OpenAI)").
+- For API requests and other long-running work, use **`wait_status(logger, label)`** as a context manager. It logs "⏳ Waiting for {label}...", then every few seconds "  … {label} (Ns)", then "✅ Done: {label} (N.Ns)" when the block exits. Use a short, user-friendly label (e.g. "eBay prices", "Facebook Marketplace search", "eBay query (OpenAI)").
 
 ## Transparent Data
 
 - Log what is **retrieved** from external sources (e.g. FB Marketplace) and what is **processed** so it’s visible at default log level.
-- Use **`log_data_line(logger, label, **kwargs)`** for one-line key=value data (e.g. "Retrieved: title=... | price=... | location=... | url=...").
+- For **listing/retrieved blocks** (each item with multiple fields), use **`log_data_block(logger, label, **kwargs)`**: one line for the label with optional **[idx/total]** prefix (e.g. "[1/10] Retrieved:" or "[2/n] FB listing:"), then one indented line per field. Use the numeric total when known; use **n** only when the total is unknown. See **Listing Lines** below.
 - Keep verbose or debug-only detail in `logger.debug()`.
 
 ## Reusable Helpers
 
 - Use the abstractions in `src.utils.colored_logger` so behavior stays consistent and reusable:
-  - `log_step_sep`, `log_substep_sep` — step/sub-step separator lines.
-  - `log_step_title` — bold inline step/section titles (e.g. "Step 1: ...", "Search done: ...").
-  - `set_step_indent`, `clear_step_indent` — indent sub-step content (thread-local; clear in `finally`).
+  - `log_step_sep` — horizontal separator lines for main steps only (Step 1–5). Do not use for other headings.
+  - `log_step_title` — use only when a main-step message needs separator lines (e.g. warning "Step 2: No listings found").
+  - `set_step_indent`, `clear_step_indent` — indent section content (thread-local; clear in `finally`).
   - `wait_status` — context manager for long-running work; logs waiting message and elapsed time every few seconds.
   - `log_data_line` — one-line key=value data.
+  - `log_data_block` — label then one line per field (indented); for listing/retrieved blocks.
+  - `log_listing_box_sep` — single dash line above and below each list element (Retrieved block, FB listing block).
   - `log_error_short` — errors with consistent truncation (no raw `logger.error` with manual truncation).
 - When adding new logging, prefer these helpers over ad-hoc `logger.info`/`logger.error` patterns.
 
+## Human-Readable Messages
+
+- **Log and error messages must be understandable by a non-technical person.** They may appear in the debug UI or in support conversations.
+- **No technical jargon** in messages. Avoid: selector, DOM, element, h1, div, aria-label, timeout (as a technical term), CSS, XPath, regex, testid, attribute, node, container, wrapper, etc. Use plain language instead (e.g. "the location button", "the zip code box", "listing cards on the page", "the page is still loading", "we could not find where to set your location").
+- **Say what went wrong in everyday words** and, when helpful, what the user can infer (e.g. "Results may be for the wrong area", "Facebook may have changed their layout").
+
+## Emojis in Logs
+
+- Use emojis **sparingly** to make log types easy to distinguish at a glance. Do not overkill.
+- **Steps / phases**: 🔍 Step 1 (search start), 📜 Step 2 (scrape), 💰 Step 3 (eBay), 📊 Step 4 (scores / processing), ✅ Step 5 (completed).
+- **Success / done**: ✅ for completion, "Done:", "Found N deals", "Search done".
+- **Warning**: ⚠️ for warnings (auth, no listings, below threshold, cancellation).
+- **Error**: ❌ applied in `log_error_short` so errors stand out.
+- **Waiting**: ⏳ "Waiting for {label}..."; ✅ "Done: {label}" (from `wait_status`).
+- **Data / counts**: 📋 for "Found N listings" or similar summary counts.
+- Emojis appear in the raw log message so they propagate to any debug log UI unchanged.
+
+## Listing Lines
+
+- Prefix listing lines with **\[idx/total]** (e.g. "[1/10] Retrieved:", "[2/4] FB listing: ..."). Use the **numeric total when known** (e.g. [1/10], [2/4]); use **n** when the total is unknown (e.g. [1/n], [2/n]).
+- Use **`log_data_block`** for each retrieved/listing entry: label line with [idx/total] prefix, then indented lines per field. Continuation lines (Description, Data block fields) have no prefix and are indented so they are clearly part of that entry.
+- When an optional feature is turned off and affects what gets logged (e.g. "descriptions toggled off"), log that once with an information emoji (e.g. ℹ️) and plain language so the user knows why some detail is missing.
+- **Keep per-listing logs minimal at INFO**: one line per phase and one summary line for results; put verbose detail in **DEBUG**.
+- **Box each list element**: use **`log_listing_box_sep(logger)`** (single dash line) above and below each Retrieved block and each FB listing block so each element is visually contained.
+
 ## What to Avoid
 
-- Do not add box-drawing or nested-box logic.
+- Do not log verbose or repetitive detail at INFO (e.g. raw API responses, multi-line params); use DEBUG.
 - Do not add a module/source prefix (e.g. `[api]`, `[fb_scraper]`) to log output.
 - Do not use empty `logger.info("")` for spacing; use separator lines instead.
 - Do not truncate step titles inline with ".." when using separators; the title is on its own line.

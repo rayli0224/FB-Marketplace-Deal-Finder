@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from typing import Optional, List
 from playwright.sync_api import sync_playwright, Browser, Page, BrowserContext, TimeoutError as PlaywrightTimeoutError
 from src.scrapers.utils import random_delay, parse_price, is_valid_listing_price
-from src.utils.colored_logger import setup_colored_logger, log_step_sep, log_substep_sep, log_data_line, log_step_title, set_step_indent, clear_step_indent, wait_status
+from src.utils.colored_logger import setup_colored_logger, log_data_block, log_listing_box_sep, set_step_indent, clear_step_indent, wait_status
 
 logger = setup_colored_logger("fb_scraper")
 
@@ -186,31 +186,29 @@ class FBMarketplaceScraper:
             try:
                 self.page.wait_for_selector("h1", timeout=10000)
             except PlaywrightTimeoutError:
-                pass
-            
+                logger.debug("Marketplace page is still loading; continuing with location setup")
+
             location_selectors = [
                 "div[aria-label*='location']",
                 "div[aria-label*='Location']",
                 "span:has-text('Location')",
             ]
-            
+
             location_clicked = False
             for selector in location_selectors:
                 try:
-                    if selector.startswith("//"):
-                        location_button = self.page.locator(selector).first
-                    else:
-                        location_button = self.page.locator(selector).first
-                    
+                    location_button = self.page.locator(selector).first
                     if location_button.is_visible(timeout=5000):
                         location_button.click()
                         random_delay(1, 2)
                         location_clicked = True
                         break
-                except (PlaywrightTimeoutError, Exception):
+                except (PlaywrightTimeoutError, Exception) as e:
+                    logger.debug("Could not find the location button on the page — %s", e)
                     continue
-            
+
             if not location_clicked:
+                logger.warning("Could not find where to set your location. Results may be for the wrong area.")
                 try:
                     location_input = self.page.locator("input[placeholder*='zip'], input[placeholder*='Zip'], input[type='text']").first
                     if location_input.is_visible(timeout=5000):
@@ -218,36 +216,50 @@ class FBMarketplaceScraper:
                         random_delay(1, 2)
                         location_input.press("Enter")
                         random_delay(1, 2)
+                    else:
+                        logger.warning("Could not find the box to enter zip code or location.")
                 except PlaywrightTimeoutError:
-                    pass
-            
+                    logger.warning("Could not find the zip code or location box.")
+                except Exception as e:
+                    logger.warning("Could not enter zip code — %s", e)
+
             if location_clicked:
+                apply_clicked = False
                 try:
                     zip_input = self.page.locator("input[placeholder*='zip'], input[placeholder*='Zip'], input[type='text']").first
                     if zip_input.is_visible(timeout=5000):
                         zip_input.fill(zip_code)
                         random_delay(1, 2)
-                        
+
                         apply_selectors = [
                             "div[aria-label='Apply']",
                             "button:has-text('Apply')",
                             "button:has-text('Done')",
                         ]
-                        
+
                         for selector in apply_selectors:
                             try:
                                 apply_button = self.page.locator(selector).first
                                 if apply_button.is_visible(timeout=3000):
                                     apply_button.click()
                                     random_delay(1, 2)
+                                    apply_clicked = True
                                     break
                             except PlaywrightTimeoutError:
                                 continue
-                except PlaywrightTimeoutError:
-                    pass
-            
-        except Exception:
-            pass
+                        if not apply_clicked:
+                            logger.warning("Location dialog opened but we could not confirm it. Location may not have been applied.")
+                    else:
+                        logger.warning("Location dialog opened but the zip code box was not visible. Location may not have been applied.")
+                except PlaywrightTimeoutError as e:
+                    logger.warning("Could not apply location (zip box or Confirm button) — %s", e)
+                except Exception as e:
+                    logger.warning("Location could not be applied — %s", e)
+
+        except FacebookNotLoggedInError:
+            raise
+        except Exception as e:
+            logger.warning("Setting your location failed — %s", e)
     
     def _search(self, query: str):
         """Enter search query and wait for results."""
@@ -289,8 +301,8 @@ class FBMarketplaceScraper:
                         break
                     except PlaywrightTimeoutError:
                         continue
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("Search results area did not appear in time — %s", e)
             
         except Exception:
             raise
@@ -316,7 +328,8 @@ class FBMarketplaceScraper:
                     price = parse_price(price_text)
                     if price:
                         return price
-            except:
+            except Exception as e:
+                logger.debug("Could not read the price from this listing — %s", e)
                 continue
         
         return None
@@ -347,7 +360,8 @@ class FBMarketplaceScraper:
                         if parsed == price:
                             price_elem = candidate
                             break
-                except:
+                except Exception as e:
+                    logger.debug("Could not find the title for this listing — %s", e)
                     continue
             
             if price_elem:
@@ -361,8 +375,8 @@ class FBMarketplaceScraper:
                         line = line.strip()
                         if line:
                             return line
-        except:
-            pass
+        except Exception as e:
+            logger.debug("Could not get listing title from page layout — %s", e)
         
         return ""
     
@@ -394,8 +408,8 @@ class FBMarketplaceScraper:
                 if re.match(r'^[\$0-9.\s]+$', line):
                     continue
                 return line
-        except:
-            pass
+        except Exception as e:
+            logger.debug("Could not read listing title from text — %s", e)
         
         return ""
     
@@ -438,7 +452,8 @@ class FBMarketplaceScraper:
                     location = location_elem.inner_text().strip()
                     if location:
                         return location
-            except:
+            except Exception as e:
+                logger.debug("Could not read location for this listing — %s", e)
                 continue
         
         try:
@@ -446,8 +461,8 @@ class FBMarketplaceScraper:
             location_match = re.search(r'([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*,\s*[A-Z]{2})', full_text)
             if location_match:
                 return location_match.group(1)
-        except:
-            pass
+        except Exception as e:
+            logger.debug("Could not find a city/state location in the listing — %s", e)
         
         return ""
     
@@ -649,6 +664,11 @@ class FBMarketplaceScraper:
         if not listing_elements:
             listing_elements = self.page.locator("a[href*='/marketplace/item/']").all()
         
+        if not listing_elements:
+            logger.warning("We could not find any listing cards on the page. Facebook may have changed their layout.")
+        else:
+            logger.debug("Found %d listing cards on the page", len(listing_elements))
+        
         return listing_elements
     
     def _extract_listing_from_element(self, element, extract_descriptions: bool = False) -> Optional[Listing]:
@@ -698,7 +718,8 @@ class FBMarketplaceScraper:
             
             return None
             
-        except Exception:
+        except Exception as e:
+            logger.debug("Could not read one of the listings (missing price or title) — %s", e)
             return None
     
     def _extract_listings(
@@ -717,20 +738,26 @@ class FBMarketplaceScraper:
         try:
             self._scroll_page_to_load_content()
             listing_elements = self._find_listing_elements()
+            total = min(len(listing_elements), max_listings)
             for element in listing_elements[:max_listings]:
                 listing = self._extract_listing_from_element(element, extract_descriptions=extract_descriptions)
                 if listing:
-                    log_data_line(
-                        logger, "Retrieved",
+                    idx = len(listings) + 1
+                    label = f"[{idx}/{total}] Retrieved:" if total else "Retrieved:"
+                    log_listing_box_sep(logger)
+                    log_data_block(
+                        logger, label,
                         title=listing.title, price=listing.price, location=listing.location, url=listing.url,
                     )
-                    logger.debug(f"Description: {listing.description}")
+                    if listing.description:
+                        logger.debug(f"  Description: {listing.description}")
+                    log_listing_box_sep(logger)
                     listings.append(listing)
                     if on_listing_found:
                         on_listing_found(listing, len(listings))
             
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("Reading the list of listings from the page failed — %s", e)
         
         return listings
     
@@ -747,18 +774,32 @@ class FBMarketplaceScraper:
         """
         Run a Marketplace search and return up to max_listings results.
 
-        step_sep: "main" = main step separator line; "sub" = sub-step separator; None = plain title line only.
+        step_sep: "main" = main step separator line; "sub" = section separator (within Step 2); None = plain title line only.
         """
-        title = f"FB Marketplace search — '{query}' | zip={zip_code} | {radius}mi | max={max_listings}"
-        if extract_descriptions:
-            title += " | descriptions on"
         if step_sep == "main":
-            log_step_sep(logger, title)
+            logger.info("FB Marketplace search")
+            log_data_block(
+                logger, "",
+                query=query, zip=zip_code, radius=f"{radius}mi", max=max_listings,
+                descriptions="on" if extract_descriptions else "off"
+            )
         elif step_sep == "sub":
-            log_substep_sep(logger, title)
+            logger.info("FB Marketplace search")
             set_step_indent("  ")
+            log_data_block(
+                logger, "",
+                indent="  ",
+                query=query, zip=zip_code, radius=f"{radius}mi", max=max_listings,
+                descriptions="on" if extract_descriptions else "off"
+            )
         else:
-            logger.info(title)
+            log_data_block(
+                logger, "FB Marketplace search",
+                query=query, zip=zip_code, radius=f"{radius}mi", max=max_listings,
+                descriptions="on" if extract_descriptions else "off"
+            )
+        if not extract_descriptions:
+            logger.info("ℹ️ Descriptions toggled off — not fetching listing descriptions")
         try:
             with wait_status(logger, "Facebook Marketplace search"):
                 if not self.browser:
@@ -770,7 +811,6 @@ class FBMarketplaceScraper:
                     on_listing_found=on_listing_found,
                     extract_descriptions=extract_descriptions,
                 )
-            log_step_title(logger, f"Search done: {len(listings)} listings")
             return listings
         except Exception:
             raise
@@ -800,7 +840,7 @@ def search_marketplace(
     """
     Run a one-off Facebook Marketplace search and return the results.
 
-    step_sep: "main" = main step separator; "sub" = sub-step separator; None = plain title only.
+    step_sep: "main" = main step separator; "sub" = section separator; None = plain title only.
     """
     scraper = FBMarketplaceScraper(headless=headless)
     try:

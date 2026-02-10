@@ -22,10 +22,37 @@ from src.utils.colored_logger import setup_colored_logger, log_step_sep, log_ste
 
 logger = setup_colored_logger("api")
 
+
+class QueueLogHandler(logging.Handler):
+    """
+    Logging handler that pushes log records into a queue as debug_log events.
+    Used when DEBUG_MODE is on so the frontend can show logs for the current search.
+    """
+
+    def __init__(self, event_queue: queue.Queue):
+        super().__init__()
+        self._event_queue = event_queue
+
+    def emit(self, record: logging.LogRecord):
+        try:
+            msg = record.getMessage()
+            if msg:
+                self._event_queue.put({
+                    "type": "debug_log",
+                    "level": record.levelname,
+                    "message": msg,
+                })
+        except Exception:
+            pass
+
+
 DEBUG_MODE = (
     os.environ.get("DEBUG", "").lower() in ("1", "true", "yes")
     or "--debug" in sys.argv
 )
+
+# Loggers that receive the queue handler in debug mode (they use propagate=False).
+_DEBUG_LOG_LOGGER_NAMES = ("api", "fb_scraper", "listing_processor", "openai_helpers", "ebay_scraper")
 
 app = FastAPI(title="FB Marketplace Deal Finder API")
 
@@ -178,8 +205,8 @@ def search_deals(request: SearchRequest):
     """
     Search Facebook Marketplace and calculate deal scores using eBay market data.
     """
-    log_step_sep(logger, f"Step 1: Starting search — query='{request.query}', zip={request.zipCode}, radius={request.radius}mi")
-    log_step_sep(logger, "Step 2: Scraping Facebook Marketplace")
+    log_step_sep(logger, f"🔍 Step 1: Starting search — query='{request.query}', zip={request.zipCode}, radius={request.radius}mi")
+    log_step_sep(logger, "📜 Step 2: Scraping Facebook Marketplace")
     fb_listings = []
     try:
         fb_listings = search_fb_marketplace(
@@ -191,7 +218,7 @@ def search_deals(request: SearchRequest):
             extract_descriptions=request.extractDescriptions,
             step_sep="sub",
         )
-        logger.info(f"Found {len(fb_listings)} listings")
+        logger.info(f"📋 Found {len(fb_listings)} listings")
     except FacebookNotLoggedInError:
         logger.warning("🔒 Facebook session expired during non-streaming search")
         return JSONResponse(
@@ -202,14 +229,14 @@ def search_deals(request: SearchRequest):
         log_error_short(logger, f"Step 2 failed: {e}")
     scanned_count = len(fb_listings)
     if scanned_count == 0:
-        log_step_title(logger, "⚠️  Step 2: No listings found - login may be required", level=logging.WARNING)
+        logger.warning("⚠️ Step 2: No listings found - login may be required")
         return SearchResponse(
             listings=[],
             scannedCount=0,
             evaluatedCount=0
         )
 
-    log_step_sep(logger, "Step 3: Fetching eBay prices")
+    log_step_sep(logger, "💰 Step 3: Fetching eBay prices")
     ebay_stats = None
     try:
         with wait_status(logger, "eBay prices"):
@@ -220,15 +247,15 @@ def search_deals(request: SearchRequest):
     except Exception as e:
         log_error_short(logger, f"Step 3 failed: {e}")
     if ebay_stats:
-        log_step_sep(logger, "Step 4: Calculating deal scores")
+        log_step_sep(logger, "📊 Step 4: Calculating deal scores")
         scored_listings = score_listings(
             fb_listings=fb_listings,
             ebay_stats=ebay_stats,
             threshold=request.threshold
         )
         evaluated_count = len(scored_listings)
-        logger.info(f"Found {evaluated_count} deals")
-        log_step_sep(logger, f"Step 5: Search completed — {scanned_count} scanned, {evaluated_count} deals found")
+        logger.info(f"✅ Found {evaluated_count} deals")
+        log_step_sep(logger, f"✅ Step 5: Search completed — {scanned_count} scanned, {evaluated_count} deals found")
         return SearchResponse(
             listings=[ListingResponse(**listing) for listing in scored_listings],
             scannedCount=scanned_count,
@@ -246,7 +273,7 @@ def search_deals(request: SearchRequest):
         )
         for listing in fb_listings
     ]
-    log_step_sep(logger, f"Step 5: Search completed — {scanned_count} scanned, {len(all_listings)} returned")
+    log_step_sep(logger, f"✅ Step 5: Search completed — {scanned_count} scanned, {len(all_listings)} returned")
     return SearchResponse(
         listings=all_listings,
         scannedCount=scanned_count,
@@ -278,10 +305,18 @@ def search_deals_stream(request: SearchRequest):
     Cancellation: When the client disconnects, the generator detects it and signals
     cancellation to stop all processing (scraping thread and listing evaluation).
     """
-    log_step_sep(logger, f"Search request — query='{request.query}', zip={request.zipCode}, radius={request.radius}mi")
     event_queue = queue.Queue()
     fb_listings = []
     cancelled = threading.Event()
+
+    debug_log_handler = None
+    if DEBUG_MODE:
+        debug_log_handler = QueueLogHandler(event_queue)
+        debug_log_handler.setLevel(logging.DEBUG)
+        for name in _DEBUG_LOG_LOGGER_NAMES:
+            logging.getLogger(name).addHandler(debug_log_handler)
+
+    log_step_sep(logger, f"Search request — query='{request.query}', zip={request.zipCode}, radius={request.radius}mi")
     
     def on_listing_found(listing, count):
         if cancelled.is_set():
@@ -318,9 +353,20 @@ def search_deals_stream(request: SearchRequest):
     
     def event_generator():
         nonlocal cancelled
+
+        def drain_log_queue():
+            """Yield any debug_log and progress events already in the queue (non-blocking)."""
+            while True:
+                try:
+                    ev = event_queue.get_nowait()
+                except queue.Empty:
+                    return
+                if ev.get("type") in ("debug_log", "progress"):
+                    yield f"data: {json.dumps(ev)}\n\n"
+
         try:
-            log_step_sep(logger, f"Step 1: Starting search — query='{request.query}', zip={request.zipCode}, radius={request.radius}mi")
-            log_step_sep(logger, "Step 2: Scraping Facebook Marketplace")
+            log_step_sep(logger, f"🔍 Step 1: Starting search — query='{request.query}', zip={request.zipCode}, radius={request.radius}mi")
+            log_step_sep(logger, "📜 Step 2: Scraping Facebook Marketplace")
             yield f"data: {json.dumps({'type': 'phase', 'phase': 'scraping'})}\n\n"
             if DEBUG_MODE:
                 debug_mode_payload = {
@@ -342,7 +388,7 @@ def search_deals_stream(request: SearchRequest):
             while True:
                 # Check for cancellation first, even if queue has items
                 if cancelled.is_set():
-                    logger.info("⚠️  Search cancelled by client - stopping event stream")
+                    logger.info("⚠️ Search cancelled by client - stopping event stream")
                     break
                 
                 try:
@@ -351,7 +397,7 @@ def search_deals_stream(request: SearchRequest):
                     
                     # Check cancellation again after getting event (cancellation may have happened while waiting)
                     if cancelled.is_set():
-                        logger.info("⚠️  Search cancelled by client - stopping event stream")
+                        logger.info("⚠️ Search cancelled by client - stopping event stream")
                         break
                     
                     if event["type"] == "auth_error":
@@ -361,40 +407,46 @@ def search_deals_stream(request: SearchRequest):
 
                     if event["type"] == "scrape_done":
                         break
-                    
+
+                    # debug_log and progress events are yielded so the frontend can display them
                     # Check cancellation before yielding (client may have disconnected)
                     if cancelled.is_set():
-                        logger.info("⚠️  Search cancelled by client - stopping event stream")
+                        logger.info("⚠️ Search cancelled by client - stopping event stream")
                         break
-                    
+
                     try:
                         yield f"data: {json.dumps(event)}\n\n"
                     except (GeneratorExit, BrokenPipeError, ConnectionResetError, ConnectionAbortedError) as e:
                         # Client disconnected during yield - signal cancellation and re-raise
-                        logger.info(f"⚠️  Client disconnected during yield ({type(e).__name__}) - cancelling search")
+                        logger.info(f"⚠️ Client disconnected during yield ({type(e).__name__}) - cancelling search")
                         cancelled.set()
                         raise
                 except queue.Empty:
                     # Queue is empty, continue loop to check cancellation again
                     continue
-            
+
+            yield from drain_log_queue()
+
             # Wait for thread to finish, but don't block forever if cancelled
             if not cancelled.is_set():
                 thread.join(timeout=1.0)
                 if thread.is_alive():
-                    logger.warning("⚠️  Scraping thread still running after join timeout")
+                    logger.warning("⚠️ Scraping thread still running after join timeout")
             else:
-                logger.info("⚠️  Search cancelled - waiting for scraping thread to exit")
+                logger.info("⚠️ Search cancelled - waiting for scraping thread to exit")
                 # Give thread a moment to check cancelled flag and exit
                 thread.join(timeout=2.0)
                 if thread.is_alive():
-                    logger.warning("⚠️  Scraping thread still running after cancellation")
+                    logger.warning("⚠️ Scraping thread still running after cancellation")
             
             if cancelled.is_set():
-                logger.info("⚠️  Search cancelled - aborting processing")
+                logger.info("⚠️ Search cancelled - aborting processing")
                 return
-            
-            logger.info(f"Found {len(fb_listings)} listings")
+
+            yield from drain_log_queue()
+
+            logger.info(f"📋 Found {len(fb_listings)} listings")
+            yield from drain_log_queue()
             if DEBUG_MODE:
                 debug_facebook_payload = [
                     {
@@ -408,77 +460,97 @@ def search_deals_stream(request: SearchRequest):
                 ]
                 yield f"data: {json.dumps({'type': 'debug_facebook', 'listings': debug_facebook_payload})}\n\n"
             yield f"data: {json.dumps({'type': 'phase', 'phase': 'evaluating'})}\n\n"
-            scored_listings = []
-            evaluated_count = 0
 
-            if fb_listings:
-                log_step_sep(logger, f"Processing {len(fb_listings)} FB listings individually")
+            def evaluation_worker():
+                scored = []
+                count = 0
+                if not fb_listings:
+                    logger.warning("⚠️ Step 2: No listings found - login may be required")
+                    event_queue.put({"type": "evaluation_done", "scored_listings": scored, "evaluated_count": count})
+                    return
+                log_step_sep(logger, f"📊 Step 3: Processing {len(fb_listings)} FB listings individually")
                 for idx, listing in enumerate(fb_listings, 1):
-                    # Check for cancellation before processing each listing
                     if cancelled.is_set():
-                        logger.info("⚠️  Search cancelled - stopping listing processing")
                         break
-                    
                     try:
-                        # Process single listing: OpenAI → eBay → deal score
                         result = process_single_listing(
                             listing=listing,
                             original_query=request.query,
                             threshold=request.threshold,
                             n_items=DEFAULT_EBAY_ITEMS,
                             listing_index=idx,
-                            total_listings=len(fb_listings)
+                            total_listings=len(fb_listings),
                         )
-                        
-                        evaluated_count += 1
+                        count += 1
                         if DEBUG_MODE and result and result.get("ebaySearchQuery"):
-                            debug_ebay_payload = {
+                            event_queue.put({
                                 "type": "debug_ebay_query",
                                 "fbTitle": listing.title,
                                 "ebayQuery": result["ebaySearchQuery"],
-                            }
-                            yield f"data: {json.dumps(debug_ebay_payload)}\n\n"
-                        yield f"data: {json.dumps({
-                            'type': 'listing_processed',
-                            'evaluatedCount': evaluated_count,
-                            'currentListing': listing.title
-                        })}\n\n"
+                            })
+                        event_queue.put({
+                            "type": "listing_processed",
+                            "evaluatedCount": count,
+                            "currentListing": listing.title,
+                        })
                         if result:
-                            scored_listings.append(result)
-                            # Deal found logging is handled in listing_processor.py
-                            
+                            scored.append(result)
                     except Exception as e:
                         if cancelled.is_set():
                             break
                         logger.warning(f"Error processing listing '{listing.title}': {e}")
-                        evaluated_count += 1
-                        # Stream progress even if processing failed
-                        try:
-                            yield f"data: {json.dumps({
-                                'type': 'listing_processed',
-                                'evaluatedCount': evaluated_count,
-                                'currentListing': listing.title
-                            })}\n\n"
-                        except (GeneratorExit, BrokenPipeError, ConnectionResetError, ConnectionAbortedError) as e:
-                            logger.info(f"⚠️  Client disconnected during listing processing ({type(e).__name__}) - cancelling search")
-                            cancelled.set()
-                            raise
-            else:
-                log_step_title(logger, "⚠️  Step 2: No listings found - login may be required", level=logging.WARNING)
+                        count += 1
+                        event_queue.put({
+                            "type": "listing_processed",
+                            "evaluatedCount": count,
+                            "currentListing": listing.title,
+                        })
+                event_queue.put({
+                    "type": "evaluation_done",
+                    "scored_listings": scored,
+                    "evaluated_count": count,
+                })
+
+            eval_thread = threading.Thread(target=evaluation_worker)
+            eval_thread.start()
+
+            while True:
+                if cancelled.is_set():
+                    logger.info("⚠️ Search cancelled - aborting processing")
+                    return
+                try:
+                    event = event_queue.get(timeout=0.5)
+                except queue.Empty:
+                    continue
+                if event["type"] == "evaluation_done":
+                    scored_listings = event["scored_listings"]
+                    evaluated_count = event["evaluated_count"]
+                    break
+                if event["type"] == "debug_ebay_query":
+                    yield f"data: {json.dumps(event)}\n\n"
+                    continue
+                if event["type"] == "listing_processed":
+                    yield f"data: {json.dumps(event)}\n\n"
+                    continue
+                if event.get("type") in ("debug_log", "progress"):
+                    yield f"data: {json.dumps(event)}\n\n"
+
+            eval_thread.join(timeout=2.0)
             if cancelled.is_set():
                 return
-            log_step_sep(logger, f"Step 5: Search completed — {len(fb_listings)} scanned, {len(scored_listings)} deals found")
+            log_step_sep(logger, f"✅ Step 4: Search completed — {len(fb_listings)} scanned, {len(scored_listings)} deals found")
+            yield from drain_log_queue()
             done_event = {
                 "type": "done",
                 "scannedCount": len(fb_listings),
                 "evaluatedCount": evaluated_count,
                 "listings": scored_listings,
-                "threshold": request.threshold
+                "threshold": request.threshold,
             }
             yield f"data: {json.dumps(done_event)}\n\n"
         except (GeneratorExit, BrokenPipeError, ConnectionResetError, ConnectionAbortedError) as e:
             # Client disconnected - signal cancellation
-            logger.info(f"⚠️  Client disconnected ({type(e).__name__}) - cancelling search")
+            logger.info(f"⚠️ Client disconnected ({type(e).__name__}) - cancelling search")
             cancelled.set()
             raise
         except Exception as e:
@@ -486,7 +558,14 @@ def search_deals_stream(request: SearchRequest):
             log_error_short(logger, f"Error in event generator: {e}")
             cancelled.set()
             raise
-    
+        finally:
+            if debug_log_handler is not None:
+                for name in _DEBUG_LOG_LOGGER_NAMES:
+                    try:
+                        logging.getLogger(name).removeHandler(debug_log_handler)
+                    except Exception:
+                        pass
+
     return StreamingResponse(
         event_generator(),
         media_type="text/event-stream",
@@ -500,7 +579,7 @@ def ebay_active_listings(request: EbayStatsRequest):
     Directly call the eBay active listings API.
     Returns average price from active listings.
     """
-    log_step_title(logger, f"▶️  Step 1: eBay test request - query='{request.query}', nItems={request.nItems}")
+    log_step_title(logger, f"▶️ Step 1: eBay test request - query='{request.query}', nItems={request.nItems}")
 
     try:
         with wait_status(logger, "eBay test"):
