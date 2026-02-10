@@ -113,15 +113,14 @@ def generate_ebay_query_for_listing(
 def filter_ebay_results_with_openai(
     listing: Listing,
     ebay_items: List[dict]
-) -> Optional[Tuple[List[dict], dict]]:
+) -> Optional[Tuple[List[int], List[dict], dict]]:
     """
-<<<<<<< HEAD
     Filter eBay search results to keep only items comparable to the Facebook Marketplace listing.
     
-    Uses OpenAI to analyze each eBay item's title and compare it to the FB listing's title,
-    description, and price. Removes items that are accessories, different models, or otherwise
-    not comparable. This improves price comparison accuracy by ensuring only truly similar items
-    are used for calculating the market average.
+    Uses OpenAI to analyze each eBay item's title, description, and condition and compare them
+    to the FB listing's title, description, and price. Removes items that are accessories,
+    different models, or otherwise not comparable. This improves price comparison accuracy by
+    ensuring only truly similar items are used for calculating the market average.
     
     Returns tuple of (comparable_indices, filtered list of eBay items, reasons dict) or None if filtering fails.
     comparable_indices is a list of 1-based indices of items that passed filtering.

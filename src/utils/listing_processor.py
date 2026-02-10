@@ -10,7 +10,7 @@ listings are returned regardless of threshold or eBay data availability.
 from typing import Dict, Optional
 
 from src.scrapers.fb_marketplace_scraper import Listing
-from src.scrapers.ebay_scraper import get_market_price
+from src.scrapers.ebay_scraper import get_market_price, DEFAULT_EBAY_ITEMS
 from src.api.deal_calculator import calculate_deal_score
 from src.utils.openai_helpers import generate_ebay_query_for_listing, filter_ebay_results_with_openai
 from src.utils.colored_logger import setup_colored_logger, log_substep_sep, log_data_line, log_step_title, set_step_indent, clear_step_indent, wait_status
@@ -57,7 +57,7 @@ def process_single_listing(
     listing: Listing,
     original_query: str,
     threshold: float = 20.0,
-    n_items: int = 50,
+    n_items: int = DEFAULT_EBAY_ITEMS,
     listing_index: Optional[int] = None,
     total_listings: Optional[int] = None
 ) -> Dict:

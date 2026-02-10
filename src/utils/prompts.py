@@ -29,7 +29,6 @@ Your task:
    - `filter`: Use ONLY "conditionIds:{{1000}}" for New or "conditionIds:{{3000}}" for Used (no other condition IDs allowed). If the listing is ambiguous, include both "conditionIds:{{1000|3000}}"
    - `marketplace`: Use "EBAY_US" unless location indicates otherwise
    - `sort`: Use "bestMatch" for most searches
-   - `limit`: Use 50 for good statistical coverage
 
 Guidelines:
 
@@ -66,7 +65,6 @@ Guidelines:
 - **Filter:** ONLY use `conditionIds:{{1000}}` for New or `conditionIds:{{3000}}` for Used. No other condition IDs allowed. If the listing is ambiguous, include both "conditionIds:{{1000|3000}}"
 - **Marketplace:** Always include. Use "EBAY_US" unless location indicates otherwise.
 - **Sort:** Always include. Use "bestMatch" for most searches.
-- **Limit:** Always include. Use 50 for good statistical coverage.
 
 ### Output Format
 Return ONLY a JSON object exactly like this:
@@ -76,8 +74,7 @@ Return ONLY a JSON object exactly like this:
   "browse_api_parameters": {{
       "filter": "conditionIds:{{1000|3000}}",
       "marketplace": "EBAY_US",
-      "sort": "bestMatch",
-      "limit": 50
+      "sort": "bestMatch"
   }}
 }}
 """

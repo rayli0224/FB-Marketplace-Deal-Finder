@@ -23,6 +23,9 @@ VALID_CONDITION_IDS = {1000, 3000}
 EBAY_APP_ID = os.environ.get("EBAY_APP_ID", "")
 EBAY_CLIENT_SECRET = os.environ.get("EBAY_CLIENT_SECRET", "")
 
+# Default number of eBay listings to fetch for price comparison
+DEFAULT_EBAY_ITEMS = 50
+
 
 @dataclass
 class PriceStats:
@@ -129,13 +132,11 @@ class EbayBrowseAPIClient:
         api_filter = None
         api_marketplace = "EBAY_US"  # Default
         api_sort = None
-        api_limit_override = None
         
         if browse_api_parameters:
             api_filter = browse_api_parameters.get("filter")
             api_marketplace = browse_api_parameters.get("marketplace", "EBAY_US")
             api_sort = browse_api_parameters.get("sort")
-            api_limit_override = browse_api_parameters.get("limit")
             logger.info(f"   Using Browse API parameters:")
             if api_filter:
                 logger.info(f"      Filter: {api_filter}")
@@ -143,8 +144,6 @@ class EbayBrowseAPIClient:
                 logger.info(f"      Marketplace: {api_marketplace}")
             if api_sort:
                 logger.info(f"      Sort: {api_sort}")
-            if api_limit_override:
-                logger.info(f"      Limit (page size): {api_limit_override}")
         else:
             logger.debug("   No Browse API parameters provided, using defaults")
         
@@ -154,13 +153,8 @@ class EbayBrowseAPIClient:
         while len(all_items) < max_items:
             # Calculate how many items we still need
             remaining = max_items - len(all_items)
-            # Use API-provided limit as page size if available, otherwise use calculated limit
-            # The limit is the page size (items per request), not the total limit
-            if api_limit_override:
-                page_size = min(int(api_limit_override), 200)  # API max is 200 per page
-                limit = min(page_size, remaining)
-            else:
-                limit = min(200, remaining)  # API max is 200 per page
+            # Use maximum page size (200) for efficiency, or remaining items if less
+            limit = min(200, remaining)  # API max is 200 per page
             
             params = {
                 "q": search_query,
@@ -442,7 +436,6 @@ class EbayBrowseAPIClient:
         api_marketplace = browse_api_parameters.get("marketplace", "EBAY_US") if browse_api_parameters else "EBAY_US"
         logger.debug(f"Enhancing {len(valid_items)} items with detailed information from getItem API")
         enhanced_items = self.enhance_items_with_details(valid_items, marketplace=api_marketplace)
-        logger.debug(f"Enhanced {len(enhanced_items)} items with detailed information")
         enhanced_items_json = json.dumps(enhanced_items, indent=2)
         truncated_items = truncate_lines(enhanced_items_json, 10)
         logger.debug(f"Enhanced items (first 10 lines):\n{truncated_items}")
