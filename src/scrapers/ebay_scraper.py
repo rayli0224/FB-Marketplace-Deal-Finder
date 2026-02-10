@@ -374,29 +374,31 @@ class EbayBrowseAPIClient:
         for idx, item in enumerate(items):
             item_id = item.get("itemId")
             if not item_id:
-                # If no itemId, keep original item without enhancement
-                enhanced_items.append(item)
+                # If no itemId, preserve only title and price
+                enhanced_items.append({
+                    "title": item.get("title", ""),
+                    "price": item.get("price", 0),
+                })
                 continue
             
             details = self.get_item_details(item_id, marketplace)
             if details:
-                # Merge details into item dict, preserving original fields
+                # Explicitly preserve only specified fields
                 enhanced_item = {
-                    **item,
+                    "title": item.get("title", ""),
+                    "price": item.get("price", 0),
                     "description": details.get("shortDescription", ""),
                     "condition": details.get("condition", ""),
-                    "conditionId": details.get("conditionId"),
                     "itemLocation": details.get("itemLocation", {}),
-                    "seller": details.get("seller", {}),
-                    "shippingOptions": details.get("shippingOptions", []),
-                    "returnTerms": details.get("returnTerms", {}),
-                    "itemAspects": details.get("itemAspects", []),
                 }
                 enhanced_items.append(enhanced_item)
                 success_count += 1
             else:
-                # If getItem failed, keep original item
-                enhanced_items.append(item)
+                # If getItem failed, preserve only title and price
+                enhanced_items.append({
+                    "title": item.get("title", ""),
+                    "price": item.get("price", 0),
+                })
         
         if success_count < len(items):
             logger.debug(f"Successfully enhanced {success_count}/{len(items)} items with getItem details")
@@ -438,7 +440,7 @@ class EbayBrowseAPIClient:
         enhanced_items = self.enhance_items_with_details(valid_items, marketplace=api_marketplace)
         enhanced_items_json = json.dumps(enhanced_items, indent=2)
         truncated_items = truncate_lines(enhanced_items_json, 10)
-        logger.debug(f"Enhanced items (first 10 lines):\n{truncated_items}")
+        logger.debug(f"Enhanced items (first 10 lines):\n{enhanced_items_json}")
         
         prices = [item["price"] for item in enhanced_items]
         
