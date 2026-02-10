@@ -80,7 +80,7 @@ Return ONLY a JSON object exactly like this:
 """
 
 
-def get_result_filtering_prompt(listing_title: str, listing_price: float, description_text: str, ebay_items_text: str) -> str:
+def get_result_filtering_prompt(listing_title: str, listing_price: float, description_text: str, ebay_items_text: str, num_items: int) -> str:
     """
     Generate the prompt for filtering eBay results to match a FB listing.
     
@@ -89,10 +89,12 @@ def get_result_filtering_prompt(listing_title: str, listing_price: float, descri
         listing_price: Listing price
         description_text: Listing description (or "No description provided")
         ebay_items_text: Formatted string of eBay items (numbered list with titles and prices)
+        num_items: Exact number of eBay items in the list
     
     Returns:
         Formatted prompt string
     """
+    
     return f"""You are helping filter eBay search results to find items that are truly comparable to a Facebook Marketplace listing.
 
 Facebook Marketplace listing:
@@ -100,7 +102,7 @@ Facebook Marketplace listing:
 - Price: ${listing_price:.2f}
 - Description: "{description_text}"
 
-eBay search results:
+eBay search results ({num_items} items total):
 {ebay_items_text}
 
 Note: Each eBay item includes its title, price, condition (if available), and description (if available). Use all available information to make accurate comparability decisions.
@@ -191,10 +193,14 @@ Return your response as a JSON object with exactly this structure:
 
 Where:
 - comparable_indices are 1-based indices from the eBay results list of the items that are suitable for accurate price comparison.  
-- reasons is an object mapping each 1-based index to a short reason (1-2 sentences max) explaining why it was accepted or rejected
+- reasons is an object mapping each 1-based index to a brief reason explaining why it was accepted or rejected
 
-Provide reasons for ALL items in the eBay results list, not just the comparable ones. Keep reasons concise and focused on the key factor that led to the decision.
-
-**IMPORTANT**: Ensure all JSON strings are properly escaped. If a reason contains quotes, parentheses, or special characters, they must be properly escaped (e.g., use \\" for quotes inside strings). All strings must be properly closed with closing quotes.
+**CRITICAL REQUIREMENTS - READ CAREFULLY**:
+1. There are exactly {num_items} items in the list above (numbered 1 through {num_items}). You MUST provide a reason for EVERY single item. Do not skip any items.
+2. The reasons object must contain exactly {num_items} entries, one for each item index from 1 to {num_items}. Every single item must have a reason, no exceptions.
+3. Keep each reason BRIEF - one sentence maximum, ideally 5-15 words. Focus only on the key distinguishing factor (e.g., "Different model (T6 vs T7)", "Same product, different size", "Accessory only"). Brevity is critical to ensure you can complete all {num_items} reasons.
+4. Process items sequentially from 1 to {num_items} and ensure you complete the entire list before finishing your response.
+5. Before finishing, verify that your reasons object contains exactly {num_items} entries (one for each index from 1 to {num_items}). If you find you're missing any, add them before responding.
+6. Ensure all JSON strings are properly escaped. If a reason contains quotes, parentheses, or special characters, they must be properly escaped (e.g., use \\" for quotes inside strings). All strings must be properly closed with closing quotes.
 
 Return only the JSON object and no other text."""

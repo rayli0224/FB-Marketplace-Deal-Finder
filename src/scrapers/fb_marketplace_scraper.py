@@ -566,14 +566,20 @@ class FBMarketplaceScraper:
                                 # Take first reasonable chunk (stop at common separators or new sections)
                                 lines = description_candidate.split("\n")
                                 description_parts = []
-                                for line in lines[:10]:  # Limit to first 10 lines
+                                for line in lines:
                                     line = line.strip()
                                     if not line:
                                         continue
+                                    # Stop if we hit "Location is approximate" marker
+                                    if "location is approximate" in line.lower():
+                                        break
                                     # Stop if we hit another section header (all caps or common patterns)
                                     if re.match(r'^[A-Z\s]{10,}$', line) and len(line) > 15:
                                         break
                                     description_parts.append(line)
+                                    # Hard limit of 50 lines as safety measure
+                                    if len(description_parts) >= 50:
+                                        break
                                 
                                 description_candidate = "\n".join(description_parts).strip()
                                 if self._is_valid_description(description_candidate):
@@ -598,7 +604,9 @@ class FBMarketplaceScraper:
             
             detail_page.close()
             
-        except Exception:
+        except Exception as e:
+            # Log the error for debugging
+            logger.debug(f"Failed to extract description from {url}: {e}")
             # If anything fails, ensure we close the page and return empty string
             try:
                 detail_page.close()

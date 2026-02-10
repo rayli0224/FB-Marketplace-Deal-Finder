@@ -16,7 +16,7 @@ import time
 
 import requests
 
-from src.utils.colored_logger import setup_colored_logger, log_error_short, truncate_lines
+from src.utils.colored_logger import setup_colored_logger, truncate_lines
 
 logger = setup_colored_logger("ebay_scraper")
 VALID_CONDITION_IDS = {1000, 3000}
@@ -374,29 +374,31 @@ class EbayBrowseAPIClient:
         for idx, item in enumerate(items):
             item_id = item.get("itemId")
             if not item_id:
-                # If no itemId, keep original item without enhancement
-                enhanced_items.append(item)
+                # If no itemId, preserve only title and price
+                enhanced_items.append({
+                    "title": item.get("title", ""),
+                    "price": item.get("price", 0),
+                })
                 continue
             
             details = self.get_item_details(item_id, marketplace)
             if details:
-                # Merge details into item dict, preserving original fields
+                # Explicitly preserve only specified fields
                 enhanced_item = {
-                    **item,
+                    "title": item.get("title", ""),
+                    "price": item.get("price", 0),
                     "description": details.get("shortDescription", ""),
                     "condition": details.get("condition", ""),
-                    "conditionId": details.get("conditionId"),
                     "itemLocation": details.get("itemLocation", {}),
-                    "seller": details.get("seller", {}),
-                    "shippingOptions": details.get("shippingOptions", []),
-                    "returnTerms": details.get("returnTerms", {}),
-                    "itemAspects": details.get("itemAspects", []),
                 }
                 enhanced_items.append(enhanced_item)
                 success_count += 1
             else:
-                # If getItem failed, keep original item
-                enhanced_items.append(item)
+                # If getItem failed, preserve only title and price
+                enhanced_items.append({
+                    "title": item.get("title", ""),
+                    "price": item.get("price", 0),
+                })
         
         if success_count < len(items):
             logger.debug(f"Successfully enhanced {success_count}/{len(items)} items with getItem details")
@@ -455,10 +457,6 @@ class EbayBrowseAPIClient:
                 item_summary["description"] = item.get("description", "")
             if "condition" in item:
                 item_summary["condition"] = item.get("condition", "")
-            if "conditionId" in item:
-                item_summary["conditionId"] = item.get("conditionId")
-            if "itemAspects" in item:
-                item_summary["itemAspects"] = item.get("itemAspects", [])
             item_summaries.append(item_summary)
         
         if len(prices) < 3:
