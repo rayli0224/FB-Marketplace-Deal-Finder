@@ -16,7 +16,7 @@ import time
 
 import requests
 
-from src.utils.colored_logger import setup_colored_logger, log_error_short, truncate_lines
+from src.utils.colored_logger import setup_colored_logger, truncate_lines
 
 logger = setup_colored_logger("ebay_scraper")
 VALID_CONDITION_IDS = {1000, 3000}
@@ -440,7 +440,7 @@ class EbayBrowseAPIClient:
         enhanced_items = self.enhance_items_with_details(valid_items, marketplace=api_marketplace)
         enhanced_items_json = json.dumps(enhanced_items, indent=2)
         truncated_items = truncate_lines(enhanced_items_json, 10)
-        logger.debug(f"Enhanced items (first 10 lines):\n{enhanced_items_json}")
+        logger.debug(f"Enhanced items (first 10 lines):\n{truncated_items}")
         
         prices = [item["price"] for item in enhanced_items]
         
@@ -457,10 +457,6 @@ class EbayBrowseAPIClient:
                 item_summary["description"] = item.get("description", "")
             if "condition" in item:
                 item_summary["condition"] = item.get("condition", "")
-            if "conditionId" in item:
-                item_summary["conditionId"] = item.get("conditionId")
-            if "itemAspects" in item:
-                item_summary["itemAspects"] = item.get("itemAspects", [])
             item_summaries.append(item_summary)
         
         if len(prices) < 3:

@@ -186,7 +186,6 @@ def filter_ebay_results_with_openai(
         # Each item needs ~60 tokens for its reason string, plus JSON structure overhead
         # Use a minimum of 2000 tokens, or 60 tokens per item, whichever is higher
         # This ensures we have enough tokens for reasons for ALL items (not just comparable ones)
-        num_items = len(ebay_items)
         max_tokens = max(2000, num_items * 60)
         
         response = client.chat.completions.create(
