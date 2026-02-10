@@ -12,10 +12,18 @@ import { SearchErrorState } from "@/components/results/SearchErrorState";
 import { SearchResultsTable } from "@/components/results/SearchResultsTable";
 import { CookieSetupGuide } from "@/components/auth/CookieSetupGuide";
 import type { Listing } from "@/components/results/SearchResultsTable";
+import { DebugPanel } from "@/components/debug/DebugPanel";
+import type { DebugFacebookListing, DebugEbayQueryEntry } from "@/components/debug/DebugPanel";
+import type { DebugSearchParams } from "@/components/debug/DebugSearchParams";
 
 type AppState = "setup" | "form" | "loading" | "done" | "error";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+
+/** Defaults when backend omits debug_mode params (fallback for older or partial payloads). */
+const DEFAULT_DEBUG_RADIUS = 25;
+const DEFAULT_DEBUG_MAX_LISTINGS = 20;
+const DEFAULT_DEBUG_THRESHOLD = 20;
 
 type SSEDispatchHandlers = {
   handlePhaseUpdate: (phase: SearchPhase) => void;
@@ -23,6 +31,9 @@ type SSEDispatchHandlers = {
   handleCompletion: (data: { scannedCount: number; evaluatedCount: number; listings: Listing[]; threshold?: number; averageConfidence?: number | null }) => void;
   handleAuthError: () => void;
   setEvaluatedCount: (n: number) => void;
+  onDebugMode?: (params?: DebugSearchParams) => void;
+  onDebugFacebook?: (listings: DebugFacebookListing[]) => void;
+  onDebugEbayQuery?: (entry: DebugEbayQueryEntry) => void;
 };
 
 /**
@@ -30,7 +41,23 @@ type SSEDispatchHandlers = {
  * Throws if JSON is invalid so the stream parser can surface the error.
  */
 function dispatchSSEEvent(payloadString: string, handlers: SSEDispatchHandlers): void {
-  const data = JSON.parse(payloadString) as { type: string; phase?: SearchPhase; scannedCount?: number; evaluatedCount?: number; listings?: Listing[]; threshold?: number; averageConfidence?: number | null };
+  const data = JSON.parse(payloadString) as {
+    type: string;
+    phase?: SearchPhase;
+    scannedCount?: number;
+    evaluatedCount?: number;
+    listings?: Listing[] | DebugFacebookListing[];
+    threshold?: number;
+    averageConfidence?: number | null;
+    debug?: boolean;
+    query?: string;
+    zipCode?: string;
+    radius?: number;
+    maxListings?: number;
+    extractDescriptions?: boolean;
+    fbTitle?: string;
+    ebayQuery?: string;
+  };
   if (data.type === "auth_error") {
     handlers.handleAuthError();
   } else if (data.type === "phase" && data.phase != null) {
@@ -39,13 +66,30 @@ function dispatchSSEEvent(payloadString: string, handlers: SSEDispatchHandlers):
     handlers.handleProgressUpdate(data.scannedCount);
   } else if (data.type === "listing_processed" && typeof data.evaluatedCount === "number") {
     handlers.setEvaluatedCount(data.evaluatedCount);
-  } else if (data.type === "done" && data.listings != null) {
+  } else if (data.type === "done" && data.listings != null && Array.isArray(data.listings)) {
     handlers.handleCompletion({
       scannedCount: data.scannedCount ?? 0,
       evaluatedCount: data.evaluatedCount ?? 0,
-      listings: data.listings,
+      listings: data.listings as Listing[],
       threshold: data.threshold,
     });
+  } else if (data.type === "debug_mode" && data.debug) {
+    const params: DebugSearchParams | undefined =
+      data.query != null && data.zipCode != null
+        ? {
+            query: data.query,
+            zipCode: data.zipCode,
+            radius: data.radius ?? DEFAULT_DEBUG_RADIUS,
+            maxListings: data.maxListings ?? DEFAULT_DEBUG_MAX_LISTINGS,
+            threshold: data.threshold ?? DEFAULT_DEBUG_THRESHOLD,
+            extractDescriptions: data.extractDescriptions ?? false,
+          }
+        : undefined;
+    handlers.onDebugMode?.(params);
+  } else if (data.type === "debug_facebook" && Array.isArray(data.listings)) {
+    handlers.onDebugFacebook?.(data.listings as DebugFacebookListing[]);
+  } else if (data.type === "debug_ebay_query" && data.fbTitle != null && data.ebayQuery != null) {
+    handlers.onDebugEbayQuery?.({ fbTitle: data.fbTitle, ebayQuery: data.ebayQuery });
   }
 }
 
@@ -96,6 +140,10 @@ export default function Home() {
   const [error, setError] = useState<string | null>(null);
   const [phase, setPhase] = useState<SearchPhase>("scraping");
   const [threshold, setThreshold] = useState<number>(0);
+  const [debugEnabled, setDebugEnabled] = useState(false);
+  const [debugSearchParams, setDebugSearchParams] = useState<DebugSearchParams | null>(null);
+  const [debugFacebookListings, setDebugFacebookListings] = useState<DebugFacebookListing[]>([]);
+  const [debugEbayQueries, setDebugEbayQueries] = useState<DebugEbayQueryEntry[]>([]);
   const [isSearching, setIsSearching] = useState<boolean>(false);
   const isSearchingRef = useRef<boolean>(false);
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -183,18 +231,36 @@ export default function Home() {
     setAppState("done");
   }, [generateCSV]);
 
+  const onDebugEbayQuery = useCallback((entry: DebugEbayQueryEntry) => {
+    setDebugEbayQueries((prev: DebugEbayQueryEntry[]) => [...prev, entry]);
+  }, []);
+
   /**
    * Parses an SSE stream from the reader and updates UI from each event.
    * Reads in chunks and accumulates text in a buffer so only complete lines (ending with \n)
    * are parsed. This avoids "Unterminated string" when the large "done" payload is split across
    * TCP chunks. Uses stream: true for decode so multi-byte UTF-8 spanning chunks is handled.
-   * Event types: "phase" (search phase), "progress" (scanned count), "listing_processed" (evaluated count), "done" (final listings and counts).
-   * Handles cancellation gracefully by catching abort errors.
+   * Event types: "phase", "progress", "listing_processed", "done", and when backend runs with
+   * --debug: "debug_mode", "debug_facebook", "debug_ebay_query". Handles cancellation gracefully.
    */
   const parseSSEStream = useCallback(
     async (reader: ReadableStreamDefaultReader<Uint8Array>) => {
       const decoder = new TextDecoder();
       let buffer = "";
+
+      const sseHandlers: SSEDispatchHandlers = {
+        handlePhaseUpdate,
+        handleProgressUpdate,
+        handleCompletion,
+        handleAuthError,
+        setEvaluatedCount,
+        onDebugMode: (params) => {
+          setDebugEnabled(true);
+          if (params) setDebugSearchParams(params);
+        },
+        onDebugFacebook: setDebugFacebookListings,
+        onDebugEbayQuery: onDebugEbayQuery,
+      };
 
       try {
         while (true) {
@@ -210,13 +276,7 @@ export default function Home() {
           for (const line of lines) {
             if (line.startsWith("data: ")) {
               try {
-                dispatchSSEEvent(line.slice(6), {
-                  handlePhaseUpdate,
-                  handleProgressUpdate,
-                  handleCompletion,
-                  handleAuthError,
-                  setEvaluatedCount,
-                });
+                dispatchSSEEvent(line.slice(6), sseHandlers);
               } catch (parseErr) {
                 console.error("SSE parse error for line length:", line.length, parseErr);
                 throw parseErr;
@@ -227,13 +287,7 @@ export default function Home() {
           if (done) {
             if (buffer.startsWith("data: ")) {
               try {
-                dispatchSSEEvent(buffer.slice(6), {
-                  handlePhaseUpdate,
-                  handleProgressUpdate,
-                  handleCompletion,
-                  handleAuthError,
-                  setEvaluatedCount,
-                });
+                dispatchSSEEvent(buffer.slice(6), sseHandlers);
               } catch {
                 // Trailing partial line when stream ends without newline; ignore.
               }
@@ -258,7 +312,7 @@ export default function Home() {
         reader.releaseLock();
       }
     },
-    [handlePhaseUpdate, handleProgressUpdate, handleCompletion, handleAuthError]
+    [handlePhaseUpdate, handleProgressUpdate, handleCompletion, handleAuthError, onDebugEbayQuery]
   );
 
   /**
@@ -396,6 +450,10 @@ export default function Home() {
     setListings([]);
     setError(null);
     setPhase("scraping");
+    setDebugEnabled(false);
+    setDebugSearchParams(null);
+    setDebugFacebookListings([]);
+    setDebugEbayQueries([]);
     setAppState("loading");
     
     // Start search directly - no useEffect needed
@@ -415,6 +473,10 @@ export default function Home() {
     setCsvBlob(null);
     setListings([]);
     setError(null);
+    setDebugEnabled(false);
+    setDebugSearchParams(null);
+    setDebugFacebookListings([]);
+    setDebugEbayQueries([]);
     isSearchingRef.current = false;
     setIsSearching(false);
   };
@@ -486,6 +548,14 @@ export default function Home() {
             )}
           </div>
         </div>
+
+        {debugEnabled && (appState === "loading" || appState === "done") && (
+          <DebugPanel
+            searchParams={debugSearchParams}
+            facebookListings={debugFacebookListings}
+            ebayQueries={debugEbayQueries}
+          />
+        )}
 
         <AppFooter />
       </div>

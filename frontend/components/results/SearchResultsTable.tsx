@@ -131,7 +131,13 @@ function ListingCompsPanel({ listing }: { listing: Listing }) {
  * visibility of below-threshold deals. Rows are color-coded by deal quality; each row can
  * expand to show eBay comparison details (search query, comp price, comp listings).
  */
-export function SearchResultsTable({ listings, scannedCount, threshold, onDownloadCSV, onReset }: SearchResultsTableProps) {
+export function SearchResultsTable({
+  listings,
+  scannedCount,
+  threshold,
+  onDownloadCSV,
+  onReset,
+}: SearchResultsTableProps) {
   const [showBadDeals, setShowBadDeals] = useState<boolean>(true);
   const [isFiltersExpanded, setIsFiltersExpanded] = useState<boolean>(false);
   const [expandedListingUrl, setExpandedListingUrl] = useState<string | null>(null);
@@ -224,7 +230,7 @@ export function SearchResultsTable({ listings, scannedCount, threshold, onDownlo
 
                 return (
                 <Fragment key={listing.url}>
-                <tr 
+                <tr
                   className={`border-b border-border/50 transition-colors ${rowBgClass}`}
                 >
                   <td className="px-3 py-2 max-w-[300px] truncate" title={listing.title}>
