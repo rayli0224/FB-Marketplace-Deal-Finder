@@ -4,6 +4,16 @@ My goal in this session is to {{input}}
 
 Here's how I need you to work with me:
 
+## First Step: Create a Branch
+
+Before any planning or code, create a new branch for this work.
+
+- Branch name format: `{username}/{short-description}` (e.g. `rayli/add-compact-toggle`, `mirujun/fix-search-form`).
+- Use the **current system username** as the prefix (from `whoami` or `$USER`) so it works for any developer, not a hardcoded name.
+- The short description should reflect the goal (from {{input}}). Use lowercase, hyphens for spaces.
+
+Create this branch from the current default branch (e.g. `main`), then continue with the plan.
+
 ## Overall Plan First
 
 Start by giving me a high-level picture of what needs to be done.
