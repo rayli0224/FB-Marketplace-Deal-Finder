@@ -389,7 +389,6 @@ class EbayBrowseAPIClient:
                     "price": item.get("price", 0),
                     "description": details.get("shortDescription", ""),
                     "condition": details.get("condition", ""),
-                    "itemLocation": details.get("itemLocation", {}),
                 }
                 enhanced_items.append(enhanced_item)
                 success_count += 1
