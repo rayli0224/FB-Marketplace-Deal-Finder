@@ -16,7 +16,7 @@ except ImportError:
     OpenAI = None
 
 from src.scrapers.fb_marketplace_scraper import Listing
-from src.utils.colored_logger import setup_colored_logger, log_error_short
+from src.utils.colored_logger import setup_colored_logger, log_error_short, truncate_lines
 from src.utils.prompts import (
     QUERY_GENERATION_SYSTEM_MESSAGE,
     RESULT_FILTERING_SYSTEM_MESSAGE,
@@ -71,25 +71,20 @@ def generate_ebay_query_for_listing(
             "max_tokens": 200,
         }
         
-        logger.debug(f"OpenAI API Request - Model: {api_params['model']}, Messages: {json.dumps(messages, indent=2)}")
         response = client.chat.completions.create(
             model=api_params["model"],
             messages=messages,
             temperature=api_params["temperature"],
             max_tokens=api_params["max_tokens"],
         )
+        raw_content = response.choices[0].message.content
         try:
-            if hasattr(response, 'model_dump'):
-                response_dict = response.model_dump()
-            elif hasattr(response, 'dict'):
-                response_dict = response.dict()
-            else:
-                response_dict = {"id": getattr(response, 'id', None), "model": getattr(response, 'model', None), "choices": [{"message": {"content": response.choices[0].message.content if response.choices else None}}]}
-            logger.debug(f"OpenAI API Response - Full response: {json.dumps(response_dict, indent=2)}")
+            truncated_content = truncate_lines(raw_content, 5)
+            logger.debug(f"OpenAI API Response - Message content (first 5 lines):\n{truncated_content}")
         except Exception as e:
-            logger.debug(f"OpenAI API Response - Could not serialize response: {e}")
-            logger.debug(f"OpenAI API Response - Raw response: {str(response)}")
-        content = response.choices[0].message.content.strip()
+            logger.debug(f"OpenAI API Response - Could not extract content: {e}")
+        
+        content = raw_content.strip()
         if content.startswith("```json"):
             content = content[7:]
         if content.startswith("```"):
@@ -213,11 +208,7 @@ def filter_ebay_results_with_openai(
             # Access dictionary with bracket notation, not dot notation
             if response_dict and "choices" in response_dict and len(response_dict["choices"]) > 0:
                 raw_content = response_dict["choices"][0]["message"]["content"]
-                # Truncate to first 5 lines for logging
-                content_lines = raw_content.split('\n')
-                truncated_content = '\n'.join(content_lines[:5])
-                if len(content_lines) > 5:
-                    truncated_content += f"\n... ({len(content_lines) - 5} more lines)"
+                truncated_content = truncate_lines(raw_content, 5)
                 logger.debug(f"OpenAI Filtering Response - Raw content (first 5 lines):\n{truncated_content}")
             else:
                 logger.debug(f"OpenAI Filtering Response - Response structure: {json.dumps(response_dict, indent=2)}")
@@ -244,6 +235,7 @@ def filter_ebay_results_with_openai(
             error_pos = getattr(json_err, 'pos', None)
             
             logger.warning(f"Failed to parse OpenAI filter response as JSON: {json_err}")
+            logger.warning(f"Full response content: {content}")
             if error_line:
                 content_lines = content.split('\n')
                 logger.warning(f"Error at line {error_line}, column {error_col}")
@@ -271,8 +263,27 @@ def filter_ebay_results_with_openai(
                     indices_str = indices_match.group(1)
                     comparable_indices = [int(x.strip()) for x in indices_str.split(',') if x.strip()]
                     logger.info(f"Recovered comparable_indices from malformed JSON: {comparable_indices}")
-                    # Use empty reasons dict since we can't parse it
+                    
+                    # Try to extract reasons dict - look for complete key-value pairs
                     reasons = {}
+                    reasons_match = re.search(r'"reasons"\s*:\s*\{', content)
+                    if reasons_match:
+                        # Find the start of the reasons dict
+                        reasons_start = reasons_match.end()
+                        # Try to extract complete key-value pairs
+                        # Pattern: "key": "value" (handling escaped quotes)
+                        reason_pattern = r'"(\d+)"\s*:\s*"((?:[^"\\]|\\.)*)"'
+                        for match in re.finditer(reason_pattern, content[reasons_start:]):
+                            key = match.group(1)
+                            value = match.group(2)
+                            # Unescape JSON escape sequences
+                            value = value.replace('\\"', '"').replace('\\n', '\n').replace('\\\\', '\\')
+                            reasons[key] = value
+                        
+                        if reasons:
+                            logger.debug(f"Recovered {len(reasons)} reasons from malformed JSON")
+                        else:
+                            logger.debug("Could not recover reasons from malformed JSON")
                 except ValueError:
                     logger.warning("Could not recover comparable_indices from malformed JSON")
                     return None

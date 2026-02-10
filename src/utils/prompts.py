@@ -198,4 +198,6 @@ Where:
 
 Provide reasons for ALL items in the eBay results list, not just the comparable ones. Keep reasons concise and focused on the key factor that led to the decision.
 
+**IMPORTANT**: Ensure all JSON strings are properly escaped. If a reason contains quotes, parentheses, or special characters, they must be properly escaped (e.g., use \\" for quotes inside strings). All strings must be properly closed with closing quotes.
+
 Return only the JSON object and no other text."""

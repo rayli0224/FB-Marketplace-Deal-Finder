@@ -9,13 +9,14 @@ Uses eBay Browse API (OAuth 2.0) - returns active listings only, not sold items.
 
 import statistics
 import os
+import json
 from dataclasses import dataclass
 from typing import Optional, List
 import time
 
 import requests
 
-from src.utils.colored_logger import setup_colored_logger, log_error_short
+from src.utils.colored_logger import setup_colored_logger, log_error_short, truncate_lines
 
 logger = setup_colored_logger("ebay_scraper")
 VALID_CONDITION_IDS = {1000, 3000}
@@ -402,9 +403,6 @@ class EbayBrowseAPIClient:
             else:
                 # If getItem failed, keep original item
                 enhanced_items.append(item)
-            
-            # Rate limiting: be nice to the API
-            time.sleep(0.2)
         
         if success_count < len(items):
             logger.debug(f"Successfully enhanced {success_count}/{len(items)} items with getItem details")
@@ -445,6 +443,9 @@ class EbayBrowseAPIClient:
         logger.debug(f"Enhancing {len(valid_items)} items with detailed information from getItem API")
         enhanced_items = self.enhance_items_with_details(valid_items, marketplace=api_marketplace)
         logger.debug(f"Enhanced {len(enhanced_items)} items with detailed information")
+        enhanced_items_json = json.dumps(enhanced_items, indent=2)
+        truncated_items = truncate_lines(enhanced_items_json, 10)
+        logger.debug(f"Enhanced items (first 10 lines):\n{truncated_items}")
         
         prices = [item["price"] for item in enhanced_items]
         

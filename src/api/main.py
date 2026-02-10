@@ -209,7 +209,7 @@ def search_deals(request: SearchRequest):
         with wait_status(logger, "eBay prices"):
             ebay_stats = get_market_price(
                 search_term=request.query,
-                n_items=1,
+                n_items=50,
             )
     except Exception as e:
         log_error_short(logger, f"Step 3 failed: {e}")
