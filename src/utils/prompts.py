@@ -95,112 +95,140 @@ def get_result_filtering_prompt(listing_title: str, listing_price: float, descri
         Formatted prompt string
     """
     
-    return f"""You are helping filter eBay search results to find items that are truly comparable to a Facebook Marketplace listing.
+    return f"""You are filtering eBay search results to find items that are truly comparable to a Facebook Marketplace (FB) listing, for accurate price comparison.
+
+### Input
 
 Facebook Marketplace listing:
 - Title: "{listing_title}"
 - Price: ${listing_price:.2f}
 - Description: "{description_text}"
 
-eBay search results ({num_items} items total):
+eBay search results ({num_items} total):
 {ebay_items_text}
 
-Note: Each eBay item includes its title, price, condition (if available), and description (if available). Use all available information to make accurate comparability decisions.
+Each eBay item includes title, price, condition (if available), and description (if available).
 
-Your task: Identify which eBay items are actually comparable to the FB listing. Internally, reason carefully about each item one by one and provide a short justification for each item's accept/reject decision. 
+---
 
-Search on the web for specific product names as needed in order to inform your decision. Do NOT use images or other visual information to make your decision.
+## How to Think (Internal Process)
+
+Follow these exact steps:
+
+Step 1 — Identify price-defining features of the FB item.  
+Extract the minimal set of key attributes that primarily determine price.
+Examples:
+- Electronics: brand, model, generation, size, storage/specs.
+- Clothing/shoes: brand, model/line, condition (size is irrelevant).
+- Furniture/other: brand, model, material, dimensions if relevant.
+
+Only use attributes that are actually present in the FB listing.
+Ignore cosmetic attributes (color, minor wear) unless they materially affect value.
+
+Step 2 — Compare each eBay item against those features.  
+For each item:
+- If a key attribute is known in the FB listing, it must match.
+- If a key attribute is missing or vague in the FB listing, use best judgment from overall similarity.
+- Check condition similarity.
+- Check that it is a full product, not a part/accessory/bundle.
+- Check for material variants that change price.
+
+Step 3 — Decide strictly.  
+If there is ambiguity, missing critical info, or reasonable doubt → reject.
+
+---
+
+## Comparability Rules
 
 An eBay item is comparable if and only if:
 
-1. Core Product Match  
-- It refers to the **same core product/model** (same brand, product line, generation, or series).
-- If the FB listing is **specific** (contains clear identifying tokens such as brand, model, generation, size, capacity, etc.), then:
-  - Those key tokens must also appear in the eBay title, description, or item aspects.
-  - Use the detailed description and condition information when available to make more accurate comparisons.
-  - If they do not, exclude the item.
-- If the FB listing is **vague or generic**, use best judgment based on overall similarity, leveraging description details when available.
+1. Core Product Match (Conditional)
+- If the FB listing is specific:
+  - The same brand/model/line/generation must appear.
+- If the FB listing is vague or generic:
+  - Use overall semantic similarity and description details.
+  - Accept broader matches only when unavoidable.
 
-2. Condition Match  
-- The **condition is similar** (e.g. both new, both used, both working).
-- Exclude items marked as:
-  - for parts
-  - broken / not working
-  - damaged in a way that affects functionality
+2. Condition Match
+- Similar condition (new vs used vs working).
+- Exclude: for parts, broken, not working.
 
-3. Full Product Only  
-- It must be a **complete product**, not:
-  - an accessory (case, charger, cable, etc.)
-  - a part or component
-  - a bundle, lot, or multi-item listing
-  - a service or subscription
+3. Full Product Only
+- Exclude accessories, parts, services, bundles, lots.
 
-4. Material Variants  
-- Exclude items that are a **different variant that materially affects price**, such as:
+4. Material Variants
+- Exclude variants that affect price:
   - locked vs unlocked
   - mini vs pro vs max
   - wrong generation
-- Minor differences are acceptable only if the core product is clearly the same.
-  - color (red vs blue vs unspecified color of the same product)
-  - cosmetic wear (scratches, dents, etc.)
+- Allow minor variants:
+  - color
+  - cosmetic wear
+  - missing minor accessories (charger, cable)
 
-5. Size Differences
-- Different sizes are acceptable for clothing items because it doesn't affect price. For example, a size 10 Arc'teryx jacket is comparable to a size 12 Arc'teryx jacket.
-- For other items such as electronics, different sizes are not acceptable. For example, a 13 inch MacBook Pro is not comparable to a 16 inch MacBook Pro due to large price difference.
+5. Size Rules
+- Clothing/shoes: size differences are OK.
+- Electronics/furniture: size differences are NOT OK.
 
-Be **strict**. If there is ambiguity, too much missing key information, or reasonable doubt, exclude the item.
+Be strict. Prefer false negatives over false positives.
 
-Justification must be concise and include the key factors that led to the decision. If relevant, add the exact distinction made between the FB listing and the eBay item in parentheses.
+---
 
-### Examples
-- FB Title: "Canon EOS Rebel T7 DSLR camera kit"
-  FB Description: "Includes camera body and 18-55mm lens. Used once."
-  eBay Results:
-    1. "Canon EOS Rebel T7 DSLR with 18-55mm lens bundle" → Accept: "Same model and full kit (18-55mm lens)"
-    2. "Canon EOS Rebel T6 camera body only" → Reject: "Different model (T6 vs T7)"
-    3. "Canon 50mm f/1.8 lens for Canon DSLR" → Reject: "Accessory (lens) is not full camera"
-    4. "Canon EOS Rebel T7 DSLR used, for parts" → Reject: "For parts / not working"
-    5. "Canon EOS Rebel T7 DSLR with extra battery" → Accept: "Same model, full product, minor accessory included (battery)"
+## Output Format (MANDATORY)
 
-- FB Title: "MacBook Pro 2019 16 inch i9 32GB RAM"
-  FB Description: "Excellent condition, comes with charger."
-  eBay Results:
-    1. "MacBook Pro 2019 16 inch i9 32GB RAM" → Accept: "Exact model and specs"
-    2. "MacBook Pro 2020 16 inch i9" → Reject: "Different generation (2020 vs 2019)"
-    3. "MacBook Pro 2019 13 inch i7" → Reject: "Different size and CPU (13 inch vs 16 inch)"
-    4. "MacBook Pro 2019 16 inch i9 missing charger" → Accept: "Core product matches, minor missing accessory (charger)"
-    5. "MacBook Air 2019 13 inch i5" → Reject: "Different model entirely (MacBook Air vs MacBook Pro)"
+Return a JSON object:
 
-- FB Title: "Nike Air Jordan 1 Retro High OG size 10"
-  FB Description: "Worn twice, excellent condition."
-  eBay Results:
-    1. "Air Jordan 1 Retro High OG size 10 black" → Accept: "Core model matches, color irrelevant (black vs unknown)"
-    2. "Air Jordan 1 Mid OG size 10" → Reject: "Different variant (Mid vs High)"
-    3. "Air Jordan 1 Retro High OG size 9" → Accept: "Size class is irrelevant (9 vs 10)"
-    4. "Air Jordan 1 Retro High OG size 10 red, new" → Accept: "Same model (Air Jordan 1 Retro High OG) and size (10)"
-    5. "Air Jordan 1 Low OG size 10" → Reject: "Different variant (Low vs High)"
-
-Return your response as a JSON object with exactly this structure:
 {{
   "comparable_indices": [1, 3],
   "reasons": {{
-    "1": "Same model (Air Jordan 1 Retro High OG) and size (10) and condition",
-    "2": "Different product variant (Mid vs High)",
-    "3": "Matches core product (Air Jordan 1 Retro High OG)",
-    "4": "Accessory (lens) is not full camera"
+    "1": "Same model and specs",
+    "2": "Different generation (2020 vs 2019)",
+    "3": "Core product matches",
+    "4": "Accessory only"
   }}
 }}
 
-Where:
-- comparable_indices are 1-based indices from the eBay results list of the items that are suitable for accurate price comparison.  
-- reasons is an object mapping each 1-based index to a brief reason explaining why it was accepted or rejected
+### Requirements
+1. There are exactly {num_items} eBay items (1 to {num_items}).
+2. You MUST give a reason for every single item.
+3. Each reason: one sentence, 5–15 words max.
+4. Reasons must include exact distinguishing details in parentheses when applicable.
+   (e.g., "Different size (13 in vs 16 in) and CPU (i7 vs i9)")
+5. Reasons must focus only on the key distinguishing factor.
+6. The reasons object must contain exactly {num_items} entries.
+7. Return only valid JSON, no extra text.
 
-**CRITICAL REQUIREMENTS - READ CAREFULLY**:
-1. There are exactly {num_items} items in the list above (numbered 1 through {num_items}). You MUST provide a reason for EVERY single item. Do not skip any items.
-2. The reasons object must contain exactly {num_items} entries, one for each item index from 1 to {num_items}. Every single item must have a reason, no exceptions.
-3. Keep each reason BRIEF - one sentence maximum, ideally 5-15 words. Focus only on the key distinguishing factor (e.g., "Different model (T6 vs T7)", "Same product, different size", "Accessory only"). Brevity is critical to ensure you can complete all {num_items} reasons.
-4. Process items sequentially from 1 to {num_items} and ensure you complete the entire list before finishing your response.
-5. Before finishing, verify that your reasons object contains exactly {num_items} entries (one for each index from 1 to {num_items}). If you find you're missing any, add them before responding.
-6. Ensure all JSON strings are properly escaped. If a reason contains quotes, parentheses, or special characters, they must be properly escaped (e.g., use \\" for quotes inside strings). All strings must be properly closed with closing quotes.
+---
 
-Return only the JSON object and no other text."""
+## Compact Examples
+
+Example 1 — Vague FB listing  
+FB: "Gaming laptop"  
+eBay:
+1. "Dell G15 gaming laptop RTX 3060" → Accept: Matches general category and use
+2. "Gaming laptop charger" → Reject: Accessory only (charger, not laptop)
+3. "Alienware desktop PC" → Reject: Different product category (desktop vs laptop)
+
+Example 2 — Specific FB listing  
+FB: "MacBook Pro 2019 16 inch i9 32GB"  
+eBay:
+1. "MacBook Pro 2019 16 inch i9 32GB" → Accept: Exact model and specs
+2. "MacBook Pro 2020 16 inch i9" → Reject: Different generation (2020 vs 2019)
+3. "MacBook Pro 2019 13 inch i7" → Reject: Different size (13 in vs 16 in) and CPU (i7 vs i9)
+4. "MacBook Pro 2019 16 inch missing charger" → Accept: Core product matches (charger missing)
+
+Example 3 — Clothing  
+FB: "Air Jordan 1 Retro High OG size 10"  
+eBay:
+1. "AJ1 Retro High OG size 9" → Accept: Size irrelevant (9 vs 10)
+2. "AJ1 Mid OG size 10" → Reject: Different variant (Mid vs High)
+3. "AJ1 Low OG size 10" → Reject: Different variant (Low vs High)
+
+Example 4 — Camera  
+FB: "Canon EOS Rebel T7 with 18–55mm lens"  
+eBay:
+1. "Canon EOS Rebel T7 with kit lens" → Accept: Same full kit (18–55mm lens)
+2. "Canon EOS Rebel T6 body only" → Reject: Different model (T6 vs T7)
+3. "Canon 50mm f/1.8 lens" → Reject: Accessory only (lens, no camera)
+4. "Canon EOS Rebel T7 for parts" → Reject: Not working (for parts)
+"""
