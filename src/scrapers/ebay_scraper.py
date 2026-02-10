@@ -16,7 +16,7 @@ import time
 
 import requests
 
-from src.utils.colored_logger import setup_colored_logger, log_error_short, truncate_lines
+from src.utils.colored_logger import setup_colored_logger, log_error_short
 
 logger = setup_colored_logger("ebay_scraper")
 VALID_CONDITION_IDS = {1000, 3000}
@@ -137,15 +137,9 @@ class EbayBrowseAPIClient:
             api_filter = browse_api_parameters.get("filter")
             api_marketplace = browse_api_parameters.get("marketplace", "EBAY_US")
             api_sort = browse_api_parameters.get("sort")
-            logger.info(f"   Using Browse API parameters:")
-            if api_filter:
-                logger.info(f"      Filter: {api_filter}")
-            if api_marketplace:
-                logger.info(f"      Marketplace: {api_marketplace}")
-            if api_sort:
-                logger.info(f"      Sort: {api_sort}")
+            logger.debug(f"   eBay filters: {api_filter}, sort={api_sort}")
         else:
-            logger.debug("   No Browse API parameters provided, using defaults")
+            logger.debug("   eBay: using defaults")
         
         # Use keywords directly as search query (eBay API doesn't support exclusion syntax)
         search_query = keywords
@@ -243,7 +237,7 @@ class EbayBrowseAPIClient:
             
             if filters:
                 params["filter"] = ",".join(filters)
-                logger.debug(f"   Final filters: {params['filter']}")
+                logger.debug(f"   eBay filters: {params['filter']}")
             
             headers = {
                 "Authorization": f"Bearer {token}",
@@ -251,8 +245,7 @@ class EbayBrowseAPIClient:
             }
             
             try:
-                logger.debug(f"   Fetching eBay Browse API (offset {offset}, limit {limit}, marketplace {api_marketplace})...")
-                logger.debug(f"   Request params: {params}")
+                logger.debug(f"   eBay request: offset {offset}, limit {limit}")
                 response = requests.get(self.BASE_URL, params=params, headers=headers, timeout=30)
                 
                 if response.status_code == 401:
@@ -295,7 +288,7 @@ class EbayBrowseAPIClient:
                     except (KeyError, ValueError, TypeError):
                         continue
                 
-                logger.debug(f"Found {len(items)} active listings (Total: {len(all_items)}) for query: '{keywords}'")
+                logger.debug(f"   eBay: {len(items)} this page ({len(all_items)} total)")
                 
                 # Check if there are more pages
                 total = data.get("total", 0)
@@ -418,8 +411,7 @@ class EbayBrowseAPIClient:
             n_items: Maximum number of items to fetch
             browse_api_parameters: Optional dict with Browse API parameters (filter, marketplace, sort, limit)
         """
-        logger.info(f"Searching eBay: '{search_term}'")
-        logger.debug("Note: Browse API returns ACTIVE listings only, not sold items")
+        logger.debug(f"eBay search: '{search_term}'")
         
         items = self.search_active_listings(
             keywords=search_term,
@@ -427,18 +419,16 @@ class EbayBrowseAPIClient:
             browse_api_parameters=browse_api_parameters,
         )
         if not items:
-            logger.warning(f"No items found from Browse API for query: '{search_term}'")
+            logger.warning(f"No eBay results for '{search_term}'")
             return None
         
         valid_items = [item for item in items if item.get("price", 0) > 0]
         
         # Enhance items with detailed information from getItem API
         api_marketplace = browse_api_parameters.get("marketplace", "EBAY_US") if browse_api_parameters else "EBAY_US"
-        logger.debug(f"Enhancing {len(valid_items)} items with detailed information from getItem API")
+        logger.debug(f"eBay: fetching details for {len(valid_items)} items")
         enhanced_items = self.enhance_items_with_details(valid_items, marketplace=api_marketplace)
-        enhanced_items_json = json.dumps(enhanced_items, indent=2)
-        truncated_items = truncate_lines(enhanced_items_json, 10)
-        logger.debug(f"Enhanced items (first 10 lines):\n{truncated_items}")
+        logger.debug(f"eBay: {len(enhanced_items)} items with details")
         
         prices = [item["price"] for item in enhanced_items]
         
@@ -462,7 +452,7 @@ class EbayBrowseAPIClient:
             item_summaries.append(item_summary)
         
         if len(prices) < 3:
-            logger.warning(f"Not enough data from Browse API: only found {len(prices)} items (minimum 3 required for statistical significance)")
+            logger.warning(f"Too few eBay results ({len(prices)}; need at least 3 to compare)")
             avg_price = statistics.mean(prices) if prices else 0.0
             stats = PriceStats(
                 search_term=search_term,
@@ -481,7 +471,7 @@ class EbayBrowseAPIClient:
             item_summaries=item_summaries,
         )
         
-        logger.info(f"Found {stats.sample_size} eBay listings, avg ${stats.average:.2f}")
+        logger.debug(f"eBay: {stats.sample_size} listings, avg ${stats.average:.2f}")
         return stats
 
 

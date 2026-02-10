@@ -13,6 +13,7 @@ import { SearchResultsTable } from "@/components/results/SearchResultsTable";
 import { CookieSetupGuide } from "@/components/auth/CookieSetupGuide";
 import type { Listing } from "@/components/results/SearchResultsTable";
 import { DebugPanel } from "@/components/debug/DebugPanel";
+import { FloatingLogPanel } from "@/components/debug/FloatingLogPanel";
 import type { DebugFacebookListing, DebugEbayQueryEntry } from "@/components/debug/DebugPanel";
 import type { DebugSearchParams } from "@/components/debug/DebugSearchParams";
 
@@ -34,6 +35,7 @@ type SSEDispatchHandlers = {
   onDebugMode?: (params?: DebugSearchParams) => void;
   onDebugFacebook?: (listings: DebugFacebookListing[]) => void;
   onDebugEbayQuery?: (entry: DebugEbayQueryEntry) => void;
+  onDebugLog?: (entry: { level: string; message: string }) => void;
 };
 
 /**
@@ -57,6 +59,8 @@ function dispatchSSEEvent(payloadString: string, handlers: SSEDispatchHandlers):
     extractDescriptions?: boolean;
     fbTitle?: string;
     ebayQuery?: string;
+    level?: string;
+    message?: string;
   };
   if (data.type === "auth_error") {
     handlers.handleAuthError();
@@ -90,6 +94,8 @@ function dispatchSSEEvent(payloadString: string, handlers: SSEDispatchHandlers):
     handlers.onDebugFacebook?.(data.listings as DebugFacebookListing[]);
   } else if (data.type === "debug_ebay_query" && data.fbTitle != null && data.ebayQuery != null) {
     handlers.onDebugEbayQuery?.({ fbTitle: data.fbTitle, ebayQuery: data.ebayQuery });
+  } else if (data.type === "debug_log" && data.level != null && data.message != null) {
+    handlers.onDebugLog?.({ level: data.level, message: data.message });
   }
 }
 
@@ -144,6 +150,7 @@ export default function Home() {
   const [debugSearchParams, setDebugSearchParams] = useState<DebugSearchParams | null>(null);
   const [debugFacebookListings, setDebugFacebookListings] = useState<DebugFacebookListing[]>([]);
   const [debugEbayQueries, setDebugEbayQueries] = useState<DebugEbayQueryEntry[]>([]);
+  const [debugLogs, setDebugLogs] = useState<Array<{ level: string; message: string }>>([]);
   const [isSearching, setIsSearching] = useState<boolean>(false);
   const isSearchingRef = useRef<boolean>(false);
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -260,6 +267,7 @@ export default function Home() {
         },
         onDebugFacebook: setDebugFacebookListings,
         onDebugEbayQuery: onDebugEbayQuery,
+        onDebugLog: (entry) => setDebugLogs((prev: Array<{ level: string; message: string }>) => [...prev, entry]),
       };
 
       try {
@@ -454,6 +462,7 @@ export default function Home() {
     setDebugSearchParams(null);
     setDebugFacebookListings([]);
     setDebugEbayQueries([]);
+    setDebugLogs([]);
     setAppState("loading");
     
     // Start search directly - no useEffect needed
@@ -477,6 +486,7 @@ export default function Home() {
     setDebugSearchParams(null);
     setDebugFacebookListings([]);
     setDebugEbayQueries([]);
+    setDebugLogs([]);
     isSearchingRef.current = false;
     setIsSearching(false);
   };
@@ -555,6 +565,10 @@ export default function Home() {
             facebookListings={debugFacebookListings}
             ebayQueries={debugEbayQueries}
           />
+        )}
+
+        {(appState === "loading" || appState === "done") && (
+          <FloatingLogPanel logs={debugLogs} debugEnabled={debugEnabled} />
         )}
 
         <AppFooter />

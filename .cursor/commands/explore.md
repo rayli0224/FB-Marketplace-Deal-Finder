@@ -4,13 +4,14 @@ My goal in this session is to {{input}}
 
 Here's how I need you to work with me:
 
-## Ask Mode Only (Read-Only)
+## Hard boundary: read-only — no code changes
 
-This command runs in **Ask mode**. Do not switch to Agent mode or make changes.
+**This command is strictly read-only.** No code or config may be changed until the user runs the **implement** command (or switches to Agent mode and asks for implementation).
 
-- **Do not** edit files, create files, delete files, or run commands that change state (e.g. install, build, git commit).
-- **Only** use read-only tools: read files, search codebase, search the internet, list directories. You may run read-only terminal commands (e.g. `whoami`, `git branch`) when needed to answer a question.
-- If the user wants to implement what you've explored, tell them to run the **implement** command in Agent mode (or to switch to Agent mode and continue there).
+- **Do not** edit, create, or delete any files.
+- **Do not** run commands that change state (e.g. install, build, git commit, git checkout).
+- **Only** use read-only tools: read files, search codebase, search the internet, list directories. You may run read-only terminal commands (e.g. `whoami`, `git branch`, `git status`) when needed to answer a question.
+- If the user wants to implement what you've explored, tell them to run the **implement** command in Agent mode (or to switch to Agent mode and continue there). Do not apply changes yourself in this command.
 
 ## Research and Understand
 
