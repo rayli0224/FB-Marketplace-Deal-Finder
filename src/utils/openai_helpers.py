@@ -157,12 +157,14 @@ def filter_ebay_results_with_openai(
         ebay_items_text_parts.append(item_text)
     
     ebay_items_text = "\n".join(ebay_items_text_parts)
+    num_items = len(ebay_items)
     
     prompt = get_result_filtering_prompt(
         listing_title=listing.title,
         listing_price=listing.price,
         description_text=description_text,
         ebay_items_text=ebay_items_text,
+        num_items=num_items,
     )
     
     try:
@@ -177,11 +179,17 @@ def filter_ebay_results_with_openai(
             }
         ]
         
+        # Calculate max_tokens based on number of items to avoid truncation
+        # Each item needs ~60 tokens for its reason string, plus JSON structure overhead
+        # Use a minimum of 2000 tokens, or 60 tokens per item, whichever is higher
+        # This ensures we have enough tokens for reasons for ALL items (not just comparable ones)
+        max_tokens = max(2000, num_items * 60)
+        
         response = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=messages,
             temperature=0.2,
-            max_tokens=1000,
+            max_tokens=max_tokens,
         )
         
         # Log full response for debugging
@@ -288,6 +296,12 @@ def filter_ebay_results_with_openai(
         else:
             logger.debug("All listings matched")
         
+        expected_reason_count = len(ebay_items)
+        actual_reason_count = len(reasons)
+        if actual_reason_count < expected_reason_count:
+            missing_count = expected_reason_count - actual_reason_count
+            logger.warning(f"Missing reasons for {missing_count} items — comparison list may be incomplete.")
+
         if reasons:
             logger.debug(f"Why items were dropped (sample):")
             for idx, reason in list(reasons.items())[:3]:
