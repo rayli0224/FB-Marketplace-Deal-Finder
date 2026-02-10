@@ -216,6 +216,24 @@ def log_error_short(logger: logging.Logger, message: str, max_len: int = DEFAULT
     logger.error(str(message)[:max_len])
 
 
+def truncate_lines(content: str, n_lines: int) -> str:
+    """
+    Truncate content to first n_lines, adding a summary line if truncated.
+    
+    Args:
+        content: The content string to truncate
+        n_lines: Number of lines to keep
+    
+    Returns:
+        Truncated content with "... (N more lines)" appended if truncated
+    """
+    lines = content.split('\n')
+    truncated = '\n'.join(lines[:n_lines])
+    if len(lines) > n_lines:
+        truncated += f"\n... ({len(lines) - n_lines} more lines)"
+    return truncated
+
+
 # Interval in seconds for periodic "still waiting" status updates (non-inline).
 WAIT_STATUS_INTERVAL = 5
 

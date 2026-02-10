@@ -29,7 +29,6 @@ Your task:
    - `filter`: Use ONLY "conditionIds:{{1000}}" for New or "conditionIds:{{3000}}" for Used (no other condition IDs allowed). If the listing is ambiguous, include both "conditionIds:{{1000|3000}}"
    - `marketplace`: Use "EBAY_US" unless location indicates otherwise
    - `sort`: Use "bestMatch" for most searches
-   - `limit`: Use 50 for good statistical coverage
 
 Guidelines:
 
@@ -66,7 +65,6 @@ Guidelines:
 - **Filter:** ONLY use `conditionIds:{{1000}}` for New or `conditionIds:{{3000}}` for Used. No other condition IDs allowed. If the listing is ambiguous, include both "conditionIds:{{1000|3000}}"
 - **Marketplace:** Always include. Use "EBAY_US" unless location indicates otherwise.
 - **Sort:** Always include. Use "bestMatch" for most searches.
-- **Limit:** Always include. Use 50 for good statistical coverage.
 
 ### Output Format
 Return ONLY a JSON object exactly like this:
@@ -76,8 +74,7 @@ Return ONLY a JSON object exactly like this:
   "browse_api_parameters": {{
       "filter": "conditionIds:{{1000|3000}}",
       "marketplace": "EBAY_US",
-      "sort": "bestMatch",
-      "limit": 50
+      "sort": "bestMatch"
   }}
 }}
 """
@@ -106,6 +103,8 @@ Facebook Marketplace listing:
 eBay search results:
 {ebay_items_text}
 
+Note: Each eBay item includes its title, price, condition (if available), and description (if available). Use all available information to make accurate comparability decisions.
+
 Your task: Identify which eBay items are actually comparable to the FB listing. Internally, reason carefully about each item one by one and provide a short justification for each item's accept/reject decision. 
 
 Search on the web for specific product names as needed in order to inform your decision. Do NOT use images or other visual information to make your decision.
@@ -115,9 +114,10 @@ An eBay item is comparable if and only if:
 1. Core Product Match  
 - It refers to the **same core product/model** (same brand, product line, generation, or series).
 - If the FB listing is **specific** (contains clear identifying tokens such as brand, model, generation, size, capacity, etc.), then:
-  - Those key tokens must also appear in the eBay title or description.
+  - Those key tokens must also appear in the eBay title, description, or item aspects.
+  - Use the detailed description and condition information when available to make more accurate comparisons.
   - If they do not, exclude the item.
-- If the FB listing is **vague or generic**, use best judgment based on overall similarity.
+- If the FB listing is **vague or generic**, use best judgment based on overall similarity, leveraging description details when available.
 
 2. Condition Match  
 - The **condition is similar** (e.g. both new, both used, both working).
@@ -194,5 +194,7 @@ Where:
 - reasons is an object mapping each 1-based index to a short reason (1-2 sentences max) explaining why it was accepted or rejected
 
 Provide reasons for ALL items in the eBay results list, not just the comparable ones. Keep reasons concise and focused on the key factor that led to the decision.
+
+**IMPORTANT**: Ensure all JSON strings are properly escaped. If a reason contains quotes, parentheses, or special characters, they must be properly escaped (e.g., use \\" for quotes inside strings). All strings must be properly closed with closing quotes.
 
 Return only the JSON object and no other text."""

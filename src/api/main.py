@@ -15,7 +15,7 @@ from pydantic import BaseModel
 from typing import List, Optional
 
 from src.scrapers.fb_marketplace_scraper import search_marketplace as search_fb_marketplace, FacebookNotLoggedInError
-from src.scrapers.ebay_scraper import get_market_price
+from src.scrapers.ebay_scraper import get_market_price, DEFAULT_EBAY_ITEMS
 from src.api.deal_calculator import score_listings
 from src.utils.listing_processor import process_single_listing
 from src.utils.colored_logger import setup_colored_logger, log_step_sep, log_step_title, log_error_short, wait_status
@@ -75,7 +75,7 @@ class SearchResponse(BaseModel):
 
 class EbayStatsRequest(BaseModel):
     query: str
-    nItems: int = 50
+    nItems: int = DEFAULT_EBAY_ITEMS
 
 
 class EbayStats(BaseModel):
@@ -215,7 +215,7 @@ def search_deals(request: SearchRequest):
         with wait_status(logger, "eBay prices"):
             ebay_stats = get_market_price(
                 search_term=request.query,
-                n_items=1,
+                n_items=DEFAULT_EBAY_ITEMS,
             )
     except Exception as e:
         log_error_short(logger, f"Step 3 failed: {e}")
@@ -425,7 +425,7 @@ def search_deals_stream(request: SearchRequest):
                             listing=listing,
                             original_query=request.query,
                             threshold=request.threshold,
-                            n_items=50,
+                            n_items=DEFAULT_EBAY_ITEMS,
                             listing_index=idx,
                             total_listings=len(fb_listings)
                         )

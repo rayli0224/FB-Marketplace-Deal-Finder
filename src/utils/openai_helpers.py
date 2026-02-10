@@ -16,7 +16,7 @@ except ImportError:
     OpenAI = None
 
 from src.scrapers.fb_marketplace_scraper import Listing
-from src.utils.colored_logger import setup_colored_logger, log_error_short
+from src.utils.colored_logger import setup_colored_logger, log_error_short, truncate_lines
 from src.utils.prompts import (
     QUERY_GENERATION_SYSTEM_MESSAGE,
     RESULT_FILTERING_SYSTEM_MESSAGE,
@@ -71,25 +71,20 @@ def generate_ebay_query_for_listing(
             "max_tokens": 200,
         }
         
-        logger.debug(f"OpenAI API Request - Model: {api_params['model']}, Messages: {json.dumps(messages, indent=2)}")
         response = client.chat.completions.create(
             model=api_params["model"],
             messages=messages,
             temperature=api_params["temperature"],
             max_tokens=api_params["max_tokens"],
         )
+        raw_content = response.choices[0].message.content
         try:
-            if hasattr(response, 'model_dump'):
-                response_dict = response.model_dump()
-            elif hasattr(response, 'dict'):
-                response_dict = response.dict()
-            else:
-                response_dict = {"id": getattr(response, 'id', None), "model": getattr(response, 'model', None), "choices": [{"message": {"content": response.choices[0].message.content if response.choices else None}}]}
-            logger.debug(f"OpenAI API Response - Full response: {json.dumps(response_dict, indent=2)}")
+            truncated_content = truncate_lines(raw_content, 5)
+            logger.debug(f"OpenAI API Response - Message content (first 5 lines):\n{truncated_content}")
         except Exception as e:
-            logger.debug(f"OpenAI API Response - Could not serialize response: {e}")
-            logger.debug(f"OpenAI API Response - Raw response: {str(response)}")
-        content = response.choices[0].message.content.strip()
+            logger.debug(f"OpenAI API Response - Could not extract content: {e}")
+        
+        content = raw_content.strip()
         if content.startswith("```json"):
             content = content[7:]
         if content.startswith("```"):
@@ -118,15 +113,14 @@ def generate_ebay_query_for_listing(
 def filter_ebay_results_with_openai(
     listing: Listing,
     ebay_items: List[dict]
-) -> Optional[Tuple[List[dict], dict]]:
+) -> Optional[Tuple[List[int], List[dict], dict]]:
     """
-<<<<<<< HEAD
     Filter eBay search results to keep only items comparable to the Facebook Marketplace listing.
     
-    Uses OpenAI to analyze each eBay item's title and compare it to the FB listing's title,
-    description, and price. Removes items that are accessories, different models, or otherwise
-    not comparable. This improves price comparison accuracy by ensuring only truly similar items
-    are used for calculating the market average.
+    Uses OpenAI to analyze each eBay item's title, description, and condition and compare them
+    to the FB listing's title, description, and price. Removes items that are accessories,
+    different models, or otherwise not comparable. This improves price comparison accuracy by
+    ensuring only truly similar items are used for calculating the market average.
     
     Returns tuple of (comparable_indices, filtered list of eBay items, reasons dict) or None if filtering fails.
     comparable_indices is a list of 1-based indices of items that passed filtering.
@@ -146,10 +140,26 @@ def filter_ebay_results_with_openai(
     
     client = OpenAI(api_key=OPENAI_API_KEY)
     description_text = listing.description if listing.description else "No description provided"
-    ebay_items_text = "\n".join([
-        f"{i+1}. {item.get('title', '')} - ${item.get('price', 0):.2f}"
-        for i, item in enumerate(ebay_items)
-    ])
+    
+    # Format eBay items with enhanced details (description, condition) if available
+    ebay_items_text_parts = []
+    for i, item in enumerate(ebay_items):
+        title = item.get('title', '')
+        price = item.get('price', 0)
+        description = item.get('description', '')
+        condition = item.get('condition', '')
+        
+        item_text = f"{i+1}. {title} - ${price:.2f}"
+        if condition:
+            item_text += f" | Condition: {condition}"
+        if description:
+            # Truncate description to avoid overly long prompts
+            desc_preview = description[:200] + "..." if len(description) > 200 else description
+            item_text += f"\n   Description: {desc_preview}"
+        
+        ebay_items_text_parts.append(item_text)
+    
+    ebay_items_text = "\n".join(ebay_items_text_parts)
     
     prompt = get_result_filtering_prompt(
         listing_title=listing.title,
@@ -197,11 +207,7 @@ def filter_ebay_results_with_openai(
             # Access dictionary with bracket notation, not dot notation
             if response_dict and "choices" in response_dict and len(response_dict["choices"]) > 0:
                 raw_content = response_dict["choices"][0]["message"]["content"]
-                # Truncate to first 5 lines for logging
-                content_lines = raw_content.split('\n')
-                truncated_content = '\n'.join(content_lines[:5])
-                if len(content_lines) > 5:
-                    truncated_content += f"\n... ({len(content_lines) - 5} more lines)"
+                truncated_content = truncate_lines(raw_content, 5)
                 logger.debug(f"OpenAI Filtering Response - Raw content (first 5 lines):\n{truncated_content}")
             else:
                 logger.debug(f"OpenAI Filtering Response - Response structure: {json.dumps(response_dict, indent=2)}")
@@ -228,6 +234,7 @@ def filter_ebay_results_with_openai(
             error_pos = getattr(json_err, 'pos', None)
             
             logger.warning(f"Failed to parse OpenAI filter response as JSON: {json_err}")
+            logger.warning(f"Full response content: {content}")
             if error_line:
                 content_lines = content.split('\n')
                 logger.warning(f"Error at line {error_line}, column {error_col}")
@@ -255,8 +262,27 @@ def filter_ebay_results_with_openai(
                     indices_str = indices_match.group(1)
                     comparable_indices = [int(x.strip()) for x in indices_str.split(',') if x.strip()]
                     logger.info(f"Recovered comparable_indices from malformed JSON: {comparable_indices}")
-                    # Use empty reasons dict since we can't parse it
+                    
+                    # Try to extract reasons dict - look for complete key-value pairs
                     reasons = {}
+                    reasons_match = re.search(r'"reasons"\s*:\s*\{', content)
+                    if reasons_match:
+                        # Find the start of the reasons dict
+                        reasons_start = reasons_match.end()
+                        # Try to extract complete key-value pairs
+                        # Pattern: "key": "value" (handling escaped quotes)
+                        reason_pattern = r'"(\d+)"\s*:\s*"((?:[^"\\]|\\.)*)"'
+                        for match in re.finditer(reason_pattern, content[reasons_start:]):
+                            key = match.group(1)
+                            value = match.group(2)
+                            # Unescape JSON escape sequences
+                            value = value.replace('\\"', '"').replace('\\n', '\n').replace('\\\\', '\\')
+                            reasons[key] = value
+                        
+                        if reasons:
+                            logger.debug(f"Recovered {len(reasons)} reasons from malformed JSON")
+                        else:
+                            logger.debug("Could not recover reasons from malformed JSON")
                 except ValueError:
                     logger.warning("Could not recover comparable_indices from malformed JSON")
                     return None
