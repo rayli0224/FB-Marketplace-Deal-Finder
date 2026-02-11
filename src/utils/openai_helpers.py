@@ -31,10 +31,11 @@ OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 def generate_ebay_query_for_listing(
     listing: Listing,
     original_query: str
-) -> Optional[Tuple[str, Optional[dict]]]:
+) -> Optional[Tuple[Optional[str], Optional[dict], Optional[str]]]:
     """
     Generate an optimized eBay search query and optional Browse API parameters for a FB listing.
-    Returns (enhanced_query, browse_api_parameters) or None if the library is missing, API key is unset, or the call fails.
+    Returns (enhanced_query, browse_api_parameters, skip_reason) or None on generic failure.
+    On success: (query, params, None). On model rejection: (None, None, reason). On other failure: None.
     """
     if not OpenAI:
         logger.error("Search suggestions unavailable (required package not installed).")
@@ -93,12 +94,16 @@ def generate_ebay_query_for_listing(
             content = content[:-3]
         content = content.strip()
         result = json.loads(content)
+        if result.get("rejected"):
+            reason = result.get("reason", "insufficient information")
+            logger.info(f"Listing skipped — not enough detail to compare: {reason}")
+            return (None, None, reason)
         enhanced_query = result.get("enhanced_query", original_query)
         browse_api_parameters = result.get("browse_api_parameters")
         if not isinstance(browse_api_parameters, dict):
             browse_api_parameters = None
         logger.debug(f"Search: '{enhanced_query}'")
-        return (enhanced_query, browse_api_parameters)
+        return (enhanced_query, browse_api_parameters, None)
     except json.JSONDecodeError as e:
         log_error_short(logger, f"Search suggestion response was invalid: {e}")
         logger.debug(f"Response content: {content}")

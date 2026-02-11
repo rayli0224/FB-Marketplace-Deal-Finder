@@ -26,14 +26,15 @@ def _listing_result(
     comp_price: Optional[float] = None,
     comp_prices: Optional[list] = None,
     comp_items: Optional[list] = None,
+    no_comp_reason: Optional[str] = None,
 ) -> Dict:
     """
     Build the result dict for a processed listing.
 
     Always includes title, price, location, url, and dealScore. Adds
     ebaySearchQuery, compPrice, compPrices, and compItems only when the
-    corresponding arguments are not None, so the API can omit transparency
-    fields when eBay data was unavailable.
+    corresponding arguments are not None. Adds noCompReason when the listing
+    could not be compared and we have a user-facing explanation.
     """
     out = {
         "title": listing.title,
@@ -50,6 +51,8 @@ def _listing_result(
         out["compPrices"] = comp_prices
     if comp_items is not None:
         out["compItems"] = comp_items
+    if no_comp_reason is not None:
+        out["noCompReason"] = no_comp_reason
     return out
 
 
@@ -84,11 +87,13 @@ def process_single_listing(
         logger.info("💡 Preparing eBay search")
         with wait_status(logger, "eBay search"):
             query_result = generate_ebay_query_for_listing(listing, original_query)
-        if not query_result:
+        if query_result is None:
             logger.warning("Could not prepare search — skipping deal score")
-            return _listing_result(listing, None)
+            return _listing_result(listing, None, no_comp_reason="Could not prepare search")
+        enhanced_query, browse_api_parameters, skip_reason = query_result
+        if skip_reason is not None:
+            return _listing_result(listing, None, no_comp_reason=skip_reason)
 
-        enhanced_query, browse_api_parameters = query_result
 
         logger.info("💰 Searching eBay for similar items")
         with wait_status(logger, "eBay prices"):
@@ -100,7 +105,7 @@ def process_single_listing(
 
         if not ebay_stats:
             logger.warning("No eBay results — skipping deal score")
-            return _listing_result(listing, None)
+            return _listing_result(listing, None, no_comp_reason="No similar items found on eBay")
         if ebay_stats.sample_size < 3:
             logger.warning(f"Only {ebay_stats.sample_size} similar listing(s) — small sample")
         logger.info(f"📋 {ebay_stats.sample_size} similar listings on eBay (avg ${ebay_stats.average:.2f})")
@@ -150,6 +155,13 @@ def process_single_listing(
                         ebay_stats.sample_size = 0
                         ebay_stats.raw_prices = []
                         ebay_stats.item_summaries = all_items_with_filter_flag
+                        return _listing_result(
+                            listing,
+                            None,
+                            ebay_search_query=enhanced_query,
+                            comp_items=all_items_with_filter_flag,
+                            no_comp_reason="No comparable eBay listings matched this item",
+                        )
                 else:
                     logger.debug("All items deemed comparable")
                     ebay_stats.item_summaries = all_items_with_filter_flag
@@ -175,6 +187,7 @@ def process_single_listing(
                 comp_price=ebay_stats.average if ebay_stats.average > 0 else None,
                 comp_prices=ebay_stats.raw_prices if ebay_stats.raw_prices else None,
                 comp_items=comp_items,
+                no_comp_reason="Not enough comparable listings to calculate price",
             )
 
         logger.info(f"📊 {deal_score:.1f}% below typical eBay price")
