@@ -11,7 +11,7 @@ import statistics
 import os
 import json
 from dataclasses import dataclass
-from typing import Optional, List
+from typing import Optional, List, Tuple
 import time
 
 import requests
@@ -60,6 +60,7 @@ class EbayBrowseAPIClient:
     
     TOKEN_URL = "https://api.ebay.com/identity/v1/oauth2/token"
     BASE_URL = "https://api.ebay.com/buy/browse/v1/item_summary/search"
+    SEARCH_BY_IMAGE_URL = "https://api.ebay.com/buy/browse/v1/item_summary/search_by_image"
     GET_ITEM_URL = "https://api.ebay.com/buy/browse/v1/item"
     
     def __init__(self, app_id: str = None, client_secret: str = None):
@@ -105,7 +106,53 @@ class EbayBrowseAPIClient:
             
         except requests.exceptions.RequestException:
             return None
-    
+
+    def _build_filters_and_marketplace(
+        self, browse_api_parameters: Optional[dict]
+    ) -> Tuple[List[str], str]:
+        """
+        Build filter list and marketplace from Browse API parameters.
+
+        Returns (filters, api_marketplace). Used by both keyword search and search_by_image.
+        """
+        api_filter = None
+        api_marketplace = "EBAY_US"
+        if browse_api_parameters:
+            api_filter = browse_api_parameters.get("filter")
+            api_marketplace = browse_api_parameters.get("marketplace", "EBAY_US")
+        filters: List[str] = []
+        if api_filter:
+            if isinstance(api_filter, dict):
+                filter_parts = []
+                if "conditionIds" in api_filter:
+                    condition_ids = api_filter.get("conditionIds") or []
+                    valid_ids = [c for c in condition_ids if c in VALID_CONDITION_IDS]
+                    if valid_ids:
+                        filter_parts.append(f"conditionIds:{{{'|'.join(str(c) for c in valid_ids)}}}")
+                api_filter = ",".join(filter_parts) if filter_parts else None
+            if api_filter and isinstance(api_filter, str):
+                for filter_str in [f.strip() for f in api_filter.split(",")]:
+                    if filter_str.startswith("conditionIds:"):
+                        try:
+                            ids_part = filter_str.split(":", 1)[1].strip("{}")
+                            condition_ids = [int(x.strip()) for x in ids_part.split("|")]
+                            valid_ids = [c for c in condition_ids if c in VALID_CONDITION_IDS]
+                            if valid_ids:
+                                filters.append(f"conditionIds:{{{'|'.join(str(c) for c in valid_ids)}}}")
+                        except (ValueError, IndexError):
+                            pass
+                    else:
+                        filters.append(filter_str)
+        if not filters:
+            filters = [
+                "buyingOptions:{FIXED_PRICE}",
+                "itemCondition:{NEW|NEW_OTHER|NEW_WITH_DEFECTS|CERTIFIED_REFURBISHED|EXCELLENT_REFURBISHED|VERY_GOOD_REFURBISHED|USED}",
+            ]
+        else:
+            if not any("buyingOptions:" in f for f in filters):
+                filters.insert(0, "buyingOptions:{FIXED_PRICE}")
+        return (filters, api_marketplace)
+
     def search_active_listings(
         self,
         keywords: str,
@@ -124,121 +171,30 @@ class EbayBrowseAPIClient:
         token = self._get_access_token()
         if not token:
             return None
-        
+
+        filters, api_marketplace = self._build_filters_and_marketplace(browse_api_parameters)
+        api_sort = (browse_api_parameters or {}).get("sort")
+        logger.debug("   eBay filters: %s, sort: %s", ",".join(filters) if filters else "defaults", api_sort)
+
         all_items = []
         offset = 0
-        
-        # Extract Browse API parameters if provided
-        api_filter = None
-        api_marketplace = "EBAY_US"  # Default
-        api_sort = None
-        
-        if browse_api_parameters:
-            api_filter = browse_api_parameters.get("filter")
-            api_marketplace = browse_api_parameters.get("marketplace", "EBAY_US")
-            api_sort = browse_api_parameters.get("sort")
-            logger.debug(f"   eBay filters: {api_filter}, sort={api_sort}")
-        else:
-            logger.debug("   eBay: using defaults")
-        
-        # Use keywords directly as search query (eBay API doesn't support exclusion syntax)
         search_query = keywords
-        
+
         while len(all_items) < max_items:
-            # Calculate how many items we still need
             remaining = max_items - len(all_items)
-            # Use maximum page size (200) for efficiency, or remaining items if less
-            limit = min(200, remaining)  # API max is 200 per page
-            
+            limit = min(200, remaining)
+
             params = {
                 "q": search_query,
                 "limit": str(limit),
                 "offset": str(offset),
             }
-            
-            # Add sort if provided
             if api_sort:
                 params["sort"] = api_sort
-            
-            # Build filter list
-            filters: List[str] = []
-            
-            # Process API-provided filter if available
-            if api_filter:
-                # Handle both string and dict formats
-                if isinstance(api_filter, dict):
-                    # Convert dict format to filter string format
-                    # Example: {'conditionIds': [2000]} -> "conditionIds:{2000}"
-                    # eBay Browse API uses numeric condition IDs, not string names
-                    filter_parts = []
-                    if "conditionIds" in api_filter:
-                        condition_ids = api_filter["conditionIds"]
-                        if condition_ids:
-                            # Filter out invalid condition IDs
-                            valid_ids = [cond_id for cond_id in condition_ids if cond_id in VALID_CONDITION_IDS]
-                            invalid_ids = [cond_id for cond_id in condition_ids if cond_id not in VALID_CONDITION_IDS]
-                            if invalid_ids:
-                                logger.warning(f"   Removed invalid condition IDs from OpenAI response: {invalid_ids}")
-                            if valid_ids:
-                                # Convert list of IDs to pipe-separated string
-                                id_string = "|".join(str(cond_id) for cond_id in valid_ids)
-                                filter_parts.append(f"conditionIds:{{{id_string}}}")
-                    api_filter = ",".join(filter_parts) if filter_parts else None
-                
-                # Parse the filter string and validate condition IDs
-                # The API filter might be a comma-separated string or a single filter
-                if api_filter and isinstance(api_filter, str):
-                    api_filters = [f.strip() for f in api_filter.split(",")]
-                    validated_filters = []
-                    for filter_str in api_filters:
-                        # Check if this is a conditionIds filter and validate it
-                        if filter_str.startswith("conditionIds:"):
-                            # Extract condition IDs from format like "conditionIds:{1000|2000}"
-                            try:
-                                # Parse conditionIds:{1000|2000} or conditionIds:{4000}
-                                ids_part = filter_str.split(":", 1)[1]
-                                ids_part = ids_part.strip("{}")
-                                condition_ids = [int(id_str.strip()) for id_str in ids_part.split("|")]
-                                
-                                # Filter out invalid IDs
-                                valid_ids = [cid for cid in condition_ids if cid in VALID_CONDITION_IDS]
-                                invalid_ids = [cid for cid in condition_ids if cid not in VALID_CONDITION_IDS]
-                                
-                                if invalid_ids:
-                                    logger.warning(f"   Removed invalid condition IDs from OpenAI response: {invalid_ids}")
-                                
-                                if valid_ids:
-                                    # Reconstruct filter with only valid IDs
-                                    id_string = "|".join(str(cid) for cid in valid_ids)
-                                    validated_filters.append(f"conditionIds:{{{id_string}}}")
-                                # If no valid IDs remain, skip this filter entirely
-                            except (ValueError, IndexError) as e:
-                                logger.warning(f"   Failed to parse conditionIds filter '{filter_str}': {e}, skipping")
-                        else:
-                            # Not a conditionIds filter, add as-is
-                            validated_filters.append(filter_str)
-                    
-                    filters.extend(validated_filters)
-            
-            # Only add default filters if no API-provided filters were given
-            # This allows OpenAI to have full control over filtering when it provides parameters
-            if not filters:
-                # Default filters: Fixed price only (no auctions) and common good conditions
-                filters = [
-                    "buyingOptions:{FIXED_PRICE}",
-                    "itemCondition:{NEW|NEW_OTHER|NEW_WITH_DEFECTS|CERTIFIED_REFURBISHED|EXCELLENT_REFURBISHED|VERY_GOOD_REFURBISHED|USED}",
-                ]
-            else:
-                # If OpenAI provided filters, only add buyingOptions if not already present
-                # This ensures we still filter out auctions unless OpenAI explicitly wants them
-                has_buying_options = any("buyingOptions:" in f for f in filters)
-                if not has_buying_options:
-                    filters.insert(0, "buyingOptions:{FIXED_PRICE}")
-            
             if filters:
                 params["filter"] = ",".join(filters)
-                logger.debug(f"   eBay filters: {params['filter']}")
-            
+                logger.debug("   eBay filters: %s", params["filter"])
+
             headers = {
                 "Authorization": f"Bearer {token}",
                 "X-EBAY-C-MARKETPLACE-ID": api_marketplace,
@@ -304,7 +260,101 @@ class EbayBrowseAPIClient:
                 break
         
         return all_items[:max_items] if all_items else None
-    
+
+    def search_by_image(
+        self,
+        image_base64: str,
+        max_items: int = 100,
+        browse_api_parameters: Optional[dict] = None,
+    ) -> Optional[List[dict]]:
+        """
+        Search for eBay listings by image using the Browse API search_by_image endpoint.
+
+        Sends the image as Base64 in the request body. Uses the same filters and
+        marketplace as keyword search. Returns the same item shape as search_active_listings
+        (title, price, url, itemId) for compatibility with get_active_listing_stats.
+        """
+        token = self._get_access_token()
+        if not token:
+            return None
+
+        filters, api_marketplace = self._build_filters_and_marketplace(browse_api_parameters)
+        logger.debug("   eBay search by image, filters: %s", ",".join(filters) if filters else "defaults")
+
+        all_items = []
+        offset = 0
+
+        while len(all_items) < max_items:
+            remaining = max_items - len(all_items)
+            limit = min(200, remaining)
+
+            params = {"limit": str(limit), "offset": str(offset)}
+            if filters:
+                params["filter"] = ",".join(filters)
+
+            headers = {
+                "Authorization": f"Bearer {token}",
+                "X-EBAY-C-MARKETPLACE-ID": api_marketplace,
+                "Content-Type": "application/json",
+            }
+            body = {"image": image_base64}
+
+            try:
+                response = requests.post(
+                    self.SEARCH_BY_IMAGE_URL,
+                    params=params,
+                    headers=headers,
+                    json=body,
+                    timeout=60,
+                )
+                if response.status_code == 401:
+                    self._access_token = None
+                    token = self._get_access_token()
+                    if token:
+                        headers["Authorization"] = f"Bearer {token}"
+                        response = requests.post(
+                            self.SEARCH_BY_IMAGE_URL,
+                            params=params,
+                            headers=headers,
+                            json=body,
+                            timeout=60,
+                        )
+                response.raise_for_status()
+                data = response.json()
+            except requests.exceptions.RequestException as e:
+                logger.debug("eBay search by image request failed: %s", e)
+                break
+
+            items = data.get("itemSummaries", [])
+            if not items:
+                break
+
+            for item in items:
+                try:
+                    price_obj = item.get("price", {})
+                    if not isinstance(price_obj, dict):
+                        continue
+                    price_value = float(price_obj.get("value", 0))
+                    currency = price_obj.get("currency", "USD")
+                    if currency != "USD" or price_value <= 0:
+                        continue
+                    all_items.append({
+                        "title": item.get("title", ""),
+                        "price": price_value,
+                        "url": item.get("itemWebUrl", ""),
+                        "itemId": item.get("itemId", ""),
+                    })
+                except (KeyError, ValueError, TypeError):
+                    continue
+
+            total = data.get("total", 0)
+            if offset + len(items) >= total or len(all_items) >= max_items:
+                break
+            offset += len(items)
+            time.sleep(0.5)
+
+        return all_items[:max_items] if all_items else None
+
     def get_item_details(self, item_id: str, marketplace: str = "EBAY_US") -> Optional[dict]:
         """
         Fetch detailed item information using eBay Browse API getItem endpoint.
@@ -367,29 +417,29 @@ class EbayBrowseAPIClient:
         for idx, item in enumerate(items):
             item_id = item.get("itemId")
             if not item_id:
-                # If no itemId, preserve only title and price
                 enhanced_items.append({
                     "title": item.get("title", ""),
                     "price": item.get("price", 0),
+                    "url": item.get("url", ""),
                 })
                 continue
-            
+
             details = self.get_item_details(item_id, marketplace)
             if details:
-                # Explicitly preserve only specified fields
                 enhanced_item = {
                     "title": item.get("title", ""),
                     "price": item.get("price", 0),
+                    "url": item.get("url", ""),
                     "description": details.get("shortDescription", ""),
                     "condition": details.get("condition", ""),
                 }
                 enhanced_items.append(enhanced_item)
                 success_count += 1
             else:
-                # If getItem failed, preserve only title and price
                 enhanced_items.append({
                     "title": item.get("title", ""),
                     "price": item.get("price", 0),
+                    "url": item.get("url", ""),
                 })
         
         if success_count < len(items):
@@ -402,25 +452,36 @@ class EbayBrowseAPIClient:
         search_term: str,
         n_items: int = 100,
         browse_api_parameters: Optional[dict] = None,
+        image_base64: Optional[str] = None,
     ) -> Optional[PriceStats]:
         """
         Get average price from active eBay listings using Browse API.
+
+        When image_base64 is provided, uses search_by_image; otherwise uses keyword search.
         Returns PriceStats with average and raw prices, or None if insufficient data.
-        
+
         Args:
-            search_term: eBay search query
+            search_term: eBay search query (used for keyword search and for PriceStats label)
             n_items: Maximum number of items to fetch
             browse_api_parameters: Optional dict with Browse API parameters (filter, marketplace, sort, limit)
+            image_base64: Optional Base64-encoded image for search_by_image (takes precedence over search_term for the API call)
         """
-        logger.debug(f"eBay search: '{search_term}'")
-        
-        items = self.search_active_listings(
-            keywords=search_term,
-            max_items=n_items,
-            browse_api_parameters=browse_api_parameters,
-        )
+        if image_base64:
+            logger.debug("eBay search by image")
+            items = self.search_by_image(
+                image_base64=image_base64,
+                max_items=n_items,
+                browse_api_parameters=browse_api_parameters,
+            )
+        else:
+            logger.debug("eBay search: '%s'", search_term)
+            items = self.search_active_listings(
+                keywords=search_term,
+                max_items=n_items,
+                browse_api_parameters=browse_api_parameters,
+            )
         if not items:
-            logger.warning(f"No eBay results for '{search_term}'")
+            logger.warning("No eBay results for '%s'", search_term if not image_base64 else "image search")
             return None
         
         valid_items = [item for item in items if item.get("price", 0) > 0]
@@ -477,24 +538,29 @@ def get_market_price(
     n_items: int = 100,
     headless: bool = None,  # Deprecated, kept for backwards compatibility
     browse_api_parameters: Optional[dict] = None,
+    image_base64: Optional[str] = None,
 ) -> Optional[PriceStats]:
     """
-    Get average price from eBay active listings using Browse API. Returns PriceStats
-    or None if failed. headless parameter is deprecated and ignored.
-    
+    Get average price from eBay active listings using Browse API.
+
+    When image_base64 is provided, uses search_by_image; otherwise uses keyword search.
+    Returns PriceStats or None if failed. headless is deprecated and ignored.
+
     Args:
-        search_term: eBay search query
+        search_term: eBay search query (used when no image; also used as label for PriceStats when image is used)
         n_items: Maximum number of items to fetch
         headless: Deprecated, ignored
         browse_api_parameters: Optional dict with Browse API parameters (filter, marketplace, sort, limit)
+        image_base64: Optional Base64-encoded image for search_by_image
     """
     if not EBAY_APP_ID or not EBAY_CLIENT_SECRET:
         logger.error("eBay credentials not configured")
         return None
-    
+
     browse_client = EbayBrowseAPIClient()
     return browse_client.get_active_listing_stats(
         search_term=search_term,
         n_items=n_items,
         browse_api_parameters=browse_api_parameters,
+        image_base64=image_base64,
     )

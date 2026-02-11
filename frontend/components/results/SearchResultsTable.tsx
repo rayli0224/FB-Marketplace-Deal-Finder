@@ -17,6 +17,8 @@ export interface Listing {
   location: string;
   url: string;
   dealScore: number | null;
+  /** Data URL of the first listing photo used for eBay image search (when extract descriptions is on). */
+  listingImageDataUrl?: string;
   ebaySearchQuery?: string;
   compPrice?: number;
   compPrices?: number[];
@@ -208,6 +210,7 @@ export function SearchResultsTable({
           <table className="w-full border-collapse font-mono text-sm">
             <thead className="sticky top-0 bg-secondary">
               <tr className="border-b border-border text-left">
+                <th className="px-2 py-2 text-xs text-muted-foreground w-14">PHOTO</th>
                 <th className="px-3 py-2 text-xs text-muted-foreground">TITLE</th>
                 <th className="px-3 py-2 text-xs text-muted-foreground">PRICE</th>
                 <th className="px-3 py-2 text-xs text-muted-foreground">LOCATION</th>
@@ -233,6 +236,18 @@ export function SearchResultsTable({
                 <tr
                   className={`border-b border-border/50 transition-colors ${rowBgClass}`}
                 >
+                  <td className="px-2 py-2 align-middle">
+                    {listing.listingImageDataUrl ? (
+                      <img
+                        src={listing.listingImageDataUrl}
+                        alt="Listing photo used for search"
+                        className="size-12 rounded object-cover border border-border"
+                        title="First photo we used for eBay image search"
+                      />
+                    ) : (
+                      <span className="text-muted-foreground/50 text-xs">—</span>
+                    )}
+                  </td>
                   <td className="px-3 py-2 max-w-[300px] truncate" title={listing.title}>
                     {listing.title}
                   </td>

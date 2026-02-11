@@ -42,6 +42,8 @@ def _listing_result(
         "url": listing.url,
         "dealScore": deal_score,
     }
+    if listing.image_base64:
+        out["listingImageDataUrl"] = f"data:image/jpeg;base64,{listing.image_base64}"
     if ebay_search_query is not None:
         out["ebaySearchQuery"] = ebay_search_query
     if comp_price is not None:
@@ -96,6 +98,7 @@ def process_single_listing(
                 search_term=enhanced_query,
                 n_items=n_items,
                 browse_api_parameters=browse_api_parameters,
+                image_base64=listing.image_base64,
             )
 
         if not ebay_stats:

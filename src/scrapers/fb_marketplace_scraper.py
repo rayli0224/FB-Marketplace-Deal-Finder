@@ -13,8 +13,9 @@ import re
 import os
 import json
 import logging
+import base64
 from dataclasses import dataclass
-from typing import Optional, List
+from typing import Optional, List, Tuple
 from playwright.sync_api import sync_playwright, Browser, Page, BrowserContext, TimeoutError as PlaywrightTimeoutError
 from src.scrapers.utils import random_delay, parse_price, is_valid_listing_price
 from src.utils.colored_logger import setup_colored_logger, log_data_block, log_listing_box_sep, set_step_indent, clear_step_indent, wait_status
@@ -43,7 +44,8 @@ class Listing:
     location: str
     url: str
     description: str = ""
-    
+    image_base64: Optional[str] = None
+
     def __str__(self) -> str:
         return f"Listing(title='{self.title}', price=${self.price:.2f}, location='{self.location}', url='{self.url}')"
 
@@ -511,25 +513,71 @@ class FBMarketplaceScraper:
             return False
         
         return True
-    
-    def _extract_description_from_detail_page(self, url: str) -> str:
+
+    def _extract_first_image_from_detail_page(self, detail_page: Page) -> Optional[str]:
         """
-        Navigate to listing detail page and extract description text under 'Details' section.
-        
-        Opens the listing URL in a new page, waits for it to load, finds the 'Details' text,
-        and extracts the description content that appears underneath it. Tries multiple strategies:
-        finding sibling elements, parent containers, and text analysis. Filters out Facebook
-        internal JSON/script content. Returns empty string if description cannot be found or
-        if navigation fails.
+        Extract the URL of the first (main) listing photo from an open detail page.
+
+        Tries common selectors for the main listing image (carousel, CDN img).
+        Returns the first valid image URL or None if not found.
+        """
+        image_selectors = [
+            "img[src*='scontent'][src*='fbcdn']",
+            "img[src*='fbcdn.net']",
+            "div[role='img'] img",
+            "img[data-visualcompletion='media-vc-image']",
+        ]
+        for selector in image_selectors:
+            try:
+                imgs = detail_page.locator(selector).all()
+                for img in imgs:
+                    src = img.get_attribute("src")
+                    if src and src.startswith("http") and ("scontent" in src or "fbcdn" in src or "cdn.fbsbx" in src):
+                        return src
+            except Exception:
+                continue
+        return None
+
+    def _fetch_image_as_base64(self, detail_page: Page, image_url: str) -> Optional[str]:
+        """
+        Fetch an image URL using the same browser context and return Base64 string.
+
+        Uses the detail page's request context so Facebook auth/cookies apply.
+        Returns None on failure (timeout, non-200, or non-image response).
+        """
+        try:
+            response = detail_page.request.get(image_url, timeout=10000)
+            if response.status != 200:
+                return None
+            body = response.body()
+            if not body or len(body) < 100:
+                return None
+            return base64.b64encode(body).decode("ascii")
+        except Exception as e:
+            logger.debug("Could not fetch listing image: %s", e)
+            return None
+
+    def _extract_description_and_image_from_detail_page(self, url: str) -> Tuple[str, Optional[str]]:
+        """
+        Navigate to listing detail page; extract description and first photo as Base64.
+
+        Opens the listing URL in a new page, extracts description under 'Details' and
+        the first listing image URL, fetches the image in the same context, and
+        returns (description, image_base64). image_base64 is None if no image or fetch fails.
         """
         description = ""
-        
+        image_base64: Optional[str] = None
+        detail_page: Optional[Page] = None
+
         try:
-            # Open detail page in new page to avoid losing search results context
             detail_page = self.context.new_page()
             detail_page.goto(url, wait_until="networkidle", timeout=15000)
             random_delay(2, 3)
-            
+
+            image_url = self._extract_first_image_from_detail_page(detail_page)
+            if image_url:
+                image_base64 = self._fetch_image_as_base64(detail_page, image_url)
+
             # Find "Details" text and get the description underneath
             details_selectors = [
                 "span:has-text('Details')",
@@ -616,19 +664,19 @@ class FBMarketplaceScraper:
                             pass
                 except:
                     continue
-            
-            detail_page.close()
-            
-        except Exception as e:
-            # Log the error for debugging
-            logger.debug(f"Failed to extract description from {url}: {e}")
-            # If anything fails, ensure we close the page and return empty string
-            try:
+
+            if detail_page:
                 detail_page.close()
-            except:
+
+        except Exception as e:
+            logger.debug("Failed to extract description or image from %s: %s", url, e)
+            try:
+                if detail_page:
+                    detail_page.close()
+            except Exception:
                 pass
-        
-        return description
+
+        return (description, image_base64)
     
     def _scroll_page_to_load_content(self):
         """Scroll the page to load more listing content."""
@@ -700,20 +748,20 @@ class FBMarketplaceScraper:
                 title = ""
             
             location = self._extract_location(element)
-            
-            # Extract description from detail page if enabled
+
+            description = ""
+            image_base64: Optional[str] = None
             if extract_descriptions:
-                description = self._extract_description_from_detail_page(url)
-            else:
-                description = ""  # Skip description extraction for performance
-            
+                description, image_base64 = self._extract_description_and_image_from_detail_page(url)
+
             if title and price:
                 return Listing(
                     title=title,
                     price=price,
                     location=location or "Unknown",
                     url=url,
-                    description=description
+                    description=description,
+                    image_base64=image_base64,
                 )
             
             return None

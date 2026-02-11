@@ -88,6 +88,7 @@ class ListingResponse(BaseModel):
     location: str
     url: str
     dealScore: Optional[float] = None
+    listingImageDataUrl: Optional[str] = None  # First listing photo used for eBay image search (when present)
     ebaySearchQuery: Optional[str] = None
     compPrice: Optional[float] = None
     compPrices: Optional[List[float]] = None
