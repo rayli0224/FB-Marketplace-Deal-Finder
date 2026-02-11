@@ -8,6 +8,23 @@ const DEFAULT_X = 24;
 /** ANSI SGR codes we care about: 0=reset, 1=bold, 31=red, 33=yellow (matches terminal). */
 const ANSI_CODE_RE = /\u001b\[[0-9;]*m|\[[0-9;]*m/g;
 
+/** Split on http/https URLs. Separate non-global regex for testing to avoid lastIndex issues. */
+const URL_SPLIT_RE = /(https?:\/\/[^\s)]+)/g;
+const URL_TEST_RE = /^https?:\/\//;
+
+/** Turn plain text into React nodes, converting URLs into clickable links. */
+function linkifyText(text: string, keyPrefix: string): React.ReactNode {
+  const parts = text.split(URL_SPLIT_RE);
+  if (parts.length === 1) return text;
+  return parts.map((part, i) =>
+    URL_TEST_RE.test(part) ? (
+      <a key={`${keyPrefix}-${i}`} href={part} target="_blank" rel="noopener noreferrer" className="underline text-primary hover:text-primary/80">{part}</a>
+    ) : (
+      <React.Fragment key={`${keyPrefix}-${i}`}>{part}</React.Fragment>
+    )
+  );
+}
+
 function parseAnsiToNodes(text: string): React.ReactNode {
   const parts = text.split(ANSI_CODE_RE);
   const codes = text.match(ANSI_CODE_RE) ?? [];
@@ -27,7 +44,7 @@ function parseAnsiToNodes(text: string): React.ReactNode {
       if (n.includes(33)) color = "var(--warning-yellow, #ca8a04)";
     }
     if (segment === "") return;
-    let node: React.ReactNode = segment;
+    let node: React.ReactNode = linkifyText(segment, `a${i}`);
     if (bold) node = <strong>{node}</strong>;
     if (color) node = <span style={{ color }}>{node}</span>;
     out.push(<React.Fragment key={i}>{node}</React.Fragment>);

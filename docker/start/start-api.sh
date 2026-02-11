@@ -22,6 +22,7 @@ echo "  🔌 API:       http://localhost:8000"
 echo "  📊 API Docs:  http://localhost:8000/docs"
 if [[ -n "$DEBUG_MODE" ]]; then
     echo "  🐛 Debug logging enabled"
+    echo "  🌐 View browser: http://localhost:9222 (connect with Chrome during a search)"
 fi
 echo ""
 

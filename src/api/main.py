@@ -214,7 +214,7 @@ def search_deals(request: SearchRequest):
             zip_code=request.zipCode,
             radius=request.radius,
             max_listings=request.maxListings,
-            headless=True,
+            headless=not DEBUG_MODE,
             extract_descriptions=request.extractDescriptions,
             step_sep="sub",
         )
@@ -334,7 +334,7 @@ def search_deals_stream(request: SearchRequest):
                 zip_code=request.zipCode,
                 radius=request.radius,
                 max_listings=request.maxListings,
-                headless=True,
+                headless=not DEBUG_MODE,
                 on_listing_found=on_listing_found,
                 extract_descriptions=request.extractDescriptions,
                 step_sep=None,
