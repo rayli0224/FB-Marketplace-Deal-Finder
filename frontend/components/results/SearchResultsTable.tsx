@@ -21,6 +21,7 @@ export interface Listing {
   compPrice?: number;
   compPrices?: number[];
   compItems?: CompItem[];
+  noCompReason?: string;
 }
 
 export interface SearchResultsTableProps {
@@ -43,6 +44,18 @@ function isGoodDeal(dealScore: number | null, threshold: number): boolean {
  */
 function isBadDeal(dealScore: number | null, threshold: number): boolean {
   return dealScore !== null && dealScore < threshold;
+}
+
+/**
+ * Renders the reason why no comparisons could be made (query rejected, no eBay results, etc.).
+ */
+function ListingDetailsPanel({ reason }: { reason: string }) {
+  return (
+    <div className="font-mono text-xs text-muted-foreground">
+      <span className="font-bold text-foreground">Why no comparison: </span>
+      {reason}
+    </div>
+  );
 }
 
 /**
@@ -226,6 +239,7 @@ export function SearchResultsTable({
                   ? "bg-red-500/10 hover:bg-red-500/20"
                   : "hover:bg-secondary/50";
                 const hasComps = listing.ebaySearchQuery != null || listing.compPrice != null;
+                const hasDetails = !hasComps && (listing.noCompReason != null && listing.noCompReason !== "");
                 const isExpanded = expandedListingUrl === listing.url;
 
                 return (
@@ -272,6 +286,15 @@ export function SearchResultsTable({
                       >
                         {isExpanded ? "▲ Hide" : "▼ Comps"}
                       </button>
+                    ) : hasDetails ? (
+                      <button
+                        type="button"
+                        onClick={() => setExpandedListingUrl(isExpanded ? null : listing.url)}
+                        className="font-mono text-xs text-primary hover:underline"
+                        aria-expanded={isExpanded}
+                      >
+                        {isExpanded ? "▲ Hide" : "▼ Details"}
+                      </button>
                     ) : (
                       <span className="text-muted-foreground/50 text-xs">--</span>
                     )}
@@ -281,6 +304,13 @@ export function SearchResultsTable({
                   <tr className="border-b border-border/50 bg-secondary/80">
                     <td colSpan={7} className="px-4 py-3">
                       <ListingCompsPanel listing={listing} />
+                    </td>
+                  </tr>
+                )}
+                {isExpanded && hasDetails && (
+                  <tr className="border-b border-border/50 bg-secondary/80">
+                    <td colSpan={7} className="px-4 py-3">
+                      <ListingDetailsPanel reason={listing.noCompReason!} />
                     </td>
                   </tr>
                 )}

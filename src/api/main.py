@@ -92,6 +92,7 @@ class ListingResponse(BaseModel):
     compPrice: Optional[float] = None
     compPrices: Optional[List[float]] = None
     compItems: Optional[List[CompItemSummary]] = None
+    noCompReason: Optional[str] = None
 
 
 class SearchResponse(BaseModel):
@@ -270,6 +271,7 @@ def search_deals(request: SearchRequest):
             location=listing.location,
             url=listing.url,
             dealScore=None,
+            noCompReason="eBay prices unavailable",
         )
         for listing in fb_listings
     ]

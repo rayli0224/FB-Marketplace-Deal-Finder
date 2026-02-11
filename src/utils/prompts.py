@@ -16,6 +16,8 @@ def get_query_generation_prompt(listing_title: str, listing_price: float, listin
     return f"""
 You are an expert at generating highly effective eBay Browse API search queries for product comparison.
 
+If the listing lacks enough information to generate a comprehensive, useful eBay search (e.g. the listing is too vague, generic, or essentially empty), you may reject by returning a JSON object with "rejected": true and "reason": "brief explanation" instead of generating a query.
+
 Facebook Marketplace listing:
 - Title: "{listing_title}"
 - Price: ${listing_price:.2f}
@@ -67,8 +69,9 @@ Guidelines:
 - **Sort:** Always include. Use "bestMatch" for most searches.
 
 ### Output Format
-Return ONLY a JSON object exactly like this:
+Return ONLY a JSON object. Either:
 
+Option A — Generate query (when you have enough information):
 {{
   "enhanced_query": "optimized eBay search query",
   "browse_api_parameters": {{
@@ -76,6 +79,12 @@ Return ONLY a JSON object exactly like this:
       "marketplace": "EBAY_US",
       "sort": "bestMatch"
   }}
+}}
+
+Option B — Reject (when the listing lacks enough detail to generate a useful search):
+{{
+  "rejected": true,
+  "reason": "brief explanation of what is missing"
 }}
 """
 
@@ -95,19 +104,16 @@ def get_result_filtering_prompt(listing_title: str, listing_price: float, descri
         Formatted prompt string
     """
     
-    return f"""You are filtering eBay search results to find items that are truly comparable to a Facebook Marketplace (FB) listing, for accurate price comparison.
+    return f"""You are filtering eBay search results to find items that are truly comparable to a Facebook Marketplace (FB) listing for accurate price comparison. For every single eBay item, you must compare the item to the Facebook listing and decide if the item is comparable enough to be used for price comparison. Each eBay item includes title, price, condition (if available), and description (if available).
 
-### Input
 
 Facebook Marketplace listing:
 - Title: "{listing_title}"
 - Price: ${listing_price:.2f}
 - Description: "{description_text}"
 
-eBay search results ({num_items} total):
+eBay items ({num_items} total):
 {ebay_items_text}
-
-Each eBay item includes title, price, condition (if available), and description (if available).
 
 ---
 
@@ -115,20 +121,20 @@ Each eBay item includes title, price, condition (if available), and description 
 
 Follow these exact steps:
 
-Step 1 — Identify price-defining features of the FB item.  
+Step 1 — Identify price-defining features of the Facebook listing.  
 Extract the minimal set of key attributes that primarily determine price.
 Examples:
 - Electronics: brand, model, generation, size, storage/specs.
 - Clothing/shoes: brand, model/line, condition (size is irrelevant).
 - Furniture/other: brand, model, material, dimensions if relevant.
 
-Only use attributes that are actually present in the FB listing.
+Only use attributes that are actually present in the Facebook listing.
 Ignore cosmetic attributes (color, minor wear) unless they materially affect value.
 
 Step 2 — Compare each eBay item against those features.  
 For each item:
-- If a key attribute is known in the FB listing, it must match.
-- If a key attribute is missing or vague in the FB listing, use best judgment from overall similarity.
+- If a key attribute is known in the Facebook listing, it must match.
+- If a key attribute is missing or vague in the Facebook listing, use best judgment from overall similarity.
 - Check condition similarity.
 - Check that it is a full product, not a part/accessory/bundle.
 - Check for material variants that change price.
@@ -143,9 +149,9 @@ If there is ambiguity, missing critical info, or reasonable doubt → reject.
 An eBay item is comparable if and only if:
 
 1. Core Product Match (Conditional)
-- If the FB listing is specific:
+- If the Facebook listing is specific:
   - The same brand/model/line/generation must appear.
-- If the FB listing is vague or generic:
+- If the Facebook listing is vague or generic:
   - Use overall semantic similarity and description details.
   - Accept broader matches only when unavoidable.
 
@@ -202,14 +208,11 @@ Return a JSON object:
 
 ## Compact Examples
 
-Example 1 — Vague FB listing  
+Example 1 — Vague Facebook listing  
 FB: "Gaming laptop"  
-eBay:
-1. "Dell G15 gaming laptop RTX 3060" → Accept: Matches general category and use
-2. "Gaming laptop charger" → Reject: Accessory only (charger, not laptop)
-3. "Alienware desktop PC" → Reject: Different product category (desktop vs laptop)
+-> Reject: Not enough information to generate a useful eBay search
 
-Example 2 — Specific FB listing  
+Example 2 — Specific Facebook listing  
 FB: "MacBook Pro 2019 16 inch i9 32GB"  
 eBay:
 1. "MacBook Pro 2019 16 inch i9 32GB" → Accept: Exact model and specs
