@@ -9,13 +9,11 @@ A PR already exists for the current branch. Find it and modify it using MCP (do 
 
 ## Description rules
 - Use **only** changes introduced in this branch.
-- The description should be **concise and bullet-pointed for readability**.
-- Use bullets by default; avoid paragraphs unless absolutely necessary.
-- Capture, at a high level: intent of the change, behavior it enables, meaningful architectural or design implications.
-- Incorporate architectural and design reasoning **inline**, not as separate sections.
-- Avoid change logs, file listings, or implementation steps.
-- Avoid vague or generic language.
-- Preserve wording from the code or surrounding context when available.
+- Write in **plain English**, not as an implementation checklist. Describe what the change does, how it behaves, and why it matters to the reader.
+- Use bullet points for readability and to separate distinct ideas. Each bullet should stand on its own.
+- Focus on intent and behavior; keep implementation details out of the main bullets.
+- Avoid change logs, file listings, or step-by-step implementation lists.
+- Avoid vague or generic language. Preserve wording from the code or surrounding context when available.
 - If related PRs exist, link them explicitly (e.g. `#123`); omit the section if none.
 
 ## Testing
