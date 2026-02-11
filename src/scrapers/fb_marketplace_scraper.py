@@ -13,16 +13,27 @@ import re
 import os
 import json
 import logging
+import subprocess
+import time
+import urllib.request
 from dataclasses import dataclass
 from typing import Optional, List
 from playwright.sync_api import sync_playwright, Browser, Page, BrowserContext, TimeoutError as PlaywrightTimeoutError
 from src.scrapers.utils import random_delay, parse_price, is_valid_listing_price
 from src.utils.colored_logger import setup_colored_logger, log_data_block, log_listing_box_sep, set_step_indent, clear_step_indent, wait_status
+from src.utils.debug_chrome_proxy import start_debug_proxy
 
 logger = setup_colored_logger("fb_scraper")
 
 # Default cookie file path
 COOKIES_FILE = os.environ.get("FB_COOKIES_FILE", "/app/cookies/facebook_cookies.json")
+
+# Chrome remote debugging ports (used in headed/debug mode).
+# Chrome listens on CHROME_DEBUG_PORT (localhost only); the TCP proxy in
+# debug_chrome_proxy forwards PROXY_DEBUG_PORT (0.0.0.0) → CHROME_DEBUG_PORT
+# so Docker port forwarding can reach it from the host machine.
+CHROME_DEBUG_PORT = 9223
+PROXY_DEBUG_PORT = 9222
 
 
 class FacebookNotLoggedInError(Exception):
@@ -66,6 +77,7 @@ class FBMarketplaceScraper:
         self.browser: Optional[Browser] = None
         self.context: Optional[BrowserContext] = None
         self.page: Optional[Page] = None
+        self._chrome_process: Optional[subprocess.Popen] = None
     
     def _load_cookies(self) -> List[dict]:
         """Load cookies from JSON file."""
@@ -105,19 +117,89 @@ class FBMarketplaceScraper:
         except (json.JSONDecodeError, Exception):
             return []
     
-    def _create_browser(self):
-        """Create a Playwright browser with stealth settings and load cookies."""
-        self.playwright = sync_playwright().start()
-        
-        self.browser = self.playwright.chromium.launch(
-            headless=self.headless,
-            args=[
-                "--disable-blink-features=AutomationControlled",
-                "--disable-dev-shm-usage",
-                "--no-sandbox",
-                "--window-size=1920,1080",
-            ]
+    def _wait_for_chrome_debug_port(self, timeout: float = 15, poll_interval: float = 0.3):
+        """Poll Chrome's debug endpoint until it responds or the timeout expires.
+
+        Raises RuntimeError if Chrome exits before the endpoint is ready, or if
+        the timeout is reached without a successful connection.
+        """
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            # Check the process hasn't crashed
+            if self._chrome_process and self._chrome_process.poll() is not None:
+                raise RuntimeError(
+                    f"Chrome exited unexpectedly with code {self._chrome_process.returncode} "
+                    "before the debug port was ready"
+                )
+            try:
+                with urllib.request.urlopen(
+                    f"http://localhost:{CHROME_DEBUG_PORT}/json/version", timeout=2
+                ):
+                    return
+            except Exception:
+                time.sleep(poll_interval)
+        raise RuntimeError(
+            f"Chrome debug port ({CHROME_DEBUG_PORT}) did not respond within {timeout}s"
         )
+
+    def _log_devtools_url(self):
+        """Log a clickable Chrome DevTools URL for the Playwright-controlled page.
+
+        Queries Chrome's debug endpoint for the list of open pages and picks the
+        first one whose URL is not about:blank (Chrome's initial empty tab).
+        The logged URL points through the TCP proxy (PROXY_DEBUG_PORT) so it is
+        reachable from the host machine via Docker port forwarding.
+        """
+        fallback_url = f"http://localhost:{PROXY_DEBUG_PORT}"
+        try:
+            with urllib.request.urlopen(f"http://localhost:{CHROME_DEBUG_PORT}/json") as resp:
+                pages = json.loads(resp.read())
+            page = next((p for p in pages if p.get("url", "") != "about:blank"), None)
+            if not page and pages:
+                page = pages[0]
+            if page:
+                page_id = page.get("id", "")
+                url = f"http://localhost:{PROXY_DEBUG_PORT}/devtools/inspector.html?ws=localhost:{PROXY_DEBUG_PORT}/devtools/page/{page_id}"
+                logger.info(f"🌐 Inspect browser: {url}")
+            else:
+                logger.info(f"🌐 Browser live view: {fallback_url}")
+        except Exception:
+            logger.info(f"🌐 Browser live view: {fallback_url}")
+
+    def _create_browser(self):
+        """Create a Playwright browser with stealth settings and load cookies.
+
+        In headed mode (debug), launches Chromium manually with a remote debugging
+        port so you can view the browser live at http://localhost:9222 from your
+        host machine. Playwright connects to it via CDP instead of launching its
+        own instance (which would use a pipe and block the debugging port).
+        """
+        self.playwright = sync_playwright().start()
+
+        chrome_args = [
+            "--disable-blink-features=AutomationControlled",
+            "--disable-dev-shm-usage",
+            "--no-sandbox",
+            "--window-size=1920,1080",
+        ]
+
+        if not self.headless:
+            chrome_path = self.playwright.chromium.executable_path
+            self._chrome_process = subprocess.Popen([
+                chrome_path,
+                f"--remote-debugging-port={CHROME_DEBUG_PORT}",
+                "--remote-allow-origins=*",
+                *chrome_args,
+                "about:blank",
+            ])
+            self._wait_for_chrome_debug_port()
+            start_debug_proxy()
+            self.browser = self.playwright.chromium.connect_over_cdp(f"http://localhost:{CHROME_DEBUG_PORT}")
+        else:
+            self.browser = self.playwright.chromium.launch(
+                headless=True,
+                args=chrome_args,
+            )
         
         self.context = self.browser.new_context(
             viewport={"width": 1920, "height": 1080},
@@ -138,6 +220,9 @@ class FBMarketplaceScraper:
             self.context.add_cookies(cookies)
         
         self.page = self.context.new_page()
+        
+        if not self.headless:
+            self._log_devtools_url()
     
     def _check_logged_in(self):
         """
@@ -818,13 +903,38 @@ class FBMarketplaceScraper:
             clear_step_indent()
     
     def close(self):
-        """Close the browser and cleanup resources."""
+        """Close the browser and cleanup resources.
+
+        Each step is wrapped independently so a failure in one (e.g. page
+        already closed) does not prevent the remaining resources from being
+        released. The Chrome subprocess is terminated and, if it doesn't
+        exit within 5 seconds, killed.
+        """
         if self.page:
-            self.page.close()
+            try:
+                self.page.close()
+            except Exception:
+                pass
         if self.browser:
-            self.browser.close()
+            try:
+                self.browser.close()
+            except Exception:
+                pass
+        if self._chrome_process:
+            try:
+                self._chrome_process.terminate()
+                self._chrome_process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                self._chrome_process.kill()
+                self._chrome_process.wait(timeout=3)
+            except Exception:
+                pass
+            self._chrome_process = None
         if self.playwright:
-            self.playwright.stop()
+            try:
+                self.playwright.stop()
+            except Exception:
+                pass
 
 
 def search_marketplace(
