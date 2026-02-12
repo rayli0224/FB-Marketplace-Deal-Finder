@@ -3,7 +3,7 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { formSchema, type FormData as ValidationFormData } from "@/lib/validation";
+import { formSchema, type FormData as ValidationFormData, DEFAULT_RADIUS } from "@/lib/validation";
 import { AppHeader } from "@/components/layout/AppHeader";
 import { AppFooter } from "@/components/layout/AppFooter";
 import { MarketplaceSearchForm } from "@/components/search-form/MarketplaceSearchForm";
@@ -22,7 +22,7 @@ type AppState = "setup" | "form" | "loading" | "done" | "error";
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
 /** Defaults when backend omits debug_mode params (fallback for older or partial payloads). */
-const DEFAULT_DEBUG_RADIUS = 25;
+const DEFAULT_DEBUG_RADIUS = DEFAULT_RADIUS;
 const DEFAULT_DEBUG_MAX_LISTINGS = 20;
 const DEFAULT_DEBUG_THRESHOLD = 20;
 
@@ -61,6 +61,7 @@ function dispatchSSEEvent(payloadString: string, handlers: SSEDispatchHandlers):
     ebayQuery?: string;
     level?: string;
     message?: string;
+    url?: string;
   };
   if (data.type === "auth_error") {
     handlers.handleAuthError();
@@ -96,6 +97,8 @@ function dispatchSSEEvent(payloadString: string, handlers: SSEDispatchHandlers):
     handlers.onDebugEbayQuery?.({ fbTitle: data.fbTitle, ebayQuery: data.ebayQuery });
   } else if (data.type === "debug_log" && data.level != null && data.message != null) {
     handlers.onDebugLog?.({ level: data.level, message: data.message });
+  } else if (data.type === "inspector_url" && typeof data.url === "string") {
+    window.open(data.url, "_blank");
   }
 }
 
@@ -110,7 +113,7 @@ export default function Home() {
     formState: { errors, isValid },
   } = useForm<ValidationFormData>({
     resolver: zodResolver(formSchema),
-    defaultValues: { query: "", zipCode: "", radius: "", threshold: "", maxListings: "", extractDescriptions: false },
+    defaultValues: { query: "", zipCode: "", radius: String(DEFAULT_RADIUS), threshold: "", maxListings: "", extractDescriptions: false },
     mode: "onTouched",
   });
   const formData = watch();
@@ -389,7 +392,7 @@ export default function Home() {
         body: JSON.stringify({
           query: formData.query,
           zipCode: formData.zipCode,
-          radius: formData.radius,
+          radius: Number(formData.radius),
           threshold: formData.threshold,
           maxListings: formData.maxListings,
           extractDescriptions: formData.extractDescriptions,

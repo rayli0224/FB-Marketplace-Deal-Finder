@@ -61,6 +61,7 @@ alwaysApply: true
 
 - Prefer robust, maintainable solutions over fragile, clever code
 - **No fallbacks**: Do not add fallback code paths (e.g. "if X fails, try Y instead"). Fix the root cause so the primary path works every time. Configure the environment, dependencies, or design so the intended behavior is the only path.
+- **Zero fallback selectors**: Use exactly one selector per UI target (e.g. one button, one input). Do not maintain lists of alternative selectors; when the site changes, update the single selector. No "try selector A, then B, then C" loops.
 - When dealing with unreliable external data, make the integration reliable (retries, clear errors, correct config) rather than falling back to a different strategy.
 - When choosing between performance and reliability/maintainability, prefer the latter
 - Document significant performance trade-offs when they're made
