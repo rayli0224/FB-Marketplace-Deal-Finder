@@ -11,12 +11,67 @@ QUERY_GENERATION_SYSTEM_MESSAGE = "You are an expert at creating precise search 
 # System message for result filtering
 RESULT_FILTERING_SYSTEM_MESSAGE = "You are an expert at comparing products across marketplaces. Always respond with valid JSON only."
 
+def get_pre_filtering_prompt(listing_title: str, listing_price: float, listing_location: str, description_text: str) -> str:
+  return f"""You will be given a Facebook Marketplace listing. If the listing lacks enough information to generate a comprehensive, useful eBay search (e.g. the listing is too vague, generic, or essentially empty), you may reject by returning a JSON object with "rejected": true and "reason": "brief explanation" instead of generating a query.
+
+Facebook Marketplace listing:
+- Title: "{listing_title}"
+- Price: ${listing_price:.2f}
+- Location: {listing_location}
+- Description: "{description_text}"
+
+Output Format:
+{{
+  "rejected": true,
+  "reason": "brief explanation"
+}}
+
+Example 1:
+
+Facebook Marketplace listing:
+- Title: "Nuphy Air 75 V2"
+- Price: $70.00
+- Location: San Jose, CA
+- Description: ""
+
+Output:
+{{
+  "rejected": false,
+  "reason": "Listing contains enough details about the exact product name and model"
+}}
+
+Example 2:
+
+Facebook Marketplace listing:
+- Title: "Messenger bag"
+- Price: $5.00
+- Location: San Jose, CA
+- Description: ""
+
+Output:
+{{
+  "rejected": true,
+  "reason": "Listing doesn't contain any brand, product, or model details"
+}}
+
+Example 3:
+
+Facebook Marketplace listing:
+- Title: "Ninja smoothie blender"
+- Price: $30.00
+- Location: Los Gatos, CA
+- Description: "Condition Used - Good Brand Ninja Pick up in Los Gator or San Jose downtown"
+
+Output:
+{{
+  "rejected": true,
+  "reason": "Listing contains brand name, but doesn't contain any product details"
+}}
+"""
 
 def get_query_generation_prompt(listing_title: str, listing_price: float, listing_location: str, description_text: str) -> str:
     return f"""
 You are an expert at generating highly effective eBay Browse API search queries for product comparison.
-
-If the listing lacks enough information to generate a comprehensive, useful eBay search (e.g. the listing is too vague, generic, or essentially empty), you may reject by returning a JSON object with "rejected": true and "reason": "brief explanation" instead of generating a query.
 
 Facebook Marketplace listing:
 - Title: "{listing_title}"
@@ -69,9 +124,7 @@ Guidelines:
 - **Sort:** Always include. Use "bestMatch" for most searches.
 
 ### Output Format
-Return ONLY a JSON object. Either:
-
-Option A — Generate query (when you have enough information):
+Return ONLY a JSON object:
 {{
   "enhanced_query": "optimized eBay search query",
   "browse_api_parameters": {{
@@ -79,12 +132,6 @@ Option A — Generate query (when you have enough information):
       "marketplace": "EBAY_US",
       "sort": "bestMatch"
   }}
-}}
-
-Option B — Reject (when the listing lacks enough detail to generate a useful search):
-{{
-  "rejected": true,
-  "reason": "brief explanation of what is missing"
 }}
 """
 
@@ -96,7 +143,7 @@ def get_result_filtering_prompt(listing_title: str, listing_price: float, descri
     Args:
         listing_title: Facebook Marketplace listing title
         listing_price: Listing price
-        description_text: Listing description (or "No description provided")
+        description_text: Listing description
         ebay_items_text: Formatted string of eBay items (numbered list with titles and prices)
         num_items: Exact number of eBay items in the list
     
@@ -182,56 +229,81 @@ Be strict. Prefer false negatives over false positives.
 
 ## Output Format (MANDATORY)
 
-Return a JSON object:
+Return a JSON object with the following format:
 
 {{
-  "comparable_indices": [1, 3],
-  "reasons": {{
-    "1": "Same model and specs",
-    "2": "Different generation (2020 vs 2019)",
-    "3": "Core product matches",
-    "4": "Accessory only"
-  }}
+  "results": [
+    {{ "id": 1, "rejected": false, "reason": "Same model and specs" }},
+    {{ "id": 2, "rejected": true, "reason": "Different generation (2020 vs 2019)" }},
+    {{ "id": 3, "rejected": false, "reason": "Core product matches" }},
+    {{ "id": 4, "rejected": true, "reason": "Accessory only" }}
+  ]
 }}
 
-### Requirements
-1. There are exactly {num_items} eBay items (1 to {num_items}).
-2. You MUST give a reason for every single item.
-3. Each reason: one sentence, 5–15 words max.
-4. Reasons must include exact distinguishing details in parentheses when applicable.
+Rules:
+- id: 1-based index of the eBay item.
+- rejected: true = reject, false = accept.
+- reason: a brief explanation of why the item was accepted or rejected.
+- The array length MUST exactly match the number of {num_items} eBay items.
+- The array order MUST match the eBay items order.
+- Each reason must be ≤ 10 words.
+- Do NOT include item titles, indices, or any extra fields.
+- Return only valid JSON, no extra text.
+- Reasons must include exact distinguishing details in parentheses when applicable.
    (e.g., "Different size (13 in vs 16 in) and CPU (i7 vs i9)")
-5. Reasons must focus only on the key distinguishing factor.
-6. The reasons object must contain exactly {num_items} entries.
-7. Return only valid JSON, no extra text.
 
 ---
 
-## Compact Examples
-
-Example 1 — Vague Facebook listing  
-FB: "Gaming laptop"  
--> Reject: Not enough information to generate a useful eBay search
-
-Example 2 — Specific Facebook listing  
-FB: "MacBook Pro 2019 16 inch i9 32GB"  
+### Example 1 — Specific Facebook listing
+FB: "MacBook Pro 2019 16 inch i9 32GB"
 eBay:
-1. "MacBook Pro 2019 16 inch i9 32GB" → Accept: Exact model and specs
-2. "MacBook Pro 2020 16 inch i9" → Reject: Different generation (2020 vs 2019)
-3. "MacBook Pro 2019 13 inch i7" → Reject: Different size (13 in vs 16 in) and CPU (i7 vs i9)
-4. "MacBook Pro 2019 16 inch missing charger" → Accept: Core product matches (charger missing)
+1. "MacBook Pro 2019 16 inch i9 32GB"
+2. "MacBook Pro 2020 16 inch i9"
+3. "MacBook Pro 2019 13 inch i7"
+4. "MacBook Pro 2019 16 inch missing charger"
 
-Example 3 — Clothing  
-FB: "Air Jordan 1 Retro High OG size 10"  
-eBay:
-1. "AJ1 Retro High OG size 9" → Accept: Size irrelevant (9 vs 10)
-2. "AJ1 Mid OG size 10" → Reject: Different variant (Mid vs High)
-3. "AJ1 Low OG size 10" → Reject: Different variant (Low vs High)
+Output:
+{{
+  "results": [
+    {{ "id": 1, "rejected": false, "reason": "Exact model and specs (2019, 16 inch, i9)" }},
+    {{ "id": 2, "rejected": true, "reason": "Different generation (2020 vs 2019)" }},
+    {{ "id": 3, "rejected": true, "reason": "Different size and CPU (13 inch, i7)" }},
+    {{ "id": 4, "rejected": false, "reason": "Core product matches" }}
+  ]
+}}
 
-Example 4 — Camera  
-FB: "Canon EOS Rebel T7 with 18–55mm lens"  
+### Example 2 — Clothing
+FB: "Air Jordan 1 Retro High OG size 10"
 eBay:
-1. "Canon EOS Rebel T7 with kit lens" → Accept: Same full kit (18–55mm lens)
-2. "Canon EOS Rebel T6 body only" → Reject: Different model (T6 vs T7)
-3. "Canon 50mm f/1.8 lens" → Reject: Accessory only (lens, no camera)
-4. "Canon EOS Rebel T7 for parts" → Reject: Not working (for parts)
+1. "AJ1 Retro High OG size 9"
+2. "AJ1 Mid OG size 10"
+3. "AJ1 Low OG size 10"
+
+Output:
+{{
+  "results": [
+    {{ "id": 1, "rejected": false, "reason": "Same model (size difference acceptable)" }},
+    {{ "id": 2, "rejected": true, "reason": "Different variant (Mid vs High)" }},
+    {{ "id": 3, "rejected": true, "reason": "Different variant (Low vs High)" }}
+  ]
+}}
+
+### Example 3 — Camera
+FB: "Canon EOS Rebel T7 with 18–55mm lens"
+eBay:
+1. "Canon EOS Rebel T7 with kit lens"
+2. "Canon EOS Rebel T6 body only"
+3. "Canon 50mm f/1.8 lens"
+4. "Canon EOS Rebel T7 for parts"
+
+Output:
+{{
+  "results": [
+    {{ "id": 1, "rejected": false, "reason": "Same full kit (18–55mm lens)" }},
+    {{ "id": 2, "rejected": true, "reason": "Different model (T6 vs T7)" }},
+    {{ "id": 3, "rejected": true, "reason": "Accessory only (lens, no camera)" }},
+    {{ "id": 4, "rejected": true, "reason": "Not working (for parts)" }}
+  ]
+}}
 """
+

@@ -220,15 +220,7 @@ class EbayBrowseAPIClient:
                     
                     filters.extend(validated_filters)
             
-            # Only add default filters if no API-provided filters were given
-            # This allows OpenAI to have full control over filtering when it provides parameters
-            if not filters:
-                # Default filters: Fixed price only (no auctions) and common good conditions
-                filters = [
-                    "buyingOptions:{FIXED_PRICE}",
-                    "itemCondition:{NEW|NEW_OTHER|NEW_WITH_DEFECTS|CERTIFIED_REFURBISHED|EXCELLENT_REFURBISHED|VERY_GOOD_REFURBISHED|USED}",
-                ]
-            else:
+            if filters:
                 # If OpenAI provided filters, only add buyingOptions if not already present
                 # This ensures we still filter out auctions unless OpenAI explicitly wants them
                 has_buying_options = any("buyingOptions:" in f for f in filters)
