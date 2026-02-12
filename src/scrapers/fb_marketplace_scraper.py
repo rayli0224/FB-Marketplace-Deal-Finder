@@ -12,7 +12,6 @@ that file to contain a JSON array of cookie objects (e.g. name, value, domain, p
 import re
 import os
 import json
-import logging
 import subprocess
 import time
 import urllib.parse
@@ -52,6 +51,23 @@ LOCATION_PILL_SELECTOR = "span:has-text('Within')"
 LOCATION_INPUT_SELECTOR = "input[aria-label='Location']"
 LOCATION_DIALOG_SELECTOR = "[role='dialog']"
 LOCATION_APPLY_SELECTOR = "[aria-label='Apply'][role='button']"
+
+# Price extraction selectors (shared across methods)
+PRICE_SELECTORS = [
+    "span[class*='price']",
+    "div[class*='price']",
+    "span:has-text('$')",
+]
+
+# Location fallback values
+LOCATION_UNKNOWN = "Unknown"
+LOCATION_SHIPPED = "Shipped"
+
+# Description extraction constants
+DESCRIPTION_MAX_LINES = 50
+DESCRIPTION_MIN_LENGTH = 10
+DESCRIPTION_SIBLING_CHECK_COUNT = 3
+SCROLL_ATTEMPTS = 3
 
 
 class FacebookNotLoggedInError(Exception):
@@ -347,6 +363,26 @@ class FBMarketplaceScraper:
         listbox.wait_for(state="visible", timeout=timeout)
         self.page.get_by_role("option", name=option_text).click(timeout=timeout)
 
+    def _find_price_element(self, element, target_price: Optional[float] = None):
+        """
+        Find the price element in a listing using CSS selectors.
+        
+        Returns the Playwright locator for the price element if found, or None.
+        If target_price is provided, only returns an element whose parsed price matches.
+        """
+        for selector in PRICE_SELECTORS:
+            try:
+                price_elem = element.locator(selector).first
+                if price_elem.is_visible(timeout=1000):
+                    price_text = price_elem.inner_text().strip()
+                    parsed = parse_price(price_text)
+                    if parsed and (target_price is None or parsed == target_price):
+                        return price_elem
+            except Exception as e:
+                logger.debug("Could not find price element — %s", e)
+                continue
+        return None
+    
     def _extract_price(self, element) -> Optional[float]:
         """
         Extract price from a listing element.
@@ -354,24 +390,13 @@ class FBMarketplaceScraper:
         Tries CSS selectors to find price elements (span/div with 'price' in class, or span with '$'),
         extracts the text, and parses it to float. Returns first valid price found or None.
         """
-        price_selectors = [
-            "span[class*='price']",
-            "div[class*='price']",
-            "span:has-text('$')",
-        ]
-        
-        for selector in price_selectors:
+        price_elem = self._find_price_element(element)
+        if price_elem:
             try:
-                price_elem = element.locator(selector).first
-                if price_elem.is_visible(timeout=1000):
-                    price_text = price_elem.inner_text().strip()
-                    price = parse_price(price_text)
-                    if price:
-                        return price
+                price_text = price_elem.inner_text().strip()
+                return parse_price(price_text)
             except Exception as e:
                 logger.debug("Could not read the price from this listing — %s", e)
-                continue
-        
         return None
     
     def _try_extract_title_by_dom_structure(self, element, price: float) -> str:
@@ -384,26 +409,7 @@ class FBMarketplaceScraper:
         prices in Facebook Marketplace DOM structure.
         """
         try:
-            price_selectors = [
-                "span[class*='price']",
-                "div[class*='price']",
-                "span:has-text('$')",
-            ]
-            
-            price_elem = None
-            for selector in price_selectors:
-                try:
-                    candidate = element.locator(selector).first
-                    if candidate.is_visible(timeout=1000):
-                        price_text = candidate.inner_text().strip()
-                        parsed = parse_price(price_text)
-                        if parsed == price:
-                            price_elem = candidate
-                            break
-                except Exception as e:
-                    logger.debug("Could not find the title for this listing — %s", e)
-                    continue
-            
+            price_elem = self._find_price_element(element, target_price=price)
             if price_elem:
                 all_text = element.inner_text().strip()
                 price_text = price_elem.inner_text().strip()
@@ -475,35 +481,54 @@ class FBMarketplaceScraper:
     
     def _extract_location(self, element) -> str:
         """
-        Extract location from a listing element.
-        
-        Tries CSS selectors for location elements. If that fails, uses regex to find
-        location pattern "City Name, ST" (e.g., "New York, NY") in the element's text.
+        Extract location from a listing element by finding the span whose text is a location.
+
+        Uses JavaScript DOM traversal to inspect each leaf-level span (no child spans)
+        inside the listing card. The location span is identified by its content: text
+        ending with a comma and a two-letter US state code (e.g. "San Jose, CA").
+        If no location is found but shipping-related text is detected, returns "Shipped".
+        Because each data field (price, title, location) lives in its own span element,
+        checking individual spans avoids the old problem of title text bleeding into the
+        location value.
         """
-        location_selectors = [
-            "span[class*='location']",
-            "div[class*='location']",
-        ]
-        
-        for selector in location_selectors:
-            try:
-                location_elem = element.locator(selector).first
-                if location_elem.is_visible(timeout=1000):
-                    location = location_elem.inner_text().strip()
-                    if location:
-                        return location
-            except Exception as e:
-                logger.debug("Could not read location for this listing — %s", e)
-                continue
-        
         try:
-            full_text = element.inner_text()
-            location_match = re.search(r'([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*,\s*[A-Z]{2})', full_text)
-            if location_match:
-                return location_match.group(1)
+            result = element.evaluate("""
+                (el) => {
+                    const spans = el.querySelectorAll('span');
+                    let location = '';
+                    let hasShipping = false;
+                    
+                    for (const span of spans) {
+                        if (span.children.length > 0) continue;
+                        if (span.offsetParent === null) continue;
+                        const text = span.textContent.trim();
+                        
+                        if (text && /,\\s*[A-Z]{2}$/.test(text)) {
+                            location = text;
+                            break;
+                        }
+                        
+                        const lowerText = text.toLowerCase();
+                        if (lowerText.includes('shipping') || 
+                            lowerText.includes('ships to') ||
+                            lowerText.includes('ships') ||
+                            lowerText === 'shipped') {
+                            hasShipping = true;
+                        }
+                    }
+                    
+                    if (location) {
+                        return location;
+                    }
+                    if (hasShipping) {
+                        return 'Shipped';
+                    }
+                    return '';
+                }
+            """)
+            return result.strip() if result else ""
         except Exception as e:
-            logger.debug("Could not find a city/state location in the listing — %s", e)
-        
+            logger.debug("Could not read location for this listing — %s", e)
         return ""
     
     def _is_valid_description(self, text: str) -> bool:
@@ -513,7 +538,7 @@ class FBMarketplaceScraper:
         Filters out JSON/script content, Facebook internal identifiers, and other non-description
         content. Returns True if the text appears to be a valid listing description.
         """
-        if not text or len(text.strip()) < 10:
+        if not text or len(text.strip()) < DESCRIPTION_MIN_LENGTH:
             return False
         
         text_lower = text.lower()
@@ -563,6 +588,7 @@ class FBMarketplaceScraper:
         if navigation fails.
         """
         description = ""
+        detail_page = None
         
         try:
             # Open detail page in new page to avoid losing search results context
@@ -590,12 +616,12 @@ class FBMarketplaceScraper:
                                 if self._is_valid_description(sibling_text):
                                     description = sibling_text
                                     break
-                        except:
+                        except Exception:
                             pass
                         
                         # Strategy 2: Try to find description in following siblings (not just immediate)
                         try:
-                            for i in range(1, 4):  # Check next 3 siblings
+                            for i in range(1, DESCRIPTION_SIBLING_CHECK_COUNT + 1):
                                 sibling = details_element.locator(f"xpath=following-sibling::*[{i}]")
                                 if sibling.count() > 0:
                                     sibling_text = sibling.inner_text().strip()
@@ -604,7 +630,7 @@ class FBMarketplaceScraper:
                                         break
                             if description:
                                 break
-                        except:
+                        except Exception:
                             pass
                         
                         # Strategy 3: Get parent container and extract text after "Details"
@@ -632,48 +658,43 @@ class FBMarketplaceScraper:
                                     if re.match(r'^[A-Z\s]{10,}$', line) and len(line) > 15:
                                         break
                                     description_parts.append(line)
-                                    # Hard limit of 50 lines as safety measure
-                                    if len(description_parts) >= 50:
+                                    if len(description_parts) >= DESCRIPTION_MAX_LINES:
                                         break
                                 
                                 description_candidate = "\n".join(description_parts).strip()
                                 if self._is_valid_description(description_candidate):
                                     description = description_candidate
                                     break
-                        except:
+                        except Exception:
                             pass
                         
                         # Strategy 4: Look for description in nearby div/span elements
                         try:
-                            # Try to find a div or span that contains substantial text near Details
                             nearby_elements = detail_page.locator("xpath=//span[contains(text(), 'Details')]/following::div[1] | //div[contains(text(), 'Details')]/following::div[1] | //h2[contains(text(), 'Details')]/following::div[1]")
                             if nearby_elements.count() > 0:
                                 nearby_text = nearby_elements.first.inner_text().strip()
                                 if self._is_valid_description(nearby_text):
                                     description = nearby_text
                                     break
-                        except:
+                        except Exception:
                             pass
-                except:
+                except Exception:
                     continue
             
-            detail_page.close()
-            
         except Exception as e:
-            # Log the error for debugging
             logger.debug(f"Failed to extract description from {url}: {e}")
-            # If anything fails, ensure we close the page and return empty string
-            try:
-                detail_page.close()
-            except:
-                pass
+        finally:
+            if detail_page:
+                try:
+                    detail_page.close()
+                except Exception:
+                    pass
         
         return description
     
     def _scroll_page_to_load_content(self):
         """Scroll the page to load more listing content."""
-        scroll_attempts = 3
-        for _ in range(scroll_attempts):
+        for _ in range(SCROLL_ATTEMPTS):
             self.page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
             random_delay(1, 2)
     
@@ -682,8 +703,7 @@ class FBMarketplaceScraper:
         Find listing elements on the page using multiple CSS selectors.
         
         Tries selectors in order: article elements, marketplace listing test IDs,
-        and marketplace item links. Falls back to marketplace item links if no
-        elements found. Returns list of Playwright locators.
+        and marketplace item links. Returns list of Playwright locators.
         """
         listing_container_selectors = [
             "div[role='article']",
@@ -691,25 +711,17 @@ class FBMarketplaceScraper:
             "a[href*='/marketplace/item/']",
         ]
         
-        listing_elements = []
         for selector in listing_container_selectors:
             try:
                 elements = self.page.locator(selector).all()
                 if elements:
-                    listing_elements = elements
-                    break
+                    logger.debug("Found %d listing cards on the page", len(elements))
+                    return elements
             except Exception:
                 continue
         
-        if not listing_elements:
-            listing_elements = self.page.locator("a[href*='/marketplace/item/']").all()
-        
-        if not listing_elements:
-            logger.warning("We could not find any listing cards on the page. Facebook may have changed their layout.")
-        else:
-            logger.debug("Found %d listing cards on the page", len(listing_elements))
-        
-        return listing_elements
+        logger.warning("We could not find any listing cards on the page. Facebook may have changed their layout.")
+        return []
     
     def _extract_listing_from_element(self, element, extract_descriptions: bool = False) -> Optional[Listing]:
         """
@@ -751,7 +763,7 @@ class FBMarketplaceScraper:
                 return Listing(
                     title=title,
                     price=price,
-                    location=location or "Unknown",
+                    location=location or LOCATION_UNKNOWN,
                     url=url,
                     description=description
                 )
@@ -855,8 +867,6 @@ class FBMarketplaceScraper:
                     extract_descriptions=extract_descriptions,
                 )
             return listings
-        except Exception:
-            raise
         finally:
             clear_step_indent()
     
