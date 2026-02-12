@@ -4,27 +4,56 @@ import React, { useRef, useState, useCallback, useEffect } from "react";
 import type { DebugLogEntry } from "./DebugPanel";
 
 const DEFAULT_X = 24;
+const DEFAULT_Y = 24;
+const DEFAULT_WIDTH = 384;
+const DEFAULT_HEIGHT = 400;
+const EDGE_MARGIN = 8;
+const RESIZE_RIGHT_MARGIN = 24;
+const MIN_WIDTH = 200;
+const MIN_HEIGHT = 150;
+const MAX_HEIGHT_VH = 85;
+const SCROLL_BOTTOM_THRESHOLD = 20;
+const VIEWPORT_FALLBACK_HEIGHT = 800;
+const VIEWPORT_FALLBACK_WIDTH = 600;
+const LOG_CONTENT_PADDING = "px-3 py-2";
+const LOG_LINK_CLASS = "underline text-primary hover:text-primary/80";
 
 /** ANSI SGR codes we care about: 0=reset, 1=bold, 31=red, 33=yellow (matches terminal). */
 const ANSI_CODE_RE = /\u001b\[[0-9;]*m|\[[0-9;]*m/g;
-
-/** Split on http/https URLs. Separate non-global regex for testing to avoid lastIndex issues. */
 const URL_SPLIT_RE = /(https?:\/\/[^\s)]+)/g;
 const URL_TEST_RE = /^https?:\/\//;
 
-/** Turn plain text into React nodes, converting URLs into clickable links. */
+function getViewportSize(): { width: number; height: number } {
+  if (typeof window === "undefined") {
+    return { width: VIEWPORT_FALLBACK_WIDTH, height: VIEWPORT_FALLBACK_HEIGHT };
+  }
+  return { width: window.innerWidth, height: window.innerHeight };
+}
+
+/** Returns true if the element is scrolled within the bottom threshold (user is viewing the latest content). */
+function isScrolledToBottom(el: HTMLElement): boolean {
+  return el.scrollHeight - el.scrollTop - el.clientHeight <= SCROLL_BOTTOM_THRESHOLD;
+}
+
+/** Splits text on URLs and converts each URL into a clickable anchor; returns plain text or React nodes. */
 function linkifyText(text: string, keyPrefix: string): React.ReactNode {
   const parts = text.split(URL_SPLIT_RE);
   if (parts.length === 1) return text;
   return parts.map((part, i) =>
     URL_TEST_RE.test(part) ? (
-      <a key={`${keyPrefix}-${i}`} href={part} target="_blank" rel="noopener noreferrer" className="underline text-primary hover:text-primary/80">{part}</a>
+      <a key={`${keyPrefix}-${i}`} href={part} target="_blank" rel="noopener noreferrer" className={LOG_LINK_CLASS}>
+        {part}
+      </a>
     ) : (
       <React.Fragment key={`${keyPrefix}-${i}`}>{part}</React.Fragment>
     )
   );
 }
 
+/**
+ * Parses ANSI SGR escape sequences in text and returns React nodes with bold/color styling.
+ * Supports reset, bold, red (31), and yellow (33). URLs in output are linkified.
+ */
 function parseAnsiToNodes(text: string): React.ReactNode {
   const parts = text.split(ANSI_CODE_RE);
   const codes = text.match(ANSI_CODE_RE) ?? [];
@@ -51,14 +80,8 @@ function parseAnsiToNodes(text: string): React.ReactNode {
   });
   return out.length === 1 ? out[0] : out;
 }
-const DEFAULT_Y = 24;
-const DEFAULT_WIDTH = 384;
-const EDGE_MARGIN = 8;
-const DEFAULT_HEIGHT = 400;
-const MIN_WIDTH = 200;
-const MIN_HEIGHT = 150;
-const MAX_HEIGHT_VH = 85;
 
+/** Returns Tailwind classes for log entry text based on log level (WARNING, ERROR, CRITICAL, default). */
 function logEntryClass(level: string): string {
   switch (level) {
     case "WARNING":
@@ -84,6 +107,7 @@ export interface FloatingLogPanelProps {
 /**
  * Free-floating, draggable and resizable panel that shows debug logs for the current query.
  * Only visible when debug mode is on. Persists for the duration of one search and resets when a new query starts.
+ * Auto-scrolls to the latest logs when the user is at the bottom; pauses when they scroll up and resumes when they scroll back down.
  */
 export function FloatingLogPanel({ logs, debugEnabled }: FloatingLogPanelProps) {
   const [position, setPosition] = useState({ x: DEFAULT_X, y: DEFAULT_Y });
@@ -91,6 +115,8 @@ export function FloatingLogPanel({ logs, debugEnabled }: FloatingLogPanelProps) 
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [isResizing, setIsResizing] = useState(false);
+  const [shouldAutoScroll, setShouldAutoScroll] = useState(true);
+  const scrollContainerRef = useRef<HTMLDivElement | null>(null);
   const dragStartRef = useRef({ x: 0, y: 0, left: 0, top: 0 });
   const resizeStartRef = useRef({ x: 0, y: 0, width: 0, height: 0 });
 
@@ -112,20 +138,19 @@ export function FloatingLogPanel({ logs, debugEnabled }: FloatingLogPanelProps) 
 
   useEffect(() => {
     if (!isDragging) return;
+    const viewport = getViewportSize();
+    const maxX = viewport.width - size.width - EDGE_MARGIN;
+    const maxY = viewport.height - size.height - EDGE_MARGIN;
 
     const handlePointerMove = (e: PointerEvent) => {
       const { x, y, left, top } = dragStartRef.current;
-      const maxX = typeof window !== "undefined" ? window.innerWidth - size.width - EDGE_MARGIN : left + 9999;
-      const maxY = typeof window !== "undefined" ? window.innerHeight - size.height - EDGE_MARGIN : top + 9999;
       setPosition({
         x: Math.max(EDGE_MARGIN, Math.min(maxX, left + (e.clientX - x))),
         y: Math.max(EDGE_MARGIN, Math.min(maxY, top + (e.clientY - y))),
       });
     };
 
-    const handlePointerUp = () => {
-      setIsDragging(false);
-    };
+    const handlePointerUp = () => setIsDragging(false);
 
     window.addEventListener("pointermove", handlePointerMove);
     window.addEventListener("pointerup", handlePointerUp);
@@ -156,9 +181,9 @@ export function FloatingLogPanel({ logs, debugEnabled }: FloatingLogPanelProps) 
 
   useEffect(() => {
     if (!isResizing) return;
-
-    const maxHeightPx = (typeof window !== "undefined" ? window.innerHeight : 800) * (MAX_HEIGHT_VH / 100);
-    const maxWidthPx = typeof window !== "undefined" ? window.innerWidth - position.x - 24 : 600;
+    const viewport = getViewportSize();
+    const maxHeightPx = viewport.height * (MAX_HEIGHT_VH / 100);
+    const maxWidthPx = viewport.width - position.x - RESIZE_RIGHT_MARGIN;
 
     const handlePointerMove = (e: PointerEvent) => {
       const { x, y, width, height } = resizeStartRef.current;
@@ -179,6 +204,29 @@ export function FloatingLogPanel({ logs, debugEnabled }: FloatingLogPanelProps) 
     };
   }, [isResizing, position.x]);
 
+  const handleScroll = useCallback(() => {
+    const el = scrollContainerRef.current;
+    if (!el) return;
+    setShouldAutoScroll(isScrolledToBottom(el));
+  }, []);
+
+  useEffect(() => {
+    if (!shouldAutoScroll) return;
+    const el = scrollContainerRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+  }, [logs, shouldAutoScroll]);
+
+  const handleCollapseClick = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsCollapsed((prev: boolean) => !prev);
+  }, []);
+
+  const handleCollapsePointerDown = useCallback((e: React.PointerEvent) => {
+    e.stopPropagation();
+  }, []);
+
   if (!debugEnabled) return null;
 
   return (
@@ -194,18 +242,14 @@ export function FloatingLogPanel({ logs, debugEnabled }: FloatingLogPanelProps) 
     >
       <div
         onPointerDown={handlePointerDown}
-        className="flex items-center justify-between gap-2 px-3 py-2 border-b border-border bg-muted/50 font-mono text-xs font-semibold text-foreground cursor-grab active:cursor-grabbing select-none"
+        className={`flex items-center justify-between gap-2 ${LOG_CONTENT_PADDING} border-b border-border bg-muted/50 font-mono text-xs font-semibold text-foreground cursor-grab active:cursor-grabbing select-none`}
         aria-label="Drag to move log panel"
       >
         <span>Logs</span>
         <button
           type="button"
-          onClick={(e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            setIsCollapsed((prev) => !prev);
-          }}
-          onPointerDown={(e) => e.stopPropagation()}
+          onClick={handleCollapseClick}
+          onPointerDown={handleCollapsePointerDown}
           className="shrink-0 w-4 h-4 flex items-center justify-center rounded border border-border bg-background text-muted-foreground hover:bg-muted hover:text-foreground cursor-pointer font-mono text-[10px] leading-none"
           aria-label={isCollapsed ? "Expand logs" : "Minimize logs"}
           title={isCollapsed ? "Expand" : "Minimize"}
@@ -215,13 +259,17 @@ export function FloatingLogPanel({ logs, debugEnabled }: FloatingLogPanelProps) 
       </div>
       {!isCollapsed && (
         <>
-          <div className="flex-1 min-h-0 overflow-auto font-mono text-xs overflow-x-hidden">
+          <div
+            ref={scrollContainerRef}
+            onScroll={handleScroll}
+            className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden font-mono text-xs"
+          >
             {logs.length === 0 ? (
-              <div className="px-3 py-2 text-muted-foreground">
+              <div className={`${LOG_CONTENT_PADDING} text-muted-foreground`}>
                 No logs yet. Logs stream during the search.
               </div>
             ) : (
-              <ul className="list-none px-3 py-2 space-y-1 min-w-0">
+              <ul className={`list-none ${LOG_CONTENT_PADDING} space-y-1 min-w-0`}>
                 {logs.map((entry, i) => {
                   const isSeparator = isSeparatorLine(entry.message);
                   const lineClass = isSeparator
