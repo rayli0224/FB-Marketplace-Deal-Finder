@@ -1,9 +1,16 @@
 "use client";
 
 import { type UseFormRegister, type FieldErrors, type UseFormHandleSubmit, type UseFormWatch, type UseFormSetValue } from "react-hook-form";
-import { type FormData as ValidationFormData } from "@/lib/validation";
+import { type FormData as ValidationFormData, RADIUS_OPTIONS } from "@/lib/validation";
 import { FormInputField } from "@/components/search-form/FormInputField";
 import { CompactInlineToggle } from "@/components/ui/CompactInlineToggle";
+import { InfoIcon } from "@/components/ui/InfoIcon";
+
+const RADIUS_SELECT_BASE_CLASS =
+  "w-full border-2 bg-secondary px-3 py-2.5 font-mono text-sm text-foreground focus:outline-none appearance-none pr-8 bg-no-repeat bg-[length:1rem] bg-[right_0.5rem_center] border-border focus:border-primary";
+const RADIUS_SELECT_ERROR_CLASS = "border-destructive focus:border-destructive";
+const RADIUS_SELECT_CHEVRON_URL =
+  "url('data:image/svg+xml;charset=utf-8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%2212%22%20height%3D%2212%22%20viewBox%3D%220%200%2012%2012%22%3E%3Cpath%20fill%3D%22currentColor%22%20d%3D%22M6%208L1%203h10z%22%2F%3E%3C%2Fsvg%3E')";
 
 export interface MarketplaceSearchFormProps {
   register: UseFormRegister<ValidationFormData>;
@@ -61,21 +68,30 @@ export function MarketplaceSearchForm({ register, errors, isValid, handleSubmit,
       />
 
       <div className="grid grid-cols-3 gap-4">
-        <FormInputField
-          label="RAID_RADIUS"
-          id="radius"
-          type="text"
-          placeholder="25"
-          register={register}
-          min={1}
-          max={500}
-          required
-          digitsOnly
-          inputMode="numeric"
-          error={errors.radius?.message}
-          suffix="mi"
-          tooltip="Search radius in miles from your ZIP code."
-        />
+        <div>
+          <label htmlFor="radius" className="mb-2 flex items-center gap-2 font-mono text-xs text-muted-foreground">
+            <span className="text-primary">$</span>
+            RAID_RADIUS
+            <InfoIcon tooltip="Search radius in miles from your ZIP code." />
+          </label>
+          <div className="relative">
+            <select
+              id="radius"
+              {...register("radius")}
+              required
+              className={`${RADIUS_SELECT_BASE_CLASS} [background-image:${RADIUS_SELECT_CHEVRON_URL}] ${errors.radius ? RADIUS_SELECT_ERROR_CLASS : ""}`}
+            >
+              {RADIUS_OPTIONS.map((miles) => (
+                <option key={miles} value={miles}>
+                  {miles} mi
+                </option>
+              ))}
+            </select>
+          </div>
+          {errors.radius?.message && (
+            <p className="mt-1 font-mono text-xs text-destructive">{errors.radius.message}</p>
+          )}
+        </div>
 
         <FormInputField
           label="STEAL_THRESHOLD"

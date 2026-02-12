@@ -11,8 +11,12 @@ import threading
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from typing import List, Optional
+
+# Supported radius values in miles (must match Facebook Marketplace location dialog).
+RADIUS_OPTIONS = (1, 2, 5, 10, 20, 40, 60, 80, 100, 250, 500)
+DEFAULT_RADIUS = 20
 
 from src.scrapers.fb_marketplace_scraper import search_marketplace as search_fb_marketplace, FacebookNotLoggedInError
 from src.scrapers.ebay_scraper import get_market_price, DEFAULT_EBAY_ITEMS
@@ -54,6 +58,9 @@ DEBUG_MODE = (
 # Loggers that receive the queue handler in debug mode (they use propagate=False).
 _DEBUG_LOG_LOGGER_NAMES = ("api", "fb_scraper", "listing_processor", "openai_helpers", "ebay_scraper")
 
+# SSE event types for the search stream.
+_EVENT_INSPECTOR_URL = "inspector_url"
+
 app = FastAPI(title="FB Marketplace Deal Finder API")
 
 app.add_middleware(
@@ -68,10 +75,19 @@ app.add_middleware(
 class SearchRequest(BaseModel):
     query: str
     zipCode: str
-    radius: int = 25
+    radius: int = DEFAULT_RADIUS
     threshold: float
     maxListings: int = 20
     extractDescriptions: bool = False
+
+    @field_validator("radius")
+    @classmethod
+    def radius_must_be_supported(cls, v: int) -> int:
+        if v not in RADIUS_OPTIONS:
+            raise ValueError(
+                "Radius must be one of: 1, 2, 5, 10, 20, 40, 60, 80, 100, 250, 500"
+            )
+        return v
 
 
 class CompItemSummary(BaseModel):
@@ -325,6 +341,10 @@ def search_deals_stream(request: SearchRequest):
             return
         fb_listings.append(listing)
         event_queue.put({"type": "progress", "scannedCount": count})
+
+    def on_inspector_url(url: str):
+        if not cancelled.is_set():
+            event_queue.put({"type": _EVENT_INSPECTOR_URL, "url": url})
     
     def scrape_worker():
         auth_failed = False
@@ -340,6 +360,7 @@ def search_deals_stream(request: SearchRequest):
                 on_listing_found=on_listing_found,
                 extract_descriptions=request.extractDescriptions,
                 step_sep=None,
+                on_inspector_url=on_inspector_url if DEBUG_MODE else None,
             )
         except FacebookNotLoggedInError:
             auth_failed = True
@@ -357,13 +378,13 @@ def search_deals_stream(request: SearchRequest):
         nonlocal cancelled
 
         def drain_log_queue():
-            """Yield any debug_log and progress events already in the queue (non-blocking)."""
+            """Yield any debug_log, progress, and inspector_url events in the queue (non-blocking)."""
             while True:
                 try:
                     ev = event_queue.get_nowait()
                 except queue.Empty:
                     return
-                if ev.get("type") in ("debug_log", "progress"):
+                if ev.get("type") in ("debug_log", "progress", _EVENT_INSPECTOR_URL):
                     yield f"data: {json.dumps(ev)}\n\n"
 
         try:

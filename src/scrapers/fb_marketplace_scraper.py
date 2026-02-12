@@ -15,9 +15,10 @@ import json
 import logging
 import subprocess
 import time
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass
-from typing import Optional, List
+from typing import Optional, List, Callable
 from playwright.sync_api import sync_playwright, Browser, Page, BrowserContext, TimeoutError as PlaywrightTimeoutError
 from src.scrapers.utils import random_delay, parse_price, is_valid_listing_price
 from src.utils.colored_logger import setup_colored_logger, log_data_block, log_listing_box_sep, set_step_indent, clear_step_indent, wait_status
@@ -34,6 +35,23 @@ COOKIES_FILE = os.environ.get("FB_COOKIES_FILE", "/app/cookies/facebook_cookies.
 # so Docker port forwarding can reach it from the host machine.
 CHROME_DEBUG_PORT = 9223
 PROXY_DEBUG_PORT = 9222
+
+# Timeouts: prevent hanging when an element is missing or the page is stuck; fail after this long.
+NAVIGATION_TIMEOUT_MS = 20000
+ELEMENT_WAIT_TIMEOUT_MS = 8000
+ACTION_TIMEOUT_MS = 4000
+
+# Results area: wait for this after search page loads.
+SEARCH_RESULTS_SELECTOR = "div[role='main']"
+
+# DevTools inspector URL template (used when logging and for the open-in-browser callback).
+_INSPECTOR_URL_TEMPLATE = "http://localhost:{port}/devtools/inspector.html?ws=localhost:{port}/devtools/page/{page_id}"
+
+# Facebook Marketplace location dialog: one selector per target (no fallbacks).
+LOCATION_PILL_SELECTOR = "span:has-text('Within')"
+LOCATION_INPUT_SELECTOR = "input[aria-label='Location']"
+LOCATION_DIALOG_SELECTOR = "[role='dialog']"
+LOCATION_APPLY_SELECTOR = "[aria-label='Apply'][role='button']"
 
 
 class FacebookNotLoggedInError(Exception):
@@ -61,7 +79,7 @@ class Listing:
 
 class FBMarketplaceScraper:
     
-    MARKETPLACE_URL = "https://www.facebook.com/marketplace"
+    MARKETPLACE_SEARCH_URL = "https://www.facebook.com/marketplace/search"
     
     def __init__(self, headless: bool = None, cookies_file: str = None):
         """
@@ -142,13 +160,12 @@ class FBMarketplaceScraper:
             f"Chrome debug port ({CHROME_DEBUG_PORT}) did not respond within {timeout}s"
         )
 
-    def _log_devtools_url(self):
-        """Log a clickable Chrome DevTools URL for the Playwright-controlled page.
+    def _log_devtools_url(self, on_inspector_url: Optional[Callable[[str], None]] = None):
+        """Log the DevTools inspector URL and optionally invoke a callback with it.
 
-        Queries Chrome's debug endpoint for the list of open pages and picks the
-        first one whose URL is not about:blank (Chrome's initial empty tab).
-        The logged URL points through the TCP proxy (PROXY_DEBUG_PORT) so it is
-        reachable from the host machine via Docker port forwarding.
+        Queries Chrome's debug endpoint for the list of open pages, picks the first
+        one, and builds the inspector URL. Logs it and calls on_inspector_url if
+        provided (e.g. so the frontend can open it in the user's browser).
         """
         fallback_url = f"http://localhost:{PROXY_DEBUG_PORT}"
         try:
@@ -159,8 +176,10 @@ class FBMarketplaceScraper:
                 page = pages[0]
             if page:
                 page_id = page.get("id", "")
-                url = f"http://localhost:{PROXY_DEBUG_PORT}/devtools/inspector.html?ws=localhost:{PROXY_DEBUG_PORT}/devtools/page/{page_id}"
+                url = _INSPECTOR_URL_TEMPLATE.format(port=PROXY_DEBUG_PORT, page_id=page_id)
                 logger.info(f"🌐 Inspect browser: {url}")
+                if on_inspector_url:
+                    on_inspector_url(url)
             else:
                 logger.info(f"🌐 Browser live view: {fallback_url}")
         except Exception:
@@ -222,7 +241,8 @@ class FBMarketplaceScraper:
         self.page = self.context.new_page()
         
         if not self.headless:
-            self._log_devtools_url()
+            on_inspector_url = getattr(self, "_on_inspector_url", None)
+            self._log_devtools_url(on_inspector_url=on_inspector_url)
     
     def _check_logged_in(self):
         """
@@ -240,158 +260,93 @@ class FBMarketplaceScraper:
             logger.warning("🔒 Detected login redirect — Facebook session is invalid")
             raise FacebookNotLoggedInError("Facebook session expired or invalid")
 
-        # Check for login form elements that appear on the login wall
-        login_signals = [
-            "input[name='email']",
-            "input[name='pass']",
-            "button[name='login']",
-            "form[action*='login']",
-        ]
+        # Check for login form (single selector: if present, we're on a login wall)
+        login_form = self.page.locator("form[action*='login']").first
+        if login_form.is_visible(timeout=500):
+            logger.warning("🔒 Detected login form — Facebook session is invalid")
+            raise FacebookNotLoggedInError("Facebook session expired or invalid")
 
-        for selector in login_signals:
-            try:
-                element = self.page.locator(selector).first
-                if element.is_visible(timeout=2000):
-                    logger.warning(f"🔒 Detected login form element ({selector}) — Facebook session is invalid")
-                    raise FacebookNotLoggedInError("Facebook session expired or invalid")
-            except PlaywrightTimeoutError:
-                continue
-            except FacebookNotLoggedInError:
-                raise
+    def _goto_search_results(self, query: str):
+        """Navigate directly to Marketplace search results URL, verify login, and wait for results.
+
+        Bypasses the homepage and search bar; the query is in the URL so we land on results
+        immediately and can set location without waiting for the search bar to render.
+        """
+        url = f"{self.MARKETPLACE_SEARCH_URL}?query={urllib.parse.quote(query)}"
+        self.page.goto(url, wait_until="domcontentloaded", timeout=NAVIGATION_TIMEOUT_MS)
+        self._check_logged_in()
+        self.page.wait_for_selector(SEARCH_RESULTS_SELECTOR, timeout=ELEMENT_WAIT_TIMEOUT_MS)
 
     def _set_location(self, zip_code: str, radius: int):
-        """Navigate to Facebook Marketplace and set location via zip code."""
+        """Open the location dialog, set zip code and radius, then apply the filters.
+
+        Opens the location dialog by clicking the location pill, sets the radius dropdown
+        first (while the dialog is fresh and fully interactive), then fills the zip code
+        input and selects the first autocomplete suggestion. Finally clicks Apply and waits
+        for the search results to reload with the new filters applied.
+        """
         try:
-            self.page.goto(self.MARKETPLACE_URL, wait_until="networkidle", timeout=30000)
-            random_delay(2, 4)
+            location_pill = self.page.locator(LOCATION_PILL_SELECTOR).first
+            location_pill.click(timeout=ACTION_TIMEOUT_MS)
+            random_delay(0.5, 1)
 
-            # Verify we're actually logged in before proceeding
-            self._check_logged_in()
+            self._set_radius(radius)
+            random_delay(0.3, 0.6)
 
-            try:
-                self.page.wait_for_selector("h1", timeout=10000)
-            except PlaywrightTimeoutError:
-                logger.debug("Marketplace page is still loading; continuing with location setup")
+            location_input = self.page.locator(LOCATION_INPUT_SELECTOR).first
+            location_input.fill(zip_code, timeout=ACTION_TIMEOUT_MS)
+            random_delay(0.4, 0.8)
+            location_input.press("ArrowDown")
+            random_delay(0.2, 0.4)
+            location_input.press("Enter")
+            random_delay(0.5, 1)
 
-            location_selectors = [
-                "div[aria-label*='location']",
-                "div[aria-label*='Location']",
-                "span:has-text('Location')",
-            ]
+            apply_button = self.page.locator(LOCATION_APPLY_SELECTOR).first
+            apply_button.click(timeout=ACTION_TIMEOUT_MS)
 
-            location_clicked = False
-            for selector in location_selectors:
-                try:
-                    location_button = self.page.locator(selector).first
-                    if location_button.is_visible(timeout=5000):
-                        location_button.click()
-                        random_delay(1, 2)
-                        location_clicked = True
-                        break
-                except (PlaywrightTimeoutError, Exception) as e:
-                    logger.debug("Could not find the location button on the page — %s", e)
-                    continue
-
-            if not location_clicked:
-                logger.warning("Could not find where to set your location. Results may be for the wrong area.")
-                try:
-                    location_input = self.page.locator("input[placeholder*='zip'], input[placeholder*='Zip'], input[type='text']").first
-                    if location_input.is_visible(timeout=5000):
-                        location_input.fill(zip_code)
-                        random_delay(1, 2)
-                        location_input.press("Enter")
-                        random_delay(1, 2)
-                    else:
-                        logger.warning("Could not find the box to enter zip code or location.")
-                except PlaywrightTimeoutError:
-                    logger.warning("Could not find the zip code or location box.")
-                except Exception as e:
-                    logger.warning("Could not enter zip code — %s", e)
-
-            if location_clicked:
-                apply_clicked = False
-                try:
-                    zip_input = self.page.locator("input[placeholder*='zip'], input[placeholder*='Zip'], input[type='text']").first
-                    if zip_input.is_visible(timeout=5000):
-                        zip_input.fill(zip_code)
-                        random_delay(1, 2)
-
-                        apply_selectors = [
-                            "div[aria-label='Apply']",
-                            "button:has-text('Apply')",
-                            "button:has-text('Done')",
-                        ]
-
-                        for selector in apply_selectors:
-                            try:
-                                apply_button = self.page.locator(selector).first
-                                if apply_button.is_visible(timeout=3000):
-                                    apply_button.click()
-                                    random_delay(1, 2)
-                                    apply_clicked = True
-                                    break
-                            except PlaywrightTimeoutError:
-                                continue
-                        if not apply_clicked:
-                            logger.warning("Location dialog opened but we could not confirm it. Location may not have been applied.")
-                    else:
-                        logger.warning("Location dialog opened but the zip code box was not visible. Location may not have been applied.")
-                except PlaywrightTimeoutError as e:
-                    logger.warning("Could not apply location (zip box or Confirm button) — %s", e)
-                except Exception as e:
-                    logger.warning("Location could not be applied — %s", e)
+            random_delay(2, 3)
+            self.page.wait_for_selector(SEARCH_RESULTS_SELECTOR, timeout=ELEMENT_WAIT_TIMEOUT_MS)
 
         except FacebookNotLoggedInError:
             raise
         except Exception as e:
             logger.warning("Setting your location failed — %s", e)
-    
-    def _search(self, query: str):
-        """Enter search query and wait for results."""
-        try:
-            search_selectors = [
-                "input[aria-label='Search Marketplace']",
-                "input[placeholder*='Search']",
-                "input[type='search']",
-            ]
-            
-            search_bar = None
-            for selector in search_selectors:
-                try:
-                    search_bar = self.page.locator(selector).first
-                    if search_bar.is_visible(timeout=5000):
-                        break
-                except PlaywrightTimeoutError:
-                    continue
-            
-            if not search_bar:
-                raise Exception("Could not find search bar")
-            
-            search_bar.fill(query)
-            random_delay(0.5, 1.0)
-            search_bar.press("Enter")
-            
-            random_delay(3, 5)
-            
-            try:
-                listing_selectors = [
-                    "div[role='main']",
-                    "div[data-testid='marketplace-search-results']",
-                    "div[class*='listing']",
-                ]
-                
-                for selector in listing_selectors:
-                    try:
-                        self.page.wait_for_selector(selector, timeout=10000)
-                        break
-                    except PlaywrightTimeoutError:
-                        continue
-            except Exception as e:
-                logger.debug("Search results area did not appear in time — %s", e)
-            
-        except Exception:
-            raise
-    
+
+    def _set_radius(self, radius: int):
+        """Open the radius dropdown and select the given miles value.
+
+        Locates the Radius combobox using get_by_role (which correctly resolves the
+        aria-labelledby attribute), scrolls it into view, then simulates a real mouse
+        click at the center of its bounding box using raw mouse events (move → down → up).
+        This approach reliably triggers React's event handlers. Once the listbox appears,
+        selects the option matching the requested miles value.
+        """
+        timeout = ACTION_TIMEOUT_MS
+        option_text = f"{radius} miles"
+
+        combobox = self.page.get_by_role("combobox", name="Radius")
+        combobox.wait_for(state="visible", timeout=timeout)
+        combobox.scroll_into_view_if_needed(timeout=timeout)
+        random_delay(0.3, 0.5)
+
+        box = combobox.bounding_box(timeout=timeout)
+        if not box:
+            logger.warning("Could not find the radius control on the page")
+            return
+
+        cx = box["x"] + box["width"] / 2
+        cy = box["y"] + box["height"] / 2
+        self.page.mouse.move(cx, cy)
+        random_delay(0.1, 0.2)
+        self.page.mouse.down()
+        random_delay(0.05, 0.1)
+        self.page.mouse.up()
+        random_delay(0.5, 1)
+
+        listbox = self.page.locator("[role='listbox']").first
+        listbox.wait_for(state="visible", timeout=timeout)
+        self.page.get_by_role("option", name=option_text).click(timeout=timeout)
+
     def _extract_price(self, element) -> Optional[float]:
         """
         Extract price from a listing element.
@@ -855,12 +810,15 @@ class FBMarketplaceScraper:
         on_listing_found=None,
         extract_descriptions: bool = False,
         step_sep: Optional[str] = "main",
+        on_inspector_url: Optional[Callable[[str], None]] = None,
     ) -> List[Listing]:
         """
         Run a Marketplace search and return up to max_listings results.
 
         step_sep: "main" = main step separator line; "sub" = section separator (within Step 2); None = plain title line only.
+        on_inspector_url: optional callback invoked with the DevTools inspector URL when browser is created (headed mode).
         """
+        self._on_inspector_url = on_inspector_url
         if step_sep == "main":
             logger.info("FB Marketplace search")
             log_data_block(
@@ -889,8 +847,8 @@ class FBMarketplaceScraper:
             with wait_status(logger, "Facebook Marketplace search"):
                 if not self.browser:
                     self._create_browser()
+                self._goto_search_results(query)
                 self._set_location(zip_code, radius)
-                self._search(query)
                 listings = self._extract_listings(
                     max_listings=max_listings,
                     on_listing_found=on_listing_found,
@@ -946,11 +904,13 @@ def search_marketplace(
     on_listing_found=None,
     extract_descriptions: bool = False,
     step_sep: Optional[str] = "main",
+    on_inspector_url: Optional[Callable[[str], None]] = None,
 ) -> List[Listing]:
     """
     Run a one-off Facebook Marketplace search and return the results.
 
     step_sep: "main" = main step separator; "sub" = section separator; None = plain title only.
+    on_inspector_url: optional callback invoked with the DevTools inspector URL when browser is created (headed mode).
     """
     scraper = FBMarketplaceScraper(headless=headless)
     try:
@@ -960,6 +920,7 @@ def search_marketplace(
             on_listing_found=on_listing_found,
             extract_descriptions=extract_descriptions,
             step_sep=step_sep,
+            on_inspector_url=on_inspector_url,
         )
     finally:
         scraper.close()
