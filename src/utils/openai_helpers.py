@@ -204,31 +204,20 @@ def filter_ebay_results_with_openai(
     )
     
     try:
-        messages = [
-            {
-                "role": "system",
-                "content": RESULT_FILTERING_SYSTEM_MESSAGE
-            },
-            {
-                "role": "user",
-                "content": prompt
-            }
-        ]
-        
         # Calculate max_tokens based on number of items to avoid truncation
         # Each item needs ~60 tokens for its reason string, plus JSON structure overhead
         # Use a minimum of 2000 tokens, or 60 tokens per item, whichever is higher
         # This ensures we have enough tokens for reasons for ALL items (not just comparable ones)
         max_tokens = max(2000, num_items * 60)
         
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=messages,
-            temperature=0.2,
-            max_tokens=max_tokens,
+        response = client.responses.create(
+            model="gpt-5-mini",
+            instructions=RESULT_FILTERING_SYSTEM_MESSAGE,
+            input=prompt,
+            max_output_tokens=max_tokens,
         )
         
-        raw_content = response.choices[0].message.content or ""
+        raw_content = response.output_text or ""
         try:
             logger.debug(f"Match result (preview):\n{truncate_lines(raw_content, 5)}")
         except Exception:

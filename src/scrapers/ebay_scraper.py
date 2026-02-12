@@ -359,29 +359,32 @@ class EbayBrowseAPIClient:
         for idx, item in enumerate(items):
             item_id = item.get("itemId")
             if not item_id:
-                # If no itemId, preserve only title and price
+                # If no itemId, preserve title, price, and url
                 enhanced_items.append({
                     "title": item.get("title", ""),
                     "price": item.get("price", 0),
+                    "url": item.get("url", ""),
                 })
                 continue
             
             details = self.get_item_details(item_id, marketplace)
             if details:
-                # Explicitly preserve only specified fields
+                # Explicitly preserve specified fields including url
                 enhanced_item = {
                     "title": item.get("title", ""),
                     "price": item.get("price", 0),
+                    "url": item.get("url", ""),
                     "description": details.get("shortDescription", ""),
                     "condition": details.get("condition", ""),
                 }
                 enhanced_items.append(enhanced_item)
                 success_count += 1
             else:
-                # If getItem failed, preserve only title and price
+                # If getItem failed, preserve title, price, and url
                 enhanced_items.append({
                     "title": item.get("title", ""),
                     "price": item.get("price", 0),
+                    "url": item.get("url", ""),
                 })
         
         if success_count < len(items):

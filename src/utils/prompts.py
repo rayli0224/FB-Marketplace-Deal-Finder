@@ -220,8 +220,8 @@ An eBay item is comparable if and only if:
   - missing minor accessories (charger, cable)
 
 5. Size Rules
-- Clothing/shoes: size differences are OK.
-- Electronics/furniture: size differences are NOT OK.
+- Clothing/shoes: size differences are acceptable.
+- Electronics/furniture: size differences are not acceptable.
 
 Be strict. Prefer false negatives over false positives.
 
