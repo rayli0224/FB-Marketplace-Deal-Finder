@@ -527,13 +527,15 @@ export default function Home() {
                   watch={watch}
                   setValue={setValue}
                 />
-                <button
-                  type="button"
-                  onClick={() => setAppState("setup")}
-                  className="mt-4 w-full font-mono text-[11px] text-muted-foreground/60 hover:text-muted-foreground transition-colors cursor-pointer"
-                >
-                  {"// re-connect Facebook account"}
-                </button>
+                <div className="mt-4 flex justify-center">
+                  <button
+                    type="button"
+                    onClick={() => setAppState("setup")}
+                    className="border border-muted-foreground/30 px-2 py-1 font-mono text-[10px] text-muted-foreground transition-colors hover:border-muted-foreground/50 hover:text-foreground cursor-pointer"
+                  >
+                    Reconnect Facebook account
+                  </button>
+                </div>
               </>
             )}
 
