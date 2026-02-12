@@ -241,11 +241,10 @@ export function Combobox<T>({ id, register, options, getOptionValue, getOptionLa
     }
 
     if (e.key === "Tab") {
-      if (!isOpen) {
-        return;
+      if (isOpen) {
+        setIsOpen(false);
+        clearFilterAndNavigation();
       }
-      e.preventDefault();
-      navigateOptions("next");
       return;
     }
 
