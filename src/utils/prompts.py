@@ -11,14 +11,10 @@ QUERY_GENERATION_SYSTEM_MESSAGE = "You are an expert at creating precise search 
 # System message for result filtering
 RESULT_FILTERING_SYSTEM_MESSAGE = "You are an expert at comparing products across marketplaces. Always respond with valid JSON only."
 
-def get_pre_filtering_prompt(listing_title: str, listing_price: float, listing_location: str, description_text: str) -> str:
-  return f"""You will be given a Facebook Marketplace listing. If the listing lacks enough information to generate a comprehensive, useful eBay search (e.g. the listing is too vague, generic, or essentially empty), you may reject by returning a JSON object with "rejected": true and "reason": "brief explanation" instead of generating a query.
+def get_pre_filtering_prompt(fb_listing_text: str) -> str:
+  return f"""You will be given a Facebook Marketplace listing. Determine whether the listing contains enough information to generate a useful eBay search that will find a comparable product for a rational buyer. The listing should not be too vague and should contain enough detail to identify the product and its attributes. 
 
-Facebook Marketplace listing:
-- Title: "{listing_title}"
-- Price: ${listing_price:.2f}
-- Location: {listing_location}
-- Description: "{description_text}"
+{fb_listing_text}
 
 Output Format:
 {{
@@ -69,15 +65,11 @@ Output:
 }}
 """
 
-def get_query_generation_prompt(listing_title: str, listing_price: float, listing_location: str, description_text: str) -> str:
+def get_query_generation_prompt(fb_listing_text: str) -> str:
     return f"""
 You are an expert at generating highly effective eBay Browse API search queries for product comparison.
 
-Facebook Marketplace listing:
-- Title: "{listing_title}"
-- Price: ${listing_price:.2f}
-- Location: {listing_location}
-- Description: "{description_text}"
+{fb_listing_text}
 
 Your task:
 1. Extract the **core product attributes** that matter for comparison: brand, model, product type, generation, storage/capacity if relevant.
@@ -243,7 +235,7 @@ Return a JSON object with the following format:
 Rules:
 - id: 1-based index of the eBay item.
 - rejected: true = reject, false = accept.
-- reason: a brief explanation of why the item was accepted or rejected.
+- reason: a brief explanation of the MAIN reason why the item was accepted or rejected. If there are multiple reasons, choose the most important one.
 - The array length MUST exactly match the number of {num_items} eBay items.
 - The array order MUST match the eBay items order.
 - Each reason must be ≤ 10 words.
@@ -305,5 +297,153 @@ Output:
     {{ "id": 4, "rejected": true, "reason": "Not working (for parts)" }}
   ]
 }}
+"""
+
+
+def get_single_item_filtering_prompt(
+    fb_listing_text: str,
+    ebay_item_text: str,
+) -> str:
+    """
+    Generate the prompt for filtering a single eBay item against a FB listing.
+    
+    Args:
+        fb_listing_text: Pre-formatted FB listing text (from _format_fb_listing)
+        ebay_item_text: Formatted string for a single eBay item (title, price, condition, description)
+    
+    Returns:
+        Formatted prompt string
+    """
+    
+    return f"""You are determining whether a single eBay item is truly comparable to a Facebook Marketplace (FB) listing for accurate price comparison.
+
+Your job is NOT to find similar items.
+Your job is to decide whether these two listings represent the same economic product.
+
+If there is any meaningful doubt, you must reject.
+
+---
+
+{fb_listing_text}
+
+eBay item:
+{ebay_item_text}
+
+---
+
+## Core Principle (Most Important Rule)
+
+The eBay item is comparable ONLY if:
+A rational buyer would consider both listings interchangeable for pricing.
+
+If they would reasonably pay different prices → reject.
+
+Prefer false negatives over false positives.
+
+---
+
+## Step 1 — Extract Price-Defining Attributes (from FB only)
+
+From the Facebook listing, identify ONLY attributes that materially affect price.
+
+Examples:
+- Electronics: brand, model, generation, size, storage, key specs.
+- Clothing/shoes: brand, model/line, condition.
+- Furniture/other: brand, model, material, dimensions (if relevant).
+
+Do NOT invent attributes.
+If an attribute is not stated or implied in the FB listing, treat it as unknown.
+
+---
+
+## Step 2 — Compare eBay Item to Those Attributes
+
+For each price-defining attribute:
+
+- If the FB listing specifies it → it MUST match.
+- If the FB listing is vague → use overall semantic similarity.
+- If information is missing or unclear → reject.
+
+---
+
+## Hard Rejection Rules (Automatic Reject)
+
+Reject the eBay item if ANY of the following is true:
+
+1. Different Core Product
+- Different brand, model, line, or generation.
+
+2. Different Functional Variant
+- Examples:
+  - locked vs unlocked
+  - mini vs pro vs max
+  - wrong generation/year
+  - different storage tier when storage affects price
+
+3. Different Condition Class
+- new vs used vs refurbished vs broken.
+- Exclude: for parts, not working, damaged.
+
+4. Not a Full Product
+- Accessories only
+- Parts
+- Services
+- Bundles, lots, multi-packs
+
+5. Size Rules
+- Clothing/shoes: size differences are allowed.
+- Electronics/furniture: size differences are NOT allowed.
+
+6. Missing Critical Information
+- If a key attribute cannot be verified → reject.
+
+---
+
+## Allowed Differences (Do NOT Reject For These)
+
+These differences are acceptable IF all core attributes match:
+
+- Color
+- Cosmetic wear
+- Missing minor accessories (charger, cable, box)
+- Clothing/shoe size differences
+
+These must NOT change the fundamental product class.
+
+---
+
+## Decision Rule
+
+Accept ONLY if:
+All price-defining attributes match
+AND no hard rejection rule is triggered
+AND there is no meaningful ambiguity.
+
+Otherwise → reject.
+
+---
+
+## Output Format (MANDATORY)
+
+Return ONLY a JSON object:
+
+{{
+  "rejected": false,
+  "reason": "Exact model and specs (2019, 16 inch, i9)"
+}}
+
+Or:
+
+{{
+  "rejected": true,
+  "reason": "Different generation (2020 vs 2019)"
+}}
+
+Rules:
+- rejected: true = reject, false = accept.
+- reason: ≤ 10 words.
+- Include exact distinguishing details in parentheses when applicable.
+- No extra text. No markdown. No explanations. Only valid JSON.
+
 """
 
