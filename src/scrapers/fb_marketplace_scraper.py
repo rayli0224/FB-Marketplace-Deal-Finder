@@ -70,6 +70,10 @@ DESCRIPTION_MIN_LENGTH = 10
 DESCRIPTION_SIBLING_CHECK_COUNT = 3
 SCROLL_ATTEMPTS = 3
 
+# Incorrect titles: small image overlays (e.g. "Partner Listing", "Just listed") that appear
+# above the real title; we skip these and use the next text element as the title.
+INCORRECT_TITLES = ("Partner Listing", "Just listed")
+
 
 class FacebookNotLoggedInError(Exception):
     """
@@ -474,15 +478,25 @@ class FBMarketplaceScraper:
             except Exception as e:
                 logger.debug("Could not read the price from this listing — %s", e)
         return None
-    
+
+    def _is_incorrect_title(self, text: str) -> bool:
+        """Returns True if the text is a known incorrect title (image overlay) to skip."""
+        t = text.strip()
+        if not t:
+            return False
+        if t.lower() in (x.lower() for x in INCORRECT_TITLES):
+            logger.debug("Skipping incorrect title: %r", t)
+            return True
+        return False
+
     def _try_extract_title_by_dom_structure(self, element, price: float) -> str:
         """
         Try to extract title by locating price element and taking text before it.
         
         Uses DOM structure: finds the price element using the same selectors as _extract_price,
         locates its position in the element's text, and returns the first non-empty line that
-        appears before the price. This leverages the fact that titles typically appear before
-        prices in Facebook Marketplace DOM structure.
+        appears before the price. Skips incorrect titles (image overlays like "Partner Listing",
+        "Just listed") and uses the next valid line.
         """
         try:
             price_elem = self._find_price_element(element, target_price=price)
@@ -495,7 +509,7 @@ class FBMarketplaceScraper:
                     lines = title_candidate.split("\n")
                     for line in lines:
                         line = line.strip()
-                        if line:
+                        if line and not self._is_incorrect_title(line):
                             return line
         except Exception as e:
             logger.debug("Could not get listing title from page layout — %s", e)
@@ -506,10 +520,11 @@ class FBMarketplaceScraper:
         """
         Try to extract title by analyzing text lines, preferring those with letters.
         
-        Splits element text into lines and analyzes them. First pass: returns first line
-        containing letters (keeps lines with both letters and numbers like "iPhone 13").
-        Skips lines that are only numbers/$ symbols. Second pass: if no lines with letters
-        found, returns first line that isn't a pure price format.
+        Splits element text into lines and analyzes them. Skips incorrect titles (image
+        overlays like "Partner Listing", "Just listed") and uses the next valid line.
+        First pass: returns first line containing letters (keeps lines with both letters
+        and numbers like "iPhone 13"). Skips price-only lines. Second pass: if no lines
+        with letters found, returns first line that isn't a pure price format.
         """
         try:
             all_lines = element.inner_text().strip().split("\n")
@@ -517,6 +532,8 @@ class FBMarketplaceScraper:
             for line in all_lines:
                 line = line.strip()
                 if not line:
+                    continue
+                if self._is_incorrect_title(line):
                     continue
                 if re.match(r'^[\$0-9.\s]+$', line):
                     continue
@@ -526,6 +543,8 @@ class FBMarketplaceScraper:
             for line in all_lines:
                 line = line.strip()
                 if not line:
+                    continue
+                if self._is_incorrect_title(line):
                     continue
                 if re.match(r'^[\$0-9.\s]+$', line):
                     continue

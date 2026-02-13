@@ -525,6 +525,7 @@ def search_deals_stream(request: SearchRequest):
                             n_items=DEFAULT_EBAY_ITEMS,
                             listing_index=idx,
                             total_listings=len(fb_listings),
+                            cancelled=cancelled,
                         )
                         count += 1
                         if DEBUG_MODE and result and result.get("ebaySearchQuery"):
@@ -545,6 +546,14 @@ def search_deals_stream(request: SearchRequest):
                             break
                         logger.warning(f"Error processing listing '{listing.title}': {e}")
                         count += 1
+                        scored.append({
+                            "title": listing.title,
+                            "price": listing.price,
+                            "location": listing.location,
+                            "url": listing.url,
+                            "dealScore": None,
+                            "noCompReason": "Unable to generate eBay comparisons",
+                        })
                         event_queue.put({
                             "type": "listing_processed",
                             "evaluatedCount": count,
