@@ -9,8 +9,8 @@ A PR already exists for the current branch. Find it and modify it using MCP (do 
 
 ## Description rules
 - Use **only** changes introduced in this branch.
+- Include **only user-facing changes**: what the end user of the product will see or experience and why it matters. Omit developer-only changes (e.g. cleanup commands, tooling, config, refactors that don’t change behavior).
 - Do **not** list implementation details. Do not mention files, functions, refactors, or how the code was built.
-- Explain **what changed** from the user’s point of view: what they will experience and why it matters.
 - Write in **plain English** with bullet points. Each bullet should stand on its own.
 - Avoid change logs, file listings, and step-by-step implementation lists.
 - Avoid vague or generic language. Preserve wording from the product or UI when it helps.
