@@ -335,7 +335,6 @@ async def _filter_batch(
         return [(start_index + i, False, "") for i in range(len(items))]
 
 
-
 async def _filter_ebay_results_async(
     listing: Listing,
     ebay_items: List[dict],
