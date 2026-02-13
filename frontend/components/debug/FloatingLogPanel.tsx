@@ -227,8 +227,6 @@ export function FloatingLogPanel({ logs, debugEnabled }: FloatingLogPanelProps) 
     e.stopPropagation();
   }, []);
 
-  if (!debugEnabled) return null;
-
   return (
     <div
       className="fixed z-50 flex flex-col rounded-md border border-border bg-background shadow-lg"
@@ -266,7 +264,9 @@ export function FloatingLogPanel({ logs, debugEnabled }: FloatingLogPanelProps) 
           >
             {logs.length === 0 ? (
               <div className={`${LOG_CONTENT_PADDING} text-muted-foreground`}>
-                No logs yet. Logs stream during the search.
+                {debugEnabled
+                  ? "No logs yet. Logs stream during the search."
+                  : "Start a search with the debug server to see logs."}
               </div>
             ) : (
               <ul className={`list-none ${LOG_CONTENT_PADDING} space-y-1 min-w-0`}>

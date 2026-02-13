@@ -331,6 +331,9 @@ export default function Home() {
    * Resets state and returns the app to the form view.
    */
   const cancelSearch = useCallback(() => {
+    // Tell the backend to cancel immediately (kills Chrome, stops scraping)
+    fetch(`${API_URL}/api/search/cancel`, { method: "POST" }).catch(() => {});
+
     // Cancel the reader first to stop reading from the stream
     if (readerRef.current) {
       try {
@@ -355,6 +358,12 @@ export default function Home() {
       }
       abortControllerRef.current = null;
     }
+    
+    // Keep logs from this run and append a cancellation message
+    setDebugLogs((prev) => [
+      ...prev,
+      { level: "WARNING", message: "Search cancelled by user" },
+    ]);
     
     isSearchingRef.current = false;
     setIsSearching(false);
@@ -461,11 +470,9 @@ export default function Home() {
     setListings([]);
     setError(null);
     setPhase("scraping");
-    setDebugEnabled(false);
     setDebugSearchParams(null);
     setDebugFacebookListings([]);
     setDebugEbayQueries([]);
-    setDebugLogs([]);
     setAppState("loading");
     
     // Start search directly - no useEffect needed
@@ -572,9 +579,7 @@ export default function Home() {
           />
         )}
 
-        {(appState === "loading" || appState === "done") && (
-          <FloatingLogPanel logs={debugLogs} debugEnabled={debugEnabled} />
-        )}
+        <FloatingLogPanel logs={debugLogs} debugEnabled={debugEnabled} />
 
         <AppFooter />
       </div>
