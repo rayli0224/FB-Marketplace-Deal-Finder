@@ -2,6 +2,15 @@
 
 Clean up and refactor the code to make it clean, robust, well-written, and well-abstracted.
 
+## Scope: This PR only
+
+**Only clean up code that has been modified in the current PR.**
+
+- Determine scope with `git diff main --name-only` (or the repo’s default branch). Restrict all cleanup to those files.
+- Within a modified file, only change lines or blocks that are part of the PR’s diff. Do not refactor, extract, or alter code that is unchanged in this branch.
+- If a file was only touched for a one-line or small edit, limit cleanup to that edit and its immediate context (e.g. one constant or one function), not the whole file.
+- Do not add new abstractions, components, or constants for unchanged code paths.
+
 ## Code Quality Standards
 
 ### Clean Code
