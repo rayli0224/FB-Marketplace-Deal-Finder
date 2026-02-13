@@ -32,6 +32,7 @@ type SSEDispatchHandlers = {
   handleCompletion: (data: { scannedCount: number; evaluatedCount: number; listings: Listing[]; threshold?: number; averageConfidence?: number | null }) => void;
   handleAuthError: () => void;
   setEvaluatedCount: (n: number) => void;
+  onListingResult?: (listing: Listing, evaluatedCount: number) => void;
   onDebugMode?: (params?: DebugSearchParams) => void;
   onDebugFacebook?: (listings: DebugFacebookListing[]) => void;
   onDebugEbayQuery?: (entry: DebugEbayQueryEntry) => void;
@@ -48,6 +49,7 @@ function dispatchSSEEvent(payloadString: string, handlers: SSEDispatchHandlers):
     phase?: SearchPhase;
     scannedCount?: number;
     evaluatedCount?: number;
+    listing?: Listing;
     listings?: Listing[] | DebugFacebookListing[];
     threshold?: number;
     averageConfidence?: number | null;
@@ -69,6 +71,8 @@ function dispatchSSEEvent(payloadString: string, handlers: SSEDispatchHandlers):
     handlers.handlePhaseUpdate(data.phase);
   } else if (data.type === "progress" && typeof data.scannedCount === "number") {
     handlers.handleProgressUpdate(data.scannedCount);
+  } else if (data.type === "listing_result" && data.listing != null && typeof data.evaluatedCount === "number") {
+    handlers.onListingResult?.(data.listing, data.evaluatedCount);
   } else if (data.type === "listing_processed" && typeof data.evaluatedCount === "number") {
     handlers.setEvaluatedCount(data.evaluatedCount);
   } else if (data.type === "done" && data.listings != null && Array.isArray(data.listings)) {
@@ -246,6 +250,15 @@ export default function Home() {
   }, []);
 
   /**
+   * Handles a single listing result from the backend as it's processed.
+   * Appends the listing to the results array for incremental display.
+   */
+  const onListingResult = useCallback((listing: Listing, evaluatedCount: number) => {
+    setListings((prev) => [...prev, listing]);
+    setEvaluatedCount(evaluatedCount);
+  }, []);
+
+  /**
    * Parses an SSE stream from the reader and updates UI from each event.
    * Reads in chunks and accumulates text in a buffer so only complete lines (ending with \n)
    * are parsed. This avoids "Unterminated string" when the large "done" payload is split across
@@ -264,6 +277,7 @@ export default function Home() {
         handleCompletion,
         handleAuthError,
         setEvaluatedCount,
+        onListingResult,
         onDebugMode: (params) => {
           setDebugEnabled(true);
           if (params) setDebugSearchParams(params);
@@ -323,7 +337,7 @@ export default function Home() {
         reader.releaseLock();
       }
     },
-    [handlePhaseUpdate, handleProgressUpdate, handleCompletion, handleAuthError, onDebugEbayQuery]
+    [handlePhaseUpdate, handleProgressUpdate, handleCompletion, handleAuthError, onListingResult, onDebugEbayQuery]
   );
 
   /**
@@ -470,6 +484,7 @@ export default function Home() {
     setListings([]);
     setError(null);
     setPhase("scraping");
+    setThreshold(Number(data.threshold) || 0);
     setDebugSearchParams(null);
     setDebugFacebookListings([]);
     setDebugEbayQueries([]);
@@ -547,12 +562,24 @@ export default function Home() {
             )}
 
             {appState === "loading" && (
-              <SearchLoadingState
-                phase={phase}
-                scannedCount={scannedCount}
-                evaluatedCount={evaluatedCount}
-                onCancel={cancelSearch}
-              />
+              <div className="space-y-6">
+                <SearchLoadingState
+                  phase={phase}
+                  scannedCount={scannedCount}
+                  evaluatedCount={evaluatedCount}
+                  onCancel={cancelSearch}
+                />
+                {phase === "evaluating" && listings.length > 0 && (
+                  <SearchResultsTable
+                    listings={listings}
+                    scannedCount={scannedCount}
+                    threshold={threshold}
+                    onDownloadCSV={downloadCSV}
+                    onReset={handleReset}
+                    isLoading={true}
+                  />
+                )}
+              </div>
             )}
 
             {appState === "done" && (

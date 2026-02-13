@@ -534,30 +534,40 @@ def search_deals_stream(request: SearchRequest):
                                 "fbTitle": listing.title,
                                 "ebayQuery": result["ebaySearchQuery"],
                             })
-                        event_queue.put({
-                            "type": "listing_processed",
-                            "evaluatedCount": count,
-                            "currentListing": listing.title,
-                        })
+                        # Send the full listing result for incremental display
                         if result:
                             scored.append(result)
+                            event_queue.put({
+                                "type": "listing_result",
+                                "listing": result,
+                                "evaluatedCount": count,
+                            })
+                        else:
+                            # No result (e.g., filtered out) - still send progress
+                            event_queue.put({
+                                "type": "listing_processed",
+                                "evaluatedCount": count,
+                                "currentListing": listing.title,
+                            })
                     except Exception as e:
                         if cancelled.is_set():
                             break
                         logger.warning(f"Error processing listing '{listing.title}': {e}")
                         count += 1
-                        scored.append({
+                        error_result = {
                             "title": listing.title,
                             "price": listing.price,
                             "location": listing.location,
                             "url": listing.url,
                             "dealScore": None,
                             "noCompReason": "Unable to generate eBay comparisons",
-                        })
+                        }
+                        scored.append(error_result)
+                        # Send the error result for incremental display
                         event_queue.put({
-                            "type": "listing_processed",
+                            "type": "listing_result",
+                            "listing": error_result,
                             "evaluatedCount": count,
-                            "currentListing": listing.title,
                         })
                 event_queue.put({
                     "type": "evaluation_done",
@@ -580,6 +590,9 @@ def search_deals_stream(request: SearchRequest):
                     evaluated_count = event["evaluated_count"]
                     break
                 if event["type"] == "debug_ebay_query":
+                    yield f"data: {json.dumps(event)}\n\n"
+                    continue
+                if event["type"] == "listing_result":
                     yield f"data: {json.dumps(event)}\n\n"
                     continue
                 if event["type"] == "listing_processed":
