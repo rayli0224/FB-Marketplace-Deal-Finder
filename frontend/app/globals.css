@@ -125,6 +125,18 @@
   to { transform: rotate(360deg); }
 }
 
+/* Fade-in for cycling query suggestions overlay (QueryInputWithSuggestions). */
+@keyframes query-suggestion-fade {
+  0% {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;
