@@ -74,13 +74,6 @@ SCROLL_ATTEMPTS = 3
 # above the real title; we skip these and use the next text element as the title.
 INCORRECT_TITLES = ("Partner Listing", "Just listed")
 
-# Reduced-price labels that appear before the actual price (e.g. "Was $50", "50% off").
-# We skip these when extracting the title since they are not the listing name.
-_REDUCED_PRICE_PATTERN = re.compile(
-    r"^(was\s+\$[\d.,]+|[\d.]+%\s*off|save\s+[\d.]+%?)$",
-    re.IGNORECASE,
-)
-
 
 class FacebookNotLoggedInError(Exception):
     """
@@ -453,36 +446,18 @@ class FBMarketplaceScraper:
     def _find_price_element(self, element, target_price: Optional[float] = None):
         """
         Find the price element in a listing using CSS selectors.
-
-        When multiple price elements exist (e.g. reduced price then actual price), prefers
-        the last one in DOM order since the actual price typically appears after the reduced.
+        
         Returns the Playwright locator for the price element if found, or None.
         If target_price is provided, only returns an element whose parsed price matches.
         """
         for selector in PRICE_SELECTORS:
             try:
-                elems = element.locator(selector).all()
-                valid = []
-                for price_elem in elems:
-                    try:
-                        if price_elem.is_visible(timeout=500):
-                            price_text = price_elem.inner_text().strip()
-                            parsed = parse_price(price_text)
-                            if parsed and (target_price is None or parsed == target_price):
-                                valid.append((price_elem, parsed))
-                    except Exception:
-                        continue
-                if valid:
-                    if target_price is not None:
-                        matches = [elem for elem, p in valid if p == target_price]
-                        return matches[-1] if matches else None
-                    if len(valid) > 1:
-                        logger.debug(
-                            "Multiple prices found, using last (actual): %s → $%.2f",
-                            [p for _, p in valid],
-                            valid[-1][1],
-                        )
-                    return valid[-1][0]
+                price_elem = element.locator(selector).first
+                if price_elem.is_visible(timeout=1000):
+                    price_text = price_elem.inner_text().strip()
+                    parsed = parse_price(price_text)
+                    if parsed and (target_price is None or parsed == target_price):
+                        return price_elem
             except Exception as e:
                 logger.debug("Could not find price element — %s", e)
                 continue
@@ -505,15 +480,12 @@ class FBMarketplaceScraper:
         return None
 
     def _is_incorrect_title(self, text: str) -> bool:
-        """Returns True if the text is a known incorrect title (image overlay or reduced-price label) to skip."""
+        """Returns True if the text is a known incorrect title (image overlay) to skip."""
         t = text.strip()
         if not t:
             return False
         if t.lower() in (x.lower() for x in INCORRECT_TITLES):
             logger.debug("Skipping incorrect title: %r", t)
-            return True
-        if _REDUCED_PRICE_PATTERN.search(t):
-            logger.debug("Skipping reduced-price label: %r", t)
             return True
         return False
 

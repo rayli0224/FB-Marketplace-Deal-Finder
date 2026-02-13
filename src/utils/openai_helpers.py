@@ -310,12 +310,10 @@ async def _filter_batch(
         raw_content = _extract_response_output_text(response)
         if not raw_content:
             logger.debug(f"Batch {start_index}-{start_index + len(items) - 1}: empty response — keeping all")
-            logger.debug(f"Response content: {raw_content}")
             return [(start_index + i, False, "") for i in range(len(items))]
         results_list = _try_parse_results_list(raw_content, len(items))
         if results_list is None:
             logger.debug(f"Batch {start_index}-{start_index + len(items) - 1}: invalid JSON — keeping all")
-            logger.debug(f"Response content: {raw_content}")
             return [(start_index + i, False, "") for i in range(len(items))]
         out = []
         for i, r in enumerate(results_list):
