@@ -7,23 +7,26 @@ search queries and filter eBay results to match Facebook Marketplace listings.
 
 import os
 import json
+import time
 import asyncio
 from typing import Optional, Tuple, List, Any
+import threading
 
 try:
-    from openai import OpenAI, AsyncOpenAI
+    from openai import OpenAI, AsyncOpenAI, RateLimitError
 except ImportError:
     OpenAI = None
     AsyncOpenAI = None
+    RateLimitError = Exception  # type: ignore[misc, assignment]
 
-from src.scrapers.fb_marketplace_scraper import Listing
+from src.scrapers.fb_marketplace_scraper import Listing, SearchCancelledError
 from src.utils.colored_logger import setup_colored_logger, log_error_short, truncate_lines
 from src.utils.prompts import (
     QUERY_GENERATION_SYSTEM_MESSAGE,
     RESULT_FILTERING_SYSTEM_MESSAGE,
     get_query_generation_prompt,
     get_pre_filtering_prompt,
-    get_single_item_filtering_prompt,
+    get_batch_filtering_prompt,
 )
 
 logger = setup_colored_logger("openai_helpers")
@@ -31,7 +34,10 @@ OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 OPENAI_MODEL = "gpt-5-mini"
 PRE_FILTER_MAX_OUTPUT_TOKENS = 150
 QUERY_GENERATION_MAX_OUTPUT_TOKENS = 1000
-SINGLE_ITEM_FILTER_MAX_OUTPUT_TOKENS = 1000
+BATCH_FILTER_MAX_OUTPUT_TOKENS = 3000
+POST_FILTER_BATCH_SIZE = 5
+RATE_LIMIT_RETRY_DELAY_SEC = 0.5
+RATE_LIMIT_MAX_RETRIES = 3
 
 
 def _format_fb_listing(listing: Listing) -> str:
@@ -101,6 +107,13 @@ def _try_parse_json_dict(raw_content: str) -> Optional[dict]:
     return parsed if isinstance(parsed, dict) else None
 
 
+def _is_rate_limit_error(e: BaseException) -> bool:
+    """True if the exception indicates an OpenAI rate limit (429)."""
+    if isinstance(e, RateLimitError) and RateLimitError is not Exception:
+        return True
+    return getattr(e, "status_code", None) == 429 or "429" in str(e)
+
+
 def _create_sync_response(
     client: "OpenAI",
     *,
@@ -110,13 +123,22 @@ def _create_sync_response(
 ) -> Any:
     """
     Create a sync OpenAI Responses API request with shared defaults.
+    Retries on rate limit (429) after a short delay.
     """
-    return client.responses.create(
-        model=OPENAI_MODEL,
-        instructions=instructions,
-        input=prompt,
-        max_output_tokens=max_output_tokens,
-    )
+    for attempt in range(RATE_LIMIT_MAX_RETRIES):
+        try:
+            return client.responses.create(
+                model=OPENAI_MODEL,
+                instructions=instructions,
+                input=prompt,
+                max_output_tokens=max_output_tokens,
+            )
+        except Exception as e:
+            if _is_rate_limit_error(e) and attempt < RATE_LIMIT_MAX_RETRIES - 1:
+                logger.debug(f"Rate limit hit, waiting {RATE_LIMIT_RETRY_DELAY_SEC}s before retry ({attempt + 1}/{RATE_LIMIT_MAX_RETRIES})")
+                time.sleep(RATE_LIMIT_RETRY_DELAY_SEC)
+            else:
+                raise
 
 
 async def _create_async_response(
@@ -128,13 +150,22 @@ async def _create_async_response(
 ) -> Any:
     """
     Create an async OpenAI Responses API request with shared defaults.
+    Retries on rate limit (429) after a short delay.
     """
-    return await client.responses.create(
-        model=OPENAI_MODEL,
-        instructions=instructions,
-        input=prompt,
-        max_output_tokens=max_output_tokens,
-    )
+    for attempt in range(RATE_LIMIT_MAX_RETRIES):
+        try:
+            return await client.responses.create(
+                model=OPENAI_MODEL,
+                instructions=instructions,
+                input=prompt,
+                max_output_tokens=max_output_tokens,
+            )
+        except Exception as e:
+            if _is_rate_limit_error(e) and attempt < RATE_LIMIT_MAX_RETRIES - 1:
+                logger.debug(f"Rate limit hit, waiting {RATE_LIMIT_RETRY_DELAY_SEC}s before retry ({attempt + 1}/{RATE_LIMIT_MAX_RETRIES})")
+                await asyncio.sleep(RATE_LIMIT_RETRY_DELAY_SEC)
+            else:
+                raise
 
 
 def generate_ebay_query_for_listing(
@@ -208,83 +239,111 @@ def generate_ebay_query_for_listing(
         return None
 
 
-def _format_single_ebay_listing(listing: dict) -> str:
+def _format_ebay_batch(items: List[dict]) -> str:
     """
-    Format a single eBay listing as text for the filtering prompt.
-    Includes title, price, condition, and truncated description.
+    Format a batch of eBay items as text for the batch filtering prompt.
+    Items are numbered 1-based within the batch.
     """
-    title = listing.get('title', '')
-    price = listing.get('price', 0)
-    description = listing.get('description', '')
-    condition = listing.get('condition', '')
-    
-    listing_text = f"eBay listing:\n- Title: {title}\n- Price: ${price:.2f}"
-    if condition:
-        listing_text += f"\n- Condition: {condition}"
-    if description:
-        listing_text += f"\n- Description: {description}"
-    
-    return listing_text
+    parts = []
+    for i, item in enumerate(items):
+        title = item.get('title', '')
+        price = item.get('price', 0)
+        description = item.get('description', '')
+        condition = item.get('condition', '')
+        local_num = i + 1
+        line = f"{local_num}. {title} - ${price:.2f}"
+        if condition:
+            line += f" | Condition: {condition}"
+        if description:
+            desc_preview = description[:200] + "..." if len(description) > 200 else description
+            line += f"\n   Description: {desc_preview}"
+        parts.append(line)
+    return "\n".join(parts)
 
 
-async def _filter_single_item(
+def _try_parse_results_list(raw_content: str, expected_count: int) -> Optional[List[dict]]:
+    """
+    Parse batch filter response into a list of result dicts.
+    Expects a JSON array of objects with rejected and reason. Returns None if invalid.
+    """
+    content = _strip_markdown_code_fences(raw_content)
+    if not content:
+        return None
+    try:
+        parsed = json.loads(content)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(parsed, list) or len(parsed) != expected_count:
+        return None
+    if not all(isinstance(x, dict) for x in parsed):
+        return None
+    return parsed
+
+
+async def _filter_batch(
     client: "AsyncOpenAI",
     fb_listing_text: str,
-    item: dict,
-    item_index: int,
-) -> Tuple[int, bool, str]:
+    items: List[dict],
+    start_index: int,
+) -> List[Tuple[int, bool, str]]:
     """
-    Filter a single eBay item against a FB listing using OpenAI.
-    
-    Makes an async API call to determine if the eBay item is comparable to the FB listing.
-    Returns a tuple of (1-based item index, rejected boolean, reason string).
-    On API error, returns (index, False, "") to keep the item (fail-open).
-    """
-    ebay_item_text = _format_single_ebay_listing(item)
-    prompt = get_single_item_filtering_prompt(
-        fb_listing_text=fb_listing_text,
-        ebay_item_text=ebay_item_text,
-    )
+    Filter a batch of eBay items against a FB listing using OpenAI.
 
+    start_index: 1-based global index of the first item in this batch.
+    Returns list of (1-based global index, rejected, reason) for each item.
+    On API error or invalid response, keeps all items in the batch (fail-open).
+    """
+    if not items:
+        return []
+    ebay_items_text = _format_ebay_batch(items)
+    prompt = get_batch_filtering_prompt(
+        fb_listing_text=fb_listing_text,
+        ebay_items_text=ebay_items_text,
+    )
     try:
         response = await _create_async_response(
             client,
             instructions=RESULT_FILTERING_SYSTEM_MESSAGE,
             prompt=prompt,
-            max_output_tokens=SINGLE_ITEM_FILTER_MAX_OUTPUT_TOKENS,
+            max_output_tokens=BATCH_FILTER_MAX_OUTPUT_TOKENS,
         )
-
         raw_content = _extract_response_output_text(response)
         if not raw_content:
-            logger.debug(f"Item {item_index}: empty response — keeping item")
-            return (item_index, False, "")
-
-        result = _try_parse_json_dict(raw_content)
-        if result is None:
-            preview = raw_content[:200] or "empty"
-            logger.debug(f"Item {item_index}: invalid JSON ({preview}) — keeping item")
-            return (item_index, False, "")
-
-        rejected = bool(result.get("rejected", False))
-        reason = result.get("reason", "")
-        if not isinstance(reason, str):
-            reason = str(reason)
-        return (item_index, rejected, reason)
-
+            logger.debug(f"Batch {start_index}-{start_index + len(items) - 1}: empty response — keeping all")
+            logger.debug(f"Response content: {raw_content}")
+            return [(start_index + i, False, "") for i in range(len(items))]
+        results_list = _try_parse_results_list(raw_content, len(items))
+        if results_list is None:
+            logger.debug(f"Batch {start_index}-{start_index + len(items) - 1}: invalid JSON — keeping all")
+            logger.debug(f"Response content: {raw_content}")
+            return [(start_index + i, False, "") for i in range(len(items))]
+        out = []
+        for i, r in enumerate(results_list):
+            if not isinstance(r, dict):
+                out.append((start_index + i, False, ""))
+                continue
+            rejected = bool(r.get("rejected", False))
+            reason = r.get("reason", "")
+            if not isinstance(reason, str):
+                reason = str(reason)
+            out.append((start_index + i, rejected, reason))
+        return out
     except Exception as e:
-        logger.debug(f"Item {item_index}: API error ({type(e).__name__}: {e}) — keeping item")
-        return (item_index, False, "")
+        logger.debug(f"Batch {start_index}-{start_index + len(items) - 1}: API error ({e}) — keeping all")
+        return [(start_index + i, False, "") for i in range(len(items))]
 
 
 
 async def _filter_ebay_results_async(
     listing: Listing,
-    ebay_items: List[dict]
+    ebay_items: List[dict],
+    cancelled: Optional[threading.Event] = None,
 ) -> Optional[Tuple[List[int], List[dict], dict]]:
     """
-    Async implementation of eBay result filtering using parallel API calls.
-    
-    Creates one async OpenAI call per eBay item and runs them all concurrently.
+    Async implementation of eBay result filtering using batched API calls.
+
+    Chunks items into batches of 5 and runs one async OpenAI call per batch.
+    Runs batches sequentially so cancellation can be checked between each.
     Aggregates results into the same format as the original single-call version.
     """
     if not AsyncOpenAI:
@@ -293,26 +352,28 @@ async def _filter_ebay_results_async(
     if not OPENAI_API_KEY:
         logger.debug("Search suggestions not configured — skipping match filter")
         return None
-    
+
     if not ebay_items:
         return ([], ebay_items, {})
-    
+
+    if cancelled and cancelled.is_set():
+        raise SearchCancelledError("Search was cancelled by user")
+
     client = AsyncOpenAI(api_key=OPENAI_API_KEY)
     fb_listing_text = _format_fb_listing(listing)
-    
-    # Create tasks for all items (1-based indices)
-    tasks = [
-        _filter_single_item(
-            client=client,
-            fb_listing_text=fb_listing_text,
-            item=item,
-            item_index=i + 1,
-        )
-        for i, item in enumerate(ebay_items)
-    ]
-    
-    # Run all filtering tasks in parallel
-    results = await asyncio.gather(*tasks)
+
+    batches = []
+    for i in range(0, len(ebay_items), POST_FILTER_BATCH_SIZE):
+        batch = ebay_items[i : i + POST_FILTER_BATCH_SIZE]
+        start_index = i + 1
+        batches.append((batch, start_index))
+
+    results = []
+    for batch, start_index in batches:
+        if cancelled and cancelled.is_set():
+            raise SearchCancelledError("Search was cancelled by user")
+        batch_result = await _filter_batch(client, fb_listing_text, batch, start_index)
+        results.extend(batch_result)
     
     # Aggregate results
     comparable_indices = []
@@ -350,15 +411,16 @@ async def _filter_ebay_results_async(
 
 def filter_ebay_results_with_openai(
     listing: Listing,
-    ebay_items: List[dict]
+    ebay_items: List[dict],
+    cancelled: Optional[threading.Event] = None,
 ) -> Optional[Tuple[List[int], List[dict], dict]]:
     """
     Filter eBay search results to keep only items comparable to the Facebook Marketplace listing.
-    
-    Makes parallel async OpenAI calls (one per eBay item) to analyze each item's title,
-    description, and condition and compare them to the FB listing. Removes items that are
-    accessories, different models, or otherwise not comparable. This improves price comparison
-    accuracy by ensuring only truly similar items are used for calculating the market average.
+
+    Chunks eBay items into batches of 5 and makes parallel async OpenAI calls (one per batch)
+    to analyze each item's title, description, and condition against the FB listing. Removes
+    items that are accessories, different models, or otherwise not comparable. This improves
+    price comparison accuracy by ensuring only truly similar items are used for the market average.
     
     Returns tuple of (comparable_indices, filtered list of eBay items, reasons dict) or None if filtering fails.
     comparable_indices is a list of 1-based indices of items that passed filtering.
@@ -386,12 +448,14 @@ def filter_ebay_results_with_openai(
             with concurrent.futures.ThreadPoolExecutor() as executor:
                 future = executor.submit(
                     asyncio.run,
-                    _filter_ebay_results_async(listing, ebay_items)
+                    _filter_ebay_results_async(listing, ebay_items, cancelled),
                 )
                 return future.result()
         except RuntimeError:
             # No running event loop, we can use asyncio.run directly
-            return asyncio.run(_filter_ebay_results_async(listing, ebay_items))
+            return asyncio.run(_filter_ebay_results_async(listing, ebay_items, cancelled))
+    except SearchCancelledError:
+        raise
     except Exception as e:
         logger.warning(f"Match check failed: {e} — using all listings")
         return None
