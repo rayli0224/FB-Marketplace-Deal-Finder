@@ -490,17 +490,12 @@ class FBMarketplaceScraper:
         sale_price: Optional[float] = None
         title = ""
 
-        for i, item in enumerate(items):
+        for item in items:
             text = item.get("text", "").strip()
             is_strike = item.get("is_strikethrough", False)
             parsed = parse_price(text)
-            logger.debug(
-                "Strikethrough item [%d]: %r strike=%s parsed=%s",
-                i, text[:50], is_strike, parsed,
-            )
             if parsed is not None and not is_strike and sale_price is None:
                 sale_price = parsed
-                logger.debug("Strikethrough: using sale price %.2f from %r", sale_price, text[:30])
             is_location = bool(text and re.search(r",\s*[A-Z]{2}$", text))
             if (
                 not is_strike
@@ -513,7 +508,6 @@ class FBMarketplaceScraper:
             ):
                 if not title:
                     title = text
-                    logger.debug("Strikethrough: using title %r", title[:50])
 
         return sale_price, title
 
@@ -559,10 +553,8 @@ class FBMarketplaceScraper:
         if not t:
             return False
         if t.lower() in (x.lower() for x in INCORRECT_TITLES):
-            logger.debug("Skipping incorrect title: %r", t)
             return True
         if PRICE_LIKE_LINE_RE.match(t):
-            logger.debug("Skipping price-like title: %r", t)
             return True
         return False
 
@@ -606,8 +598,7 @@ class FBMarketplaceScraper:
         """
         try:
             all_lines = element.inner_text().strip().split("\n")
-            logger.debug("Title text analysis: %d lines %r", len(all_lines), all_lines[:8])
-            
+
             for line in all_lines:
                 line = line.strip()
                 if not line:
@@ -617,7 +608,6 @@ class FBMarketplaceScraper:
                 if re.match(r'^[\$0-9.\s]+$', line):
                     continue
                 if re.search(r'[A-Za-z]', line):
-                    logger.debug("Title picked (pass1): %r", line[:60])
                     return line
             
             for line in all_lines:
@@ -930,10 +920,8 @@ class FBMarketplaceScraper:
             
             dom_data = self._get_strikethrough_dom_order(element)
             if dom_data.get("has_strikethrough"):
-                logger.debug("Strikethrough detected — using DOM-order extraction")
                 price, title = self._extract_with_strikethrough_logic(element, dom_data)
                 if not price and not title:
-                    logger.debug("Strikethrough path yielded nothing — falling back to standard")
                     price = self._extract_price(element)
                     title = self._extract_title(element, price) if price else ""
                 elif not title:
@@ -963,7 +951,6 @@ class FBMarketplaceScraper:
                 description = ""  # Skip description extraction for performance
             
             if title and PRICE_LIKE_LINE_RE.match(title.strip()) and price:
-                logger.debug("Price-like title %r — trying DOM fallback", title[:50])
                 title = self._try_extract_title_by_dom_structure(element, price)
 
             if title and price:
