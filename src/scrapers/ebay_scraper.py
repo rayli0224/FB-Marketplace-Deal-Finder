@@ -123,6 +123,7 @@ class EbayBrowseAPIClient:
         """
         token = self._get_access_token()
         if not token:
+            logger.error("Failed to get eBay access token")
             return None
         
         all_items = []
