@@ -14,6 +14,7 @@ import os
 import json
 import subprocess
 import time
+import threading
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
@@ -81,6 +82,16 @@ class FacebookNotLoggedInError(Exception):
     pass
 
 
+class SearchCancelledError(Exception):
+    """
+    Raised when a search is cancelled by the user.
+    
+    This exception is raised when the cancellation event is set, allowing the scraper
+    to exit early and clean up resources.
+    """
+    pass
+
+
 @dataclass
 class Listing:
     title: str
@@ -97,9 +108,12 @@ class FBMarketplaceScraper:
     
     MARKETPLACE_SEARCH_URL = "https://www.facebook.com/marketplace/search"
     
-    def __init__(self, headless: bool = None, cookies_file: str = None):
+    def __init__(self, headless: bool = None, cookies_file: str = None, cancelled: Optional[threading.Event] = None):
         """
         Initialize the Facebook Marketplace scraper. Loads cookies from JSON file.
+        
+        cancelled: Optional threading.Event that signals cancellation when set. The scraper
+        will check this event at key points and exit early if cancellation is requested.
         """
         if headless is None:
             self.headless = os.environ.get("DISPLAY") is None
@@ -107,11 +121,24 @@ class FBMarketplaceScraper:
             self.headless = headless
         
         self.cookies_file = cookies_file or COOKIES_FILE
+        self.cancelled = cancelled
+        self._is_closed = False
         self.playwright = None
         self.browser: Optional[Browser] = None
         self.context: Optional[BrowserContext] = None
         self.page: Optional[Page] = None
         self._chrome_process: Optional[subprocess.Popen] = None
+    
+    def _check_cancelled(self):
+        """Check if cancellation was requested and raise SearchCancelledError if so.
+
+        Called between Playwright operations on the scraper thread. Since we're not
+        blocked in a Playwright call at this point, close() works normally here.
+        """
+        if self.cancelled and self.cancelled.is_set():
+            if not self._is_closed:
+                self.close()
+            raise SearchCancelledError("Search was cancelled by user")
     
     def _load_cookies(self) -> List[dict]:
         """Load cookies from JSON file."""
@@ -204,11 +231,21 @@ class FBMarketplaceScraper:
     def _create_browser(self):
         """Create a Playwright browser with stealth settings and load cookies.
 
-        In headed mode (debug), launches Chromium manually with a remote debugging
-        port so you can view the browser live at http://localhost:9222 from your
-        host machine. Playwright connects to it via CDP instead of launching its
-        own instance (which would use a pipe and block the debugging port).
+        Launches Chromium manually via subprocess for both headed and headless modes,
+        then connects via CDP. Using subprocess directly ensures we always have a
+        process reference that can be killed immediately from any thread when the
+        user cancels a search (Playwright's sync API serializes operations, so calling
+        browser.close() from a different thread would block).
+
+        In headed mode (debug), a debug proxy is started so you can view the browser
+        live at http://localhost:9222 from your host machine.
         """
+        self._check_cancelled()
+        
+        # If browser was closed due to cancellation, reset state
+        if self._is_closed:
+            self._is_closed = False
+        
         self.playwright = sync_playwright().start()
 
         chrome_args = [
@@ -218,23 +255,34 @@ class FBMarketplaceScraper:
             "--window-size=1920,1080",
         ]
 
+        self._check_cancelled()
+        chrome_path = self.playwright.chromium.executable_path
+
+        # Build launch command — always via subprocess so we can kill the process
+        # directly on cancellation without going through Playwright's sync API.
+        launch_args = [chrome_path]
+        if self.headless:
+            launch_args.append("--headless")
+        launch_args.extend([
+            f"--remote-debugging-port={CHROME_DEBUG_PORT}",
+            "--remote-allow-origins=*",
+            *chrome_args,
+            "about:blank",
+        ])
+
+        self._chrome_process = subprocess.Popen(launch_args)
+        self._wait_for_chrome_debug_port()
+
+        self._check_cancelled()
+
         if not self.headless:
-            chrome_path = self.playwright.chromium.executable_path
-            self._chrome_process = subprocess.Popen([
-                chrome_path,
-                f"--remote-debugging-port={CHROME_DEBUG_PORT}",
-                "--remote-allow-origins=*",
-                *chrome_args,
-                "about:blank",
-            ])
-            self._wait_for_chrome_debug_port()
             start_debug_proxy()
-            self.browser = self.playwright.chromium.connect_over_cdp(f"http://localhost:{CHROME_DEBUG_PORT}")
-        else:
-            self.browser = self.playwright.chromium.launch(
-                headless=True,
-                args=chrome_args,
-            )
+
+        self.browser = self.playwright.chromium.connect_over_cdp(
+            f"http://localhost:{CHROME_DEBUG_PORT}"
+        )
+        
+        self._check_cancelled()
         
         self.context = self.browser.new_context(
             viewport={"width": 1920, "height": 1080},
@@ -242,6 +290,8 @@ class FBMarketplaceScraper:
             locale="en-US",
             timezone_id="America/New_York",
         )
+        
+        self._check_cancelled()
         
         self.context.add_init_script("""
             Object.defineProperty(navigator, 'webdriver', {
@@ -254,7 +304,11 @@ class FBMarketplaceScraper:
         if cookies:
             self.context.add_cookies(cookies)
         
+        self._check_cancelled()
+        
         self.page = self.context.new_page()
+        
+        self._check_cancelled()
         
         if not self.headless:
             on_inspector_url = getattr(self, "_on_inspector_url", None)
@@ -288,10 +342,14 @@ class FBMarketplaceScraper:
         Bypasses the homepage and search bar; the query is in the URL so we land on results
         immediately and can set location without waiting for the search bar to render.
         """
+        self._check_cancelled()
         url = f"{self.MARKETPLACE_SEARCH_URL}?query={urllib.parse.quote(query)}"
         self.page.goto(url, wait_until="domcontentloaded", timeout=NAVIGATION_TIMEOUT_MS)
+        self._check_cancelled()
         self._check_logged_in()
+        self._check_cancelled()
         self.page.wait_for_selector(SEARCH_RESULTS_SELECTOR, timeout=ELEMENT_WAIT_TIMEOUT_MS)
+        self._check_cancelled()
 
     def _set_location(self, zip_code: str, radius: int):
         """Open the location dialog, set zip code and radius, then apply the filters.
@@ -302,27 +360,38 @@ class FBMarketplaceScraper:
         for the search results to reload with the new filters applied.
         """
         try:
+            self._check_cancelled()
             location_pill = self.page.locator(LOCATION_PILL_SELECTOR).first
             location_pill.click(timeout=ACTION_TIMEOUT_MS)
+            self._check_cancelled()
             random_delay(0.5, 1)
 
             self._set_radius(radius)
+            self._check_cancelled()
             random_delay(0.3, 0.6)
 
             location_input = self.page.locator(LOCATION_INPUT_SELECTOR).first
             location_input.fill(zip_code, timeout=ACTION_TIMEOUT_MS)
+            self._check_cancelled()
             random_delay(0.4, 0.8)
             location_input.press("ArrowDown")
+            self._check_cancelled()
             random_delay(0.2, 0.4)
             location_input.press("Enter")
+            self._check_cancelled()
             random_delay(0.5, 1)
 
             apply_button = self.page.locator(LOCATION_APPLY_SELECTOR).first
             apply_button.click(timeout=ACTION_TIMEOUT_MS)
+            self._check_cancelled()
 
             random_delay(2, 3)
+            self._check_cancelled()
             self.page.wait_for_selector(SEARCH_RESULTS_SELECTOR, timeout=ELEMENT_WAIT_TIMEOUT_MS)
+            self._check_cancelled()
 
+        except SearchCancelledError:
+            raise
         except FacebookNotLoggedInError:
             raise
         except Exception as e:
@@ -337,13 +406,16 @@ class FBMarketplaceScraper:
         This approach reliably triggers React's event handlers. Once the listbox appears,
         selects the option matching the requested miles value.
         """
+        self._check_cancelled()
         timeout = ACTION_TIMEOUT_MS
         option_text = f"{radius} miles"
 
         combobox = self.page.get_by_role("combobox", name="Radius")
         combobox.wait_for(state="visible", timeout=timeout)
+        self._check_cancelled()
         combobox.scroll_into_view_if_needed(timeout=timeout)
         random_delay(0.3, 0.5)
+        self._check_cancelled()
 
         box = combobox.bounding_box(timeout=timeout)
         if not box:
@@ -354,14 +426,18 @@ class FBMarketplaceScraper:
         cy = box["y"] + box["height"] / 2
         self.page.mouse.move(cx, cy)
         random_delay(0.1, 0.2)
+        self._check_cancelled()
         self.page.mouse.down()
         random_delay(0.05, 0.1)
         self.page.mouse.up()
         random_delay(0.5, 1)
+        self._check_cancelled()
 
         listbox = self.page.locator("[role='listbox']").first
         listbox.wait_for(state="visible", timeout=timeout)
+        self._check_cancelled()
         self.page.get_by_role("option", name=option_text).click(timeout=timeout)
+        self._check_cancelled()
 
     def _find_price_element(self, element, target_price: Optional[float] = None):
         """
@@ -585,16 +661,25 @@ class FBMarketplaceScraper:
         and extracts the description content that appears underneath it. Tries multiple strategies:
         finding sibling elements, parent containers, and text analysis. Filters out Facebook
         internal JSON/script content. Returns empty string if description cannot be found or
-        if navigation fails.
+        if navigation fails. Checks for cancellation and exits early if requested.
         """
+        self._check_cancelled()
+        
         description = ""
         detail_page = None
         
         try:
             # Open detail page in new page to avoid losing search results context
             detail_page = self.context.new_page()
+            
+            self._check_cancelled()
+            
             detail_page.goto(url, wait_until="networkidle", timeout=15000)
+            
+            self._check_cancelled()
+            
             random_delay(2, 3)
+            self._check_cancelled()
             
             # Find "Details" text and get the description underneath
             details_selectors = [
@@ -681,6 +766,8 @@ class FBMarketplaceScraper:
                 except Exception:
                     continue
             
+        except SearchCancelledError:
+            raise
         except Exception as e:
             logger.debug(f"Failed to extract description from {url}: {e}")
         finally:
@@ -695,8 +782,10 @@ class FBMarketplaceScraper:
     def _scroll_page_to_load_content(self):
         """Scroll the page to load more listing content."""
         for _ in range(SCROLL_ATTEMPTS):
+            self._check_cancelled()
             self.page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
             random_delay(1, 2)
+            self._check_cancelled()
     
     def _find_listing_elements(self) -> List:
         """
@@ -755,7 +844,10 @@ class FBMarketplaceScraper:
             
             # Extract description from detail page if enabled
             if extract_descriptions:
-                description = self._extract_description_from_detail_page(url)
+                try:
+                    description = self._extract_description_from_detail_page(url)
+                except SearchCancelledError:
+                    description = ""
             else:
                 description = ""  # Skip description extraction for performance
             
@@ -785,13 +877,21 @@ class FBMarketplaceScraper:
 
         Scrolls to load content, locates listing DOM elements, then iterates
         up to max_listings of them and parses each into a Listing.
+        Checks for cancellation at each iteration and exits early if requested.
         """
         listings = []
         try:
+            self._check_cancelled()
+            
             self._scroll_page_to_load_content()
+            
+            self._check_cancelled()
+            
             listing_elements = self._find_listing_elements()
             total = min(len(listing_elements), max_listings)
             for element in listing_elements[:max_listings]:
+                self._check_cancelled()
+                
                 listing = self._extract_listing_from_element(element, extract_descriptions=extract_descriptions)
                 if listing:
                     idx = len(listings) + 1
@@ -808,6 +908,8 @@ class FBMarketplaceScraper:
                     if on_listing_found:
                         on_listing_found(listing, len(listings))
             
+        except SearchCancelledError:
+            raise
         except Exception as e:
             logger.warning("Reading the list of listings from the page failed — %s", e)
         
@@ -857,16 +959,35 @@ class FBMarketplaceScraper:
             logger.info("ℹ️ Descriptions toggled off — not fetching listing descriptions")
         try:
             with wait_status(logger, "Facebook Marketplace search"):
+                self._check_cancelled()
+                
                 if not self.browser:
                     self._create_browser()
+                
+                self._check_cancelled()
+                
                 self._goto_search_results(query)
+                
+                self._check_cancelled()
+                
                 self._set_location(zip_code, radius)
+                
+                self._check_cancelled()
+                
                 listings = self._extract_listings(
                     max_listings=max_listings,
                     on_listing_found=on_listing_found,
                     extract_descriptions=extract_descriptions,
                 )
             return listings
+        except SearchCancelledError:
+            return []
+        except Exception:
+            # When Chrome is killed on cancellation, Playwright throws a generic error
+            # (e.g. "browser has been closed"). Treat any error while cancelled as cancellation.
+            if self.cancelled and self.cancelled.is_set():
+                return []
+            raise
         finally:
             clear_step_indent()
     
@@ -876,18 +997,32 @@ class FBMarketplaceScraper:
         Each step is wrapped independently so a failure in one (e.g. page
         already closed) does not prevent the remaining resources from being
         released. The Chrome subprocess is terminated and, if it doesn't
-        exit within 5 seconds, killed.
+        exit within 5 seconds, killed. Safe to call multiple times.
+        Resets browser references so a new search can start fresh.
         """
+        if self._is_closed:
+            return
+        
+        self._is_closed = True
+        
         if self.page:
             try:
                 self.page.close()
             except Exception:
                 pass
+            self.page = None
+        if self.context:
+            try:
+                self.context.close()
+            except Exception:
+                pass
+            self.context = None
         if self.browser:
             try:
                 self.browser.close()
             except Exception:
                 pass
+            self.browser = None
         if self._chrome_process:
             try:
                 self._chrome_process.terminate()
@@ -903,6 +1038,12 @@ class FBMarketplaceScraper:
                 self.playwright.stop()
             except Exception:
                 pass
+            self.playwright = None
+
+
+# Global registry to store active scraper instances for immediate cancellation
+_active_scrapers: dict[int, 'FBMarketplaceScraper'] = {}
+_scraper_lock = threading.Lock()
 
 
 def search_marketplace(
@@ -915,14 +1056,23 @@ def search_marketplace(
     extract_descriptions: bool = False,
     step_sep: Optional[str] = "main",
     on_inspector_url: Optional[Callable[[str], None]] = None,
+    cancelled: Optional[threading.Event] = None,
 ) -> List[Listing]:
     """
     Run a one-off Facebook Marketplace search and return the results.
 
     step_sep: "main" = main step separator; "sub" = section separator; None = plain title only.
     on_inspector_url: optional callback invoked with the DevTools inspector URL when browser is created (headed mode).
+    cancelled: Optional threading.Event that signals cancellation when set. The scraper will check this
+    event at key points and exit early if cancellation is requested.
     """
-    scraper = FBMarketplaceScraper(headless=headless)
+    scraper = FBMarketplaceScraper(headless=headless, cancelled=cancelled)
+    thread_id = threading.get_ident()
+    
+    # Register scraper for immediate cancellation access
+    with _scraper_lock:
+        _active_scrapers[thread_id] = scraper
+    
     try:
         return scraper.search_marketplace(
             query, zip_code, radius,
@@ -932,6 +1082,43 @@ def search_marketplace(
             step_sep=step_sep,
             on_inspector_url=on_inspector_url,
         )
+    except SearchCancelledError:
+        return []
+    except Exception:
+        # When Chrome is killed on cancellation, Playwright throws a generic error.
+        # Treat any error while cancelled as cancellation.
+        if cancelled and cancelled.is_set():
+            return []
+        raise
     finally:
+        # Always ensure browser is closed and resources are cleaned up
         scraper.close()
+        # Unregister scraper
+        with _scraper_lock:
+            _active_scrapers.pop(thread_id, None)
+
+
+def force_close_active_scraper(thread_id: Optional[int] = None):
+    """
+    Kill the Chrome process for an active scraper, typically called when cancellation is detected.
+
+    Uses subprocess.kill() (SIGKILL) to terminate Chrome immediately. This bypasses
+    Playwright's sync API entirely — important because Playwright serializes operations,
+    so calling browser.close() from a different thread would block until the current
+    Playwright operation finishes. Killing the process is instant and causes all pending
+    Playwright operations on the scraper thread to fail, which unblocks that thread.
+
+    The scraper's normal close() (which cleans up Playwright) runs later in the finally
+    block on the scraper thread, after the killed-Chrome error propagates up.
+    """
+    if thread_id is None:
+        thread_id = threading.get_ident()
+    
+    with _scraper_lock:
+        scraper = _active_scrapers.get(thread_id)
+        if scraper and scraper._chrome_process:
+            try:
+                scraper._chrome_process.kill()
+            except Exception as e:
+                logger.warning(f"Could not kill Chrome process: {e}")
 

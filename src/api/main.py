@@ -18,13 +18,17 @@ from typing import List, Optional
 RADIUS_OPTIONS = (1, 2, 5, 10, 20, 40, 60, 80, 100, 250, 500)
 DEFAULT_RADIUS = 20
 
-from src.scrapers.fb_marketplace_scraper import search_marketplace as search_fb_marketplace, FacebookNotLoggedInError
+from src.scrapers.fb_marketplace_scraper import search_marketplace as search_fb_marketplace, FacebookNotLoggedInError, SearchCancelledError, force_close_active_scraper
 from src.scrapers.ebay_scraper import get_market_price, DEFAULT_EBAY_ITEMS
 from src.api.deal_calculator import score_listings
 from src.utils.listing_processor import process_single_listing
 from src.utils.colored_logger import setup_colored_logger, log_step_sep, log_step_title, log_error_short, wait_status
 
 logger = setup_colored_logger("api")
+
+# Active search state for immediate cancellation from a separate HTTP request.
+_active_search: dict = {"cancelled": None, "thread_id": None}
+_active_search_lock = threading.Lock()
 
 
 class QueueLogHandler(logging.Handler):
@@ -299,6 +303,19 @@ def search_deals(request: SearchRequest):
     )
 
 
+@app.post("/api/search/cancel")
+def cancel_search():
+    """Cancel the currently running search immediately. Called when the user clicks cancel."""
+    with _active_search_lock:
+        cancelled = _active_search.get("cancelled")
+        thread_id = _active_search.get("thread_id")
+    if cancelled is not None:
+        cancelled.set()
+    if thread_id is not None:
+        force_close_active_scraper(thread_id)
+    return {"ok": True}
+
+
 @app.post("/api/search/stream")
 def search_deals_stream(request: SearchRequest):
     """
@@ -361,7 +378,10 @@ def search_deals_stream(request: SearchRequest):
                 extract_descriptions=request.extractDescriptions,
                 step_sep=None,
                 on_inspector_url=on_inspector_url if DEBUG_MODE else None,
+                cancelled=cancelled,
             )
+        except SearchCancelledError:
+            return
         except FacebookNotLoggedInError:
             auth_failed = True
             if not cancelled.is_set():
@@ -387,6 +407,7 @@ def search_deals_stream(request: SearchRequest):
                 if ev.get("type") in ("debug_log", "progress", _EVENT_INSPECTOR_URL):
                     yield f"data: {json.dumps(ev)}\n\n"
 
+        thread_id: Optional[int] = None
         try:
             log_step_sep(logger, f"🔍 Step 1: Starting search — query='{request.query}', zip={request.zipCode}, radius={request.radius}mi")
             log_step_sep(logger, "📜 Step 2: Scraping Facebook Marketplace")
@@ -406,12 +427,17 @@ def search_deals_stream(request: SearchRequest):
 
             thread = threading.Thread(target=scrape_worker)
             thread.start()
-            
+            thread_id = thread.ident
+
+            with _active_search_lock:
+                _active_search["cancelled"] = cancelled
+                _active_search["thread_id"] = thread_id
+
             # Stream progress events with timeout to check for cancellation
             while True:
                 # Check for cancellation first, even if queue has items
                 if cancelled.is_set():
-                    logger.info("⚠️ Search cancelled by client - stopping event stream")
+                    force_close_active_scraper(thread_id)
                     break
                 
                 try:
@@ -420,7 +446,7 @@ def search_deals_stream(request: SearchRequest):
                     
                     # Check cancellation again after getting event (cancellation may have happened while waiting)
                     if cancelled.is_set():
-                        logger.info("⚠️ Search cancelled by client - stopping event stream")
+                        force_close_active_scraper(thread_id)
                         break
                     
                     if event["type"] == "auth_error":
@@ -434,15 +460,15 @@ def search_deals_stream(request: SearchRequest):
                     # debug_log and progress events are yielded so the frontend can display them
                     # Check cancellation before yielding (client may have disconnected)
                     if cancelled.is_set():
-                        logger.info("⚠️ Search cancelled by client - stopping event stream")
+                        force_close_active_scraper(thread_id)
                         break
 
                     try:
                         yield f"data: {json.dumps(event)}\n\n"
-                    except (GeneratorExit, BrokenPipeError, ConnectionResetError, ConnectionAbortedError) as e:
-                        # Client disconnected during yield - signal cancellation and re-raise
-                        logger.info(f"⚠️ Client disconnected during yield ({type(e).__name__}) - cancelling search")
+                    except (GeneratorExit, BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
                         cancelled.set()
+                        # Force close browser immediately for the scraping thread
+                        force_close_active_scraper(thread_id)
                         raise
                 except queue.Empty:
                     # Queue is empty, continue loop to check cancellation again
@@ -456,14 +482,10 @@ def search_deals_stream(request: SearchRequest):
                 if thread.is_alive():
                     logger.warning("⚠️ Scraping thread still running after join timeout")
             else:
-                logger.info("⚠️ Search cancelled - waiting for scraping thread to exit")
                 # Give thread a moment to check cancelled flag and exit
                 thread.join(timeout=2.0)
-                if thread.is_alive():
-                    logger.warning("⚠️ Scraping thread still running after cancellation")
             
             if cancelled.is_set():
-                logger.info("⚠️ Search cancelled - aborting processing")
                 return
 
             yield from drain_log_queue()
@@ -539,7 +561,6 @@ def search_deals_stream(request: SearchRequest):
 
             while True:
                 if cancelled.is_set():
-                    logger.info("⚠️ Search cancelled - aborting processing")
                     return
                 try:
                     event = event_queue.get(timeout=0.5)
@@ -571,10 +592,10 @@ def search_deals_stream(request: SearchRequest):
                 "threshold": request.threshold,
             }
             yield f"data: {json.dumps(done_event)}\n\n"
-        except (GeneratorExit, BrokenPipeError, ConnectionResetError, ConnectionAbortedError) as e:
-            # Client disconnected - signal cancellation
-            logger.info(f"⚠️ Client disconnected ({type(e).__name__}) - cancelling search")
+        except (GeneratorExit, BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
             cancelled.set()
+            if thread_id is not None:
+                force_close_active_scraper(thread_id)
             raise
         except Exception as e:
             # Other errors - still signal cancellation to stop background work
@@ -582,6 +603,9 @@ def search_deals_stream(request: SearchRequest):
             cancelled.set()
             raise
         finally:
+            with _active_search_lock:
+                _active_search["cancelled"] = None
+                _active_search["thread_id"] = None
             if debug_log_handler is not None:
                 for name in _DEBUG_LOG_LOGGER_NAMES:
                     try:
