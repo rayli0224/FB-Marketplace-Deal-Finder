@@ -10,6 +10,7 @@ Uses eBay Browse API (OAuth 2.0) - returns active listings only, not sold items.
 import statistics
 import os
 import json
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from typing import Optional, List
 import time
@@ -24,7 +25,11 @@ EBAY_APP_ID = os.environ.get("EBAY_APP_ID", "")
 EBAY_CLIENT_SECRET = os.environ.get("EBAY_CLIENT_SECRET", "")
 
 # Default number of eBay listings to fetch for price comparison
-DEFAULT_EBAY_ITEMS = 50
+DEFAULT_EBAY_ITEMS = 25
+
+# Parallel fetch settings for getItem details
+DETAIL_FETCH_DELAY_MS = 100
+DETAIL_FETCH_MAX_WORKERS = 10
 
 
 @dataclass
@@ -344,8 +349,9 @@ class EbayBrowseAPIClient:
         """
         Enhance item summaries with detailed information from getItem API.
         
-        Fetches detailed information for each item and merges it into the item dict.
-        Adds fields like description, condition, seller info, etc.
+        Fetches detailed information for each item in parallel with a small stagger
+        between requests to avoid rate limiting. Adds fields like description,
+        condition, seller info, etc.
         
         Args:
             items: List of item dicts with at least itemId field
@@ -354,43 +360,46 @@ class EbayBrowseAPIClient:
         Returns:
             List of enhanced item dicts with additional fields from getItem
         """
-        enhanced_items = []
-        success_count = 0
-        
-        for idx, item in enumerate(items):
+        delay_sec = DETAIL_FETCH_DELAY_MS / 1000.0
+        results: dict[int, dict] = {}
+
+        def fetch_one(idx: int, item: dict) -> tuple[int, dict]:
+            time.sleep(idx * delay_sec)
             item_id = item.get("itemId")
             if not item_id:
-                # If no itemId, preserve title, price, and url
-                enhanced_items.append({
+                return idx, {
                     "title": item.get("title", ""),
                     "price": item.get("price", 0),
                     "url": item.get("url", ""),
-                })
-                continue
-            
+                }
+
             details = self.get_item_details(item_id, marketplace)
             if details:
-                # Explicitly preserve specified fields including url
-                enhanced_item = {
+                return idx, {
                     "title": item.get("title", ""),
                     "price": item.get("price", 0),
                     "url": item.get("url", ""),
                     "description": details.get("shortDescription", ""),
                     "condition": details.get("condition", ""),
                 }
-                enhanced_items.append(enhanced_item)
-                success_count += 1
-            else:
-                # If getItem failed, preserve title, price, and url
-                enhanced_items.append({
-                    "title": item.get("title", ""),
-                    "price": item.get("price", 0),
-                    "url": item.get("url", ""),
-                })
-        
+            return idx, {
+                "title": item.get("title", ""),
+                "price": item.get("price", 0),
+                "url": item.get("url", ""),
+            }
+
+        with ThreadPoolExecutor(max_workers=DETAIL_FETCH_MAX_WORKERS) as executor:
+            futures = {executor.submit(fetch_one, idx, item): idx for idx, item in enumerate(items)}
+
+            for future in as_completed(futures):
+                idx, enhanced = future.result()
+                results[idx] = enhanced
+
+        enhanced_items = [results[i] for i in range(len(items))]
+        success_count = sum(1 for r in enhanced_items if "description" in r)
         if success_count < len(items):
             logger.debug(f"Successfully enhanced {success_count}/{len(items)} items with getItem details")
-        
+
         return enhanced_items
     
     def get_active_listing_stats(
