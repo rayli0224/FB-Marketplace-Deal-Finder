@@ -9,11 +9,11 @@ A PR already exists for the current branch. Find it and modify it using MCP (do 
 
 ## Description rules
 - Use **only** changes introduced in this branch.
-- Write in **plain English**, not as an implementation checklist. Describe what the change does, how it behaves, and why it matters to the reader.
-- Use bullet points for readability and to separate distinct ideas. Each bullet should stand on its own.
-- Focus on intent and behavior; keep implementation details out of the main bullets.
-- Avoid change logs, file listings, or step-by-step implementation lists.
-- Avoid vague or generic language. Preserve wording from the code or surrounding context when available.
+- Do **not** list implementation details. Do not mention files, functions, refactors, or how the code was built.
+- Explain **what changed** from the user’s point of view: what they will experience and why it matters.
+- Write in **plain English** with bullet points. Each bullet should stand on its own.
+- Avoid change logs, file listings, and step-by-step implementation lists.
+- Avoid vague or generic language. Preserve wording from the product or UI when it helps.
 - If related PRs exist, link them explicitly (e.g. `#123`); omit the section if none.
 
 ## Testing
