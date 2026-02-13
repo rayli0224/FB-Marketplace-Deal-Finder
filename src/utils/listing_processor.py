@@ -8,6 +8,7 @@ listings are returned regardless of threshold or eBay data availability.
 """
 
 from typing import Dict, Optional
+import asyncio
 import threading
 
 from src.scrapers.fb_marketplace_scraper import Listing, SearchCancelledError
@@ -136,6 +137,9 @@ def _process_listing_inner(
     if ebay_items:
         with wait_status(logger, "matching listings"):
             filter_result = filter_ebay_results_with_openai(listing, ebay_items, cancelled=cancelled)
+        if filter_result is not None and asyncio.iscoroutine(filter_result):
+            logger.warning("Filter returned coroutine instead of result — using all listings")
+            filter_result = None
         if filter_result is not None:
             comparable_indices, filtered_items, filter_reasons = filter_result
 
