@@ -123,6 +123,7 @@ class EbayBrowseAPIClient:
         """
         token = self._get_access_token()
         if not token:
+            logger.error("Failed to get eBay access token")
             return None
         
         all_items = []
@@ -220,15 +221,7 @@ class EbayBrowseAPIClient:
                     
                     filters.extend(validated_filters)
             
-            # Only add default filters if no API-provided filters were given
-            # This allows OpenAI to have full control over filtering when it provides parameters
-            if not filters:
-                # Default filters: Fixed price only (no auctions) and common good conditions
-                filters = [
-                    "buyingOptions:{FIXED_PRICE}",
-                    "itemCondition:{NEW|NEW_OTHER|NEW_WITH_DEFECTS|CERTIFIED_REFURBISHED|EXCELLENT_REFURBISHED|VERY_GOOD_REFURBISHED|USED}",
-                ]
-            else:
+            if filters:
                 # If OpenAI provided filters, only add buyingOptions if not already present
                 # This ensures we still filter out auctions unless OpenAI explicitly wants them
                 has_buying_options = any("buyingOptions:" in f for f in filters)
@@ -367,29 +360,32 @@ class EbayBrowseAPIClient:
         for idx, item in enumerate(items):
             item_id = item.get("itemId")
             if not item_id:
-                # If no itemId, preserve only title and price
+                # If no itemId, preserve title, price, and url
                 enhanced_items.append({
                     "title": item.get("title", ""),
                     "price": item.get("price", 0),
+                    "url": item.get("url", ""),
                 })
                 continue
             
             details = self.get_item_details(item_id, marketplace)
             if details:
-                # Explicitly preserve only specified fields
+                # Explicitly preserve specified fields including url
                 enhanced_item = {
                     "title": item.get("title", ""),
                     "price": item.get("price", 0),
+                    "url": item.get("url", ""),
                     "description": details.get("shortDescription", ""),
                     "condition": details.get("condition", ""),
                 }
                 enhanced_items.append(enhanced_item)
                 success_count += 1
             else:
-                # If getItem failed, preserve only title and price
+                # If getItem failed, preserve title, price, and url
                 enhanced_items.append({
                     "title": item.get("title", ""),
                     "price": item.get("price", 0),
+                    "url": item.get("url", ""),
                 })
         
         if success_count < len(items):

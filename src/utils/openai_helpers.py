@@ -7,7 +7,6 @@ search queries and filter eBay results to match Facebook Marketplace listings.
 
 import os
 import json
-import re
 from typing import Optional, Tuple, List
 
 try:
@@ -21,6 +20,7 @@ from src.utils.prompts import (
     QUERY_GENERATION_SYSTEM_MESSAGE,
     RESULT_FILTERING_SYSTEM_MESSAGE,
     get_query_generation_prompt,
+    get_pre_filtering_prompt,
     get_result_filtering_prompt,
 )
 
@@ -46,7 +46,39 @@ def generate_ebay_query_for_listing(
     
     client = OpenAI(api_key=OPENAI_API_KEY)
     
-    description_text = listing.description if listing.description else "No description provided"
+    description_text = listing.description if listing.description else ""
+    
+    pre_filtering_prompt = get_pre_filtering_prompt(
+        listing_title=listing.title,
+        listing_price=listing.price,
+        listing_location=listing.location,
+        description_text=description_text,
+    )
+    pre_filtering_response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[
+            {
+                "role": "system",
+                "content": pre_filtering_prompt
+            },
+        ],
+    )
+    raw_pre = pre_filtering_response.choices[0].message.content or ""
+    pre_content = raw_pre.strip()
+    if pre_content.startswith("```"):
+        pre_content = pre_content.split("```", 2)[1]
+        if pre_content.startswith("json"):
+            pre_content = pre_content[4:]
+    pre_content = pre_content.strip()
+    try:
+        pre_result = json.loads(pre_content)
+        if pre_result.get("rejected"):
+            logger.debug(f"Pre-filter for FB listing rejected:\n\t{pre_result.get('reason', 'insufficient information')}")
+            return None, None, pre_result.get("reason", "insufficient information")
+        logger.debug(f"Pre-filter for FB listing accepted:\n\t{pre_result.get('reason', '')}")
+    except json.JSONDecodeError:
+        pass
+    
     prompt = get_query_generation_prompt(
         listing_title=listing.title,
         listing_price=listing.price,
@@ -69,7 +101,7 @@ def generate_ebay_query_for_listing(
         api_params = {
             "model": "gpt-4o-mini",
             "temperature": 0.4,
-            "max_tokens": 200,
+            "max_tokens": 1000,
         }
         
         response = client.chat.completions.create(
@@ -81,7 +113,7 @@ def generate_ebay_query_for_listing(
         raw_content = response.choices[0].message.content
         try:
             truncated_content = truncate_lines(raw_content, 5)
-            logger.debug(f"eBay search suggestion (preview):\n{truncated_content}")
+            logger.debug(f"eBay search suggestion (preview):\n\t{truncated_content}")
         except Exception as e:
             logger.debug(f"Could not show preview: {e}")
         
@@ -94,14 +126,13 @@ def generate_ebay_query_for_listing(
             content = content[:-3]
         content = content.strip()
         result = json.loads(content)
-        if result.get("rejected"):
-            reason = result.get("reason", "insufficient information")
-            logger.info(f"Listing skipped — not enough detail to compare: {reason}")
-            return (None, None, reason)
         enhanced_query = result.get("enhanced_query", original_query)
         browse_api_parameters = result.get("browse_api_parameters")
         if not isinstance(browse_api_parameters, dict):
             browse_api_parameters = None
+        else:
+            # Remove `filter: conditionIds:{{1000|3000}}` from the browse_api_parameters for now
+            browse_api_parameters = {k: v for k, v in browse_api_parameters.items() if k != "filter"}
         logger.debug(f"Search: '{enhanced_query}'")
         return (enhanced_query, browse_api_parameters, None)
     except json.JSONDecodeError as e:
@@ -137,11 +168,11 @@ def filter_ebay_results_with_openai(
         logger.debug("Search suggestions not configured — skipping match filter")
         return None
     
-    if not ebay_items or len(ebay_items) == 0:
+    if not ebay_items:
         return ([], ebay_items, {})
     
     client = OpenAI(api_key=OPENAI_API_KEY)
-    description_text = listing.description if listing.description else "No description provided"
+    description_text = listing.description if listing.description else ""
     
     # Format eBay items with enhanced details (description, condition) if available
     ebay_items_text_parts = []
@@ -173,58 +204,26 @@ def filter_ebay_results_with_openai(
     )
     
     try:
-        messages = [
-            {
-                "role": "system",
-                "content": RESULT_FILTERING_SYSTEM_MESSAGE
-            },
-            {
-                "role": "user",
-                "content": prompt
-            }
-        ]
-        
         # Calculate max_tokens based on number of items to avoid truncation
         # Each item needs ~60 tokens for its reason string, plus JSON structure overhead
         # Use a minimum of 2000 tokens, or 60 tokens per item, whichever is higher
         # This ensures we have enough tokens for reasons for ALL items (not just comparable ones)
         max_tokens = max(2000, num_items * 60)
         
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=messages,
-            temperature=0.2,
-            max_tokens=max_tokens,
+        response = client.responses.create(
+            model="gpt-5-mini",
+            instructions=RESULT_FILTERING_SYSTEM_MESSAGE,
+            input=prompt,
+            max_output_tokens=max_tokens,
         )
         
-        # Log full response for debugging
+        raw_content = response.output_text or ""
         try:
-            if hasattr(response, 'model_dump'):
-                response_dict = response.model_dump()
-            elif hasattr(response, 'dict'):
-                response_dict = response.dict()
-            else:
-                response_dict = {
-                    "id": getattr(response, 'id', None),
-                    "model": getattr(response, 'model', None),
-                    "choices": [{
-                        "message": {
-                            "content": response.choices[0].message.content if response.choices else None
-                        }
-                    }]
-                }
-            
-            # Access dictionary with bracket notation, not dot notation
-            if response_dict and "choices" in response_dict and len(response_dict["choices"]) > 0:
-                raw_content = response_dict["choices"][0]["message"]["content"]
-                truncated_content = truncate_lines(raw_content, 5)
-                logger.debug(f"Match result (preview):\n{truncated_content}")
-            else:
-                logger.debug("Match result: no content")
-        except Exception as e:
-            logger.debug(f"Could not show match preview: {e}")
-        
-        content = response.choices[0].message.content.strip()
+            logger.debug(f"Match result (preview):\n{truncate_lines(raw_content, 5)}")
+        except Exception:
+            pass
+
+        content = raw_content.strip()
         if content.startswith("```json"):
             content = content[7:]
         if content.startswith("```"):
@@ -233,61 +232,29 @@ def filter_ebay_results_with_openai(
             content = content[:-3]
         content = content.strip()
         
-        # Parse JSON with better error handling
         try:
             result = json.loads(content)
-        except json.JSONDecodeError as json_err:
-            error_line = getattr(json_err, "lineno", None)
-            error_col = getattr(json_err, "colno", None)
-
-            # Try to extract what we can - look for comparable_indices even in malformed JSON
-            indices_match = re.search(r'"comparable_indices"\s*:\s*\[([\d\s,]+)\]', content)
-            if indices_match:
-                try:
-                    indices_str = indices_match.group(1)
-                    comparable_indices = [int(x.strip()) for x in indices_str.split(",") if x.strip()]
-                    loc = f" line {error_line}, col {error_col}" if error_line else ""
-                    logger.warning(f"Match check had a glitch; still used {len(comparable_indices)} matching listings.")
-                    
-                    # Try to extract reasons dict - look for complete key-value pairs
-                    reasons = {}
-                    reasons_match = re.search(r'"reasons"\s*:\s*\{', content)
-                    if reasons_match:
-                        # Find the start of the reasons dict
-                        reasons_start = reasons_match.end()
-                        # Try to extract complete key-value pairs
-                        # Pattern: "key": "value" (handling escaped quotes)
-                        reason_pattern = r'"(\d+)"\s*:\s*"((?:[^"\\]|\\.)*)"'
-                        for match in re.finditer(reason_pattern, content[reasons_start:]):
-                            key = match.group(1)
-                            value = match.group(2)
-                            # Unescape JSON escape sequences
-                            value = value.replace('\\"', '"').replace('\\n', '\n').replace('\\\\', '\\')
-                            reasons[key] = value
-                        
-                        if reasons:
-                            logger.debug(f"Recovered {len(reasons)} reasons")
-                        else:
-                            logger.debug("Could not recover reasons")
-                except ValueError:
-                    logger.warning("Could not recover matching listings")
-                    return None
-            else:
-                logger.warning("Could not find matches in response — using all listings")
-                return None
-        else:
-            # Successfully parsed JSON
-            comparable_indices = result.get("comparable_indices", [])
-            reasons = result.get("reasons", {})
-        
-        if not isinstance(comparable_indices, list):
-            logger.warning("Match list invalid — skipping filter")
+        except json.JSONDecodeError:
+            logger.warning("Match result was invalid JSON — using all listings without filtering")
+            logger.debug(f"Match result: {content}")
             return None
-        
-        if not isinstance(reasons, dict):
-            logger.debug("No reasons returned")
-            reasons = {}
-        
+
+        results_list = result.get("results", [])
+        if not isinstance(results_list, list) or len(results_list) != num_items:
+            logger.warning("Match result format invalid — using all listings without filtering")
+            logger.debug(f"Match result: {content}")
+            return None
+
+        comparable_indices = [
+            i + 1
+            for i, r in enumerate(results_list)
+            if isinstance(r, dict) and r.get("rejected") is False
+        ]
+        reasons = {
+            str(i + 1): r.get("reason", "") if isinstance(r, dict) else ""
+            for i, r in enumerate(results_list)
+        }
+
         # Filter items (indices are 1-based, convert to 0-based)
         filtered_items = [
             ebay_items[idx - 1]
@@ -300,24 +267,14 @@ def filter_ebay_results_with_openai(
             logger.debug(f"Dropped {removed_count} non-matches ({len(filtered_items)} kept)")
         else:
             logger.debug("All listings matched")
-        
-        expected_reason_count = len(ebay_items)
-        actual_reason_count = len(reasons)
-        if actual_reason_count < expected_reason_count:
-            missing_count = expected_reason_count - actual_reason_count
-            logger.warning(f"Missing reasons for {missing_count} items — comparison list may be incomplete.")
 
-        if reasons:
-            logger.debug(f"Why items were dropped (sample):")
+        if removed_count > 0 and reasons:
+            logger.debug(f"Why items were dropped (first 3):")
             for idx, reason in list(reasons.items())[:3]:
                 logger.debug(f"   {idx}: {reason}")
         
         return (comparable_indices, filtered_items, reasons)
-        
-    except json.JSONDecodeError as e:
-        # This should not happen now since we handle it above, but keep as fallback
-        logger.warning("Could not read match result — using all listings")
-        return None
+
     except Exception as e:
         logger.warning(f"Match check failed: {e} — using all listings")
         return None
