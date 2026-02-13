@@ -18,7 +18,7 @@ import threading
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
-from typing import Optional, List, Callable
+from typing import Optional, List, Callable, Tuple
 from playwright.sync_api import sync_playwright, Browser, Page, BrowserContext, TimeoutError as PlaywrightTimeoutError
 from src.scrapers.utils import random_delay, parse_price, is_valid_listing_price
 from src.utils.colored_logger import setup_colored_logger, log_data_block, log_listing_box_sep, set_step_indent, clear_step_indent, wait_status
@@ -72,7 +72,10 @@ SCROLL_ATTEMPTS = 3
 
 # Incorrect titles: small image overlays (e.g. "Partner Listing", "Just listed") that appear
 # above the real title; we skip these and use the next text element as the title.
-INCORRECT_TITLES = ("Partner Listing", "Just listed")
+# Also skip price-like lines (e.g. "Free", "CA$20") that can appear with strikethrough pricing.
+INCORRECT_TITLES = ("Partner Listing", "Just listed", "Free")
+# Regex for currency-prefixed price lines (CA$20, CAD $20, US$15) mistaken for title.
+PRICE_LIKE_LINE_RE = re.compile(r"^(CA|CAD|US|USD)?\s*\$?\s*[\d,.]+\s*$", re.IGNORECASE)
 
 
 class FacebookNotLoggedInError(Exception):
@@ -443,6 +446,77 @@ class FBMarketplaceScraper:
         self.page.get_by_role("option", name=option_text).click(timeout=timeout)
         self._check_cancelled()
 
+    def _get_strikethrough_dom_order(self, element) -> dict:
+        """
+        Detect strikethrough and return visible spans in DOM order with strike status.
+
+        Walks leaf-level spans, checks getComputedStyle for line-through.
+        Returns {has_strikethrough: bool, items: [{text, is_strikethrough}, ...]}.
+        """
+        try:
+            result = element.evaluate("""
+                (el) => {
+                    const items = [];
+                    const spans = el.querySelectorAll('span');
+                    let hasStrikethrough = false;
+                    for (const span of spans) {
+                        if (span.children.length > 0) continue;
+                        if (span.offsetParent === null) continue;
+                        const text = span.textContent.trim();
+                        if (!text) continue;
+                        const style = window.getComputedStyle(span);
+                        const strike = style.textDecorationLine === 'line-through' ||
+                            (style.textDecoration && style.textDecoration.includes('line-through'));
+                        if (strike) hasStrikethrough = true;
+                        items.push({text, isStrikethrough: strike});
+                    }
+                    return {hasStrikethrough, items};
+                }
+            """)
+            return result or {"has_strikethrough": False, "items": []}
+        except Exception as e:
+            logger.debug("Strikethrough check failed — %s", e)
+            return {"has_strikethrough": False, "items": []}
+
+    def _extract_with_strikethrough_logic(
+        self, element, dom_data: dict
+    ) -> Tuple[Optional[float], str]:
+        """
+        Extract price and title when strikethrough is present. Uses DOM order:
+        sale price = first non-strikethrough price-like text; title = first
+        non-price line with letters.
+        """
+        items = dom_data.get("items", [])
+        sale_price: Optional[float] = None
+        title = ""
+
+        for i, item in enumerate(items):
+            text = item.get("text", "").strip()
+            is_strike = item.get("is_strikethrough", False)
+            parsed = parse_price(text)
+            logger.debug(
+                "Strikethrough item [%d]: %r strike=%s parsed=%s",
+                i, text[:50], is_strike, parsed,
+            )
+            if parsed is not None and not is_strike and sale_price is None:
+                sale_price = parsed
+                logger.debug("Strikethrough: using sale price %.2f from %r", sale_price, text[:30])
+            is_location = bool(text and re.search(r",\s*[A-Z]{2}$", text))
+            if (
+                not is_strike
+                and parsed is None
+                and text
+                and not is_location
+                and not self._is_incorrect_title(text)
+                and re.search(r"[A-Za-z]", text)
+                and not PRICE_LIKE_LINE_RE.match(text)
+            ):
+                if not title:
+                    title = text
+                    logger.debug("Strikethrough: using title %r", title[:50])
+
+        return sale_price, title
+
     def _find_price_element(self, element, target_price: Optional[float] = None):
         """
         Find the price element in a listing using CSS selectors.
@@ -487,6 +561,9 @@ class FBMarketplaceScraper:
         if t.lower() in (x.lower() for x in INCORRECT_TITLES):
             logger.debug("Skipping incorrect title: %r", t)
             return True
+        if PRICE_LIKE_LINE_RE.match(t):
+            logger.debug("Skipping price-like title: %r", t)
+            return True
         return False
 
     def _try_extract_title_by_dom_structure(self, element, price: float) -> str:
@@ -523,11 +600,13 @@ class FBMarketplaceScraper:
         Splits element text into lines and analyzes them. Skips incorrect titles (image
         overlays like "Partner Listing", "Just listed") and uses the next valid line.
         First pass: returns first line containing letters (keeps lines with both letters
-        and numbers like "iPhone 13"). Skips price-only lines. Second pass: if no lines
+        and numbers like "iPhone 13"). Skips price-only lines and price indicators like
+        "Free". Second pass: if no lines
         with letters found, returns first line that isn't a pure price format.
         """
         try:
             all_lines = element.inner_text().strip().split("\n")
+            logger.debug("Title text analysis: %d lines %r", len(all_lines), all_lines[:8])
             
             for line in all_lines:
                 line = line.strip()
@@ -538,6 +617,7 @@ class FBMarketplaceScraper:
                 if re.match(r'^[\$0-9.\s]+$', line):
                     continue
                 if re.search(r'[A-Za-z]', line):
+                    logger.debug("Title picked (pass1): %r", line[:60])
                     return line
             
             for line in all_lines:
@@ -835,10 +915,10 @@ class FBMarketplaceScraper:
         """
         Extract a single listing from a listing element.
         
-        Extracts URL, price, title, and location from the element. Optionally navigates
-        to the listing's detail page to extract the full description if extract_descriptions
-        is True. Validates that price is valid and title is not a price format. Returns
-        Listing object if valid, or None if extraction fails or data is invalid.
+        Extracts URL, price, title, and location from the element. When strikethrough
+        pricing is detected, uses DOM-order extraction (sale price = first non-strike
+        price, title = first non-price line). Otherwise uses standard selectors.
+        Optionally navigates to the listing's detail page for description.
         """
         try:
             url = element.get_attribute("href") or ""
@@ -848,12 +928,24 @@ class FBMarketplaceScraper:
             if not url:
                 return None
             
-            price = self._extract_price(element)
+            dom_data = self._get_strikethrough_dom_order(element)
+            if dom_data.get("has_strikethrough"):
+                logger.debug("Strikethrough detected — using DOM-order extraction")
+                price, title = self._extract_with_strikethrough_logic(element, dom_data)
+                if not price and not title:
+                    logger.debug("Strikethrough path yielded nothing — falling back to standard")
+                    price = self._extract_price(element)
+                    title = self._extract_title(element, price) if price else ""
+                elif not title:
+                    title = self._extract_title(element, price) if price else ""
+                elif not price:
+                    price = self._extract_price(element)
+            else:
+                price = self._extract_price(element)
+                title = self._extract_title(element, price)
             
             if not is_valid_listing_price(price):
                 return None
-            
-            title = self._extract_title(element, price)
             
             # Final validation: only skip if title is EXACTLY a price format (no letters)
             if title and re.match(r'^[\$0-9.\s]+$', title):
@@ -870,6 +962,10 @@ class FBMarketplaceScraper:
             else:
                 description = ""  # Skip description extraction for performance
             
+            if title and PRICE_LIKE_LINE_RE.match(title.strip()) and price:
+                logger.debug("Price-like title %r — trying DOM fallback", title[:50])
+                title = self._try_extract_title_by_dom_structure(element, price)
+
             if title and price:
                 return Listing(
                     title=title,
@@ -894,8 +990,9 @@ class FBMarketplaceScraper:
         """
         Extract up to max_listings from the current Marketplace results page.
 
-        Scrolls to load content, locates listing DOM elements, then iterates
-        up to max_listings of them and parses each into a Listing.
+        Scrolls to load content, locates listing DOM elements, then iterates until
+        max_listings valid listings are extracted or elements run out. Skips
+        elements that fail extraction (e.g. odd price formats) and continues.
         Checks for cancellation at each iteration and exits early if requested.
         """
         listings = []
@@ -907,14 +1004,15 @@ class FBMarketplaceScraper:
             self._check_cancelled()
             
             listing_elements = self._find_listing_elements()
-            total = min(len(listing_elements), max_listings)
-            for element in listing_elements[:max_listings]:
+            for element in listing_elements:
+                if len(listings) >= max_listings:
+                    break
                 self._check_cancelled()
                 
                 listing = self._extract_listing_from_element(element, extract_descriptions=extract_descriptions)
                 if listing:
                     idx = len(listings) + 1
-                    label = f"[{idx}/{total}] Retrieved:" if total else "Retrieved:"
+                    label = f"[{idx}/{max_listings}] Retrieved:"
                     log_listing_box_sep(logger)
                     log_data_block(
                         logger, label,
