@@ -22,6 +22,9 @@ A PR already exists for the current branch. Find it and modify it using MCP (do 
 - Focus on the validation approach (e.g. manual flows, automated coverage, edge cases exercised).
 
 ## Process
-- **Find** the existing PR for the current branch using MCP (e.g. `list_pull_requests` with `head` filter: `owner:branch-name`, state `open`).
-- **Modify** that PR using MCP: set title and body via `update_issue` (PRs are issues; use the PR number as the issue number).
-- When the user asks to do it or update the PR, look up the repo owner from the remote (e.g. `origin`), then find and update the PR.
+- **Check git status** — If there are uncommitted changes, commit them with a message matching the PR title (or a reasonable default).
+- **Push branch if needed** — Check if the current branch exists on the remote. If not, push it with `git push -u origin <branch-name>`. If the branch exists but is behind, push any local commits.
+- **Find or create PR** — Look for an existing PR for the current branch using MCP (e.g. `list_pull_requests` with `head` filter: `owner:branch-name`, state `open`).
+  - If a PR exists, **modify** it using MCP: set title and body via `update_issue` (PRs are issues; use the PR number as the issue number).
+  - If no PR exists, **create** one using `create_pull_request` with the title and body.
+- When the user asks to do it or update the PR, look up the repo owner from the remote (e.g. `origin`), then push if needed and find/update/create the PR.
