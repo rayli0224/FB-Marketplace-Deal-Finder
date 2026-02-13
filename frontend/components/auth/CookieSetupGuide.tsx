@@ -3,6 +3,7 @@
 import { useState } from "react";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+const FACEBOOK_URL = "https://www.facebook.com";
 
 export interface CookieSetupGuideProps {
   onSuccess: () => void;
@@ -106,18 +107,16 @@ export function CookieSetupGuide({ onSuccess, sessionExpiredMessage }: CookieSet
             <span className="text-accent font-bold shrink-0">02.</span>
             <div>
               <p className="text-foreground font-bold mb-1">Log into Facebook</p>
-              <p className="text-muted-foreground text-xs leading-relaxed">
-                Go to{" "}
-                <a
-                  href="https://www.facebook.com"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-primary underline hover:text-accent transition-colors"
-                >
-                  facebook.com
-                </a>{" "}
-                and sign in with your account.
+              <p className="text-muted-foreground text-xs leading-relaxed mb-3">
+                Click the button below to open Facebook and sign in with your account.
               </p>
+              <button
+                type="button"
+                onClick={() => window.open(FACEBOOK_URL, "_blank", "noopener,noreferrer")}
+                className="border border-primary bg-primary/10 text-primary hover:bg-primary hover:text-primary-foreground px-3 py-1.5 font-mono text-xs font-bold uppercase transition-colors"
+              >
+                Open Facebook →
+              </button>
             </div>
           </div>
         </div>
@@ -126,11 +125,11 @@ export function CookieSetupGuide({ onSuccess, sessionExpiredMessage }: CookieSet
           <div className="flex items-start gap-3">
             <span className="text-accent font-bold shrink-0">03.</span>
             <div>
-              <p className="text-foreground font-bold mb-1">Export your login data</p>
+              <p className="text-foreground font-bold mb-1">Export your login data as JSON</p>
               <p className="text-muted-foreground text-xs leading-relaxed">
                 While on facebook.com, click the Cookie-Editor icon in your browser toolbar,
-                then click <span className="text-foreground font-bold">Export</span> (the download arrow at the bottom).
-                This copies your login data to your clipboard.
+                then click <span className="text-foreground font-bold">Export</span> (the download arrow at the bottom)
+                and choose <span className="text-foreground font-bold">JSON</span>. That copies the data to your clipboard.
               </p>
             </div>
           </div>
