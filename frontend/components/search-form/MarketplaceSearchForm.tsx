@@ -2,6 +2,7 @@
 
 import { type UseFormRegister, type FieldErrors, type UseFormHandleSubmit, type UseFormWatch, type UseFormSetValue } from "react-hook-form";
 import { type FormData as ValidationFormData, RADIUS_OPTIONS } from "@/lib/validation";
+import { QueryInputWithSuggestions } from "@/components/search-form/QueryInputWithSuggestions";
 import { FormInputField } from "@/components/search-form/FormInputField";
 import { Combobox } from "@/components/ui/Combobox";
 import { CompactInlineToggle } from "@/components/ui/CompactInlineToggle";
@@ -28,15 +29,10 @@ export function MarketplaceSearchForm({ register, errors, isValid, handleSubmit,
         <span className="text-primary">{">"}</span> Enter target parameters, matey...
       </div>
 
-      <FormInputField
-        label="TARGET_QUERY"
-        id="query"
-        type="text"
-        placeholder="e.g. iPhone 13 Pro"
+      <QueryInputWithSuggestions
         register={register}
-        required
+        queryValue={watch("query")}
         error={errors.query?.message}
-        tooltip="The search term for Facebook Marketplace—what you're looking for."
         afterLabel={
           <CompactInlineToggle
             id="extractDescriptions"
