@@ -32,6 +32,7 @@ export interface SearchLoadingStateProps {
   phase: SearchPhase;
   scannedCount: number;
   evaluatedCount: number;
+  maxListings: number;
   onCancel?: () => void;
 }
 
@@ -50,7 +51,7 @@ function getPhaseMessage(phase: SearchPhase): string {
  * Shows current phase with heist clock (radar + elapsed time), phase description,
  * and progress bars for scanned and evaluated listings. Includes a cancel button.
  */
-export function SearchLoadingState({ phase, scannedCount, evaluatedCount, onCancel }: SearchLoadingStateProps) {
+export function SearchLoadingState({ phase, scannedCount, evaluatedCount, maxListings, onCancel }: SearchLoadingStateProps) {
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
 
   useEffect(() => {
@@ -90,7 +91,7 @@ export function SearchLoadingState({ phase, scannedCount, evaluatedCount, onCanc
           <ProgressBar
             label="Infiltrating listings"
             count={scannedCount}
-            maxCount={scannedCount || 100}
+            maxCount={maxListings}
             suffix="scanned"
             icon="~"
           />
@@ -99,7 +100,7 @@ export function SearchLoadingState({ phase, scannedCount, evaluatedCount, onCanc
           <ProgressBar
             label="Evaluating loot value"
             count={evaluatedCount}
-            maxCount={scannedCount || 100}
+            maxCount={scannedCount || maxListings}
             suffix="assessed"
             icon="*"
           />

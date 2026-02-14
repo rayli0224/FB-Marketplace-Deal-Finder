@@ -148,6 +148,7 @@ export default function Home() {
   }, []);
   const [scannedCount, setScannedCount] = useState(0);
   const [evaluatedCount, setEvaluatedCount] = useState(0);
+  const [maxListings, setMaxListings] = useState<number>(20);
   const [csvBlob, setCsvBlob] = useState<Blob | null>(null);
   const [listings, setListings] = useState<Listing[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -480,6 +481,7 @@ export default function Home() {
     // Reset state
     setScannedCount(0);
     setEvaluatedCount(0);
+    setMaxListings(Number(data.maxListings) || 20);
     setCsvBlob(null);
     setListings([]);
     setError(null);
@@ -567,6 +569,7 @@ export default function Home() {
                   phase={phase}
                   scannedCount={scannedCount}
                   evaluatedCount={evaluatedCount}
+                  maxListings={maxListings}
                   onCancel={cancelSearch}
                 />
                 {phase === "evaluating" && listings.length > 0 && (
