@@ -30,6 +30,7 @@ export interface SearchResultsTableProps {
   threshold: number;
   onDownloadCSV: () => void;
   onReset: () => void;
+  isLoading?: boolean;
 }
 
 /**
@@ -150,6 +151,7 @@ export function SearchResultsTable({
   threshold,
   onDownloadCSV,
   onReset,
+  isLoading = false,
 }: SearchResultsTableProps) {
   const [showBadDeals, setShowBadDeals] = useState<boolean>(true);
   const [isFiltersExpanded, setIsFiltersExpanded] = useState<boolean>(false);
@@ -167,28 +169,33 @@ export function SearchResultsTable({
       <div className="flex items-center justify-between">
         <div>
           <h2 className="font-mono text-lg font-bold text-foreground">
-            HEIST COMPLETE!
+            {isLoading ? "LOOT INCOMING..." : "HEIST COMPLETE!"}
           </h2>
           <p className="font-mono text-xs text-muted-foreground">
-            Showing {filteredCount} of {listings.length} treasures from {scannedCount} scanned
+            {isLoading 
+              ? `${filteredCount} treasure${filteredCount !== 1 ? "s" : ""} found so far...`
+              : `Showing ${filteredCount} of ${listings.length} treasures from ${scannedCount} scanned`
+            }
           </p>
         </div>
-        <div className="flex gap-2">
-          <button
-            type="button"
-            onClick={onDownloadCSV}
-            className="border-2 border-primary bg-transparent px-3 py-2 font-mono text-xs font-bold text-primary transition-all hover:bg-primary hover:text-primary-foreground"
-          >
-            EXPORT CSV
-          </button>
-          <button
-            type="button"
-            onClick={onReset}
-            className="border-2 border-accent bg-accent px-3 py-2 font-mono text-xs font-bold text-accent-foreground transition-all hover:bg-transparent hover:text-accent"
-          >
-            NEW SEARCH
-          </button>
-        </div>
+        {!isLoading && (
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={onDownloadCSV}
+              className="border-2 border-primary bg-transparent px-3 py-2 font-mono text-xs font-bold text-primary transition-all hover:bg-primary hover:text-primary-foreground"
+            >
+              EXPORT CSV
+            </button>
+            <button
+              type="button"
+              onClick={onReset}
+              className="border-2 border-accent bg-accent px-3 py-2 font-mono text-xs font-bold text-accent-foreground transition-all hover:bg-transparent hover:text-accent"
+            >
+              NEW SEARCH
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Filters Section */}

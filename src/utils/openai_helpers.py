@@ -32,14 +32,12 @@ from src.utils.prompts import (
 logger = setup_colored_logger("openai_helpers")
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 OPENAI_MODEL = "gpt-5-mini"
-PRE_FILTER_MAX_OUTPUT_TOKENS = 300
+PRE_FILTER_MAX_OUTPUT_TOKENS = 150
 QUERY_GENERATION_MAX_OUTPUT_TOKENS = 1000
 BATCH_FILTER_MAX_OUTPUT_TOKENS = 3000
-POST_FILTER_BATCH_SIZE = 10
+POST_FILTER_BATCH_SIZE = 5
 RATE_LIMIT_RETRY_DELAY_SEC = 0.5
 RATE_LIMIT_MAX_RETRIES = 3
-
-PRE_FILTER_SYSTEM_MESSAGE = "You are an expert at evaluating product listings. Always respond with valid JSON only."
 
 
 def _format_fb_listing(listing: Listing) -> str:
@@ -193,19 +191,17 @@ def generate_ebay_query_for_listing(
     pre_filtering_prompt = get_pre_filtering_prompt(fb_listing_text)
     pre_filtering_response = _create_sync_response(
         client,
-        instructions=PRE_FILTER_SYSTEM_MESSAGE,
+        instructions=None,
         prompt=pre_filtering_prompt,
         max_output_tokens=PRE_FILTER_MAX_OUTPUT_TOKENS,
     )
     pre_raw = _extract_response_output_text(pre_filtering_response)
     pre_result = _try_parse_json_dict(pre_raw)
     if isinstance(pre_result, dict) and pre_result.get("rejected"):
-        logger.info(f"Pre-filter rejected — {pre_result.get('reason', 'insufficient information')}")
+        logger.debug(f"\nPre-filter for FB listing rejected:\n\t{pre_result.get('reason', 'insufficient information')}")
         return None, None, pre_result.get("reason", "insufficient information")
     if isinstance(pre_result, dict):
-        logger.info(f"Pre-filter accepted — {pre_result.get('reason', '')}")
-    else:
-        logger.debug(f"Pre-filter response could not be parsed (raw length {len(pre_raw or '')}), proceeding with query")
+        logger.debug(f"\nPre-filter for FB listing accepted:\n\t{pre_result.get('reason', '')}")
     
     prompt = get_query_generation_prompt(fb_listing_text)
 
@@ -335,6 +331,7 @@ async def _filter_batch(
         return [(start_index + i, False, "") for i in range(len(items))]
 
 
+
 async def _filter_ebay_results_async(
     listing: Listing,
     ebay_items: List[dict],
@@ -343,9 +340,9 @@ async def _filter_ebay_results_async(
     """
     Async implementation of eBay result filtering using batched API calls.
 
-    Chunks items into batches of POST_FILTER_BATCH_SIZE and runs one async
-    OpenAI call per batch in parallel. Aggregates results into the same format
-    as the original single-call version.
+    Chunks items into batches of 5 and runs one async OpenAI call per batch.
+    Runs batches sequentially so cancellation can be checked between each.
+    Aggregates results into the same format as the original single-call version.
     """
     if not AsyncOpenAI:
         logger.debug("Async OpenAI unavailable — skipping match filter")
@@ -369,27 +366,12 @@ async def _filter_ebay_results_async(
         start_index = i + 1
         batches.append((batch, start_index))
 
-    tasks = [
-        asyncio.create_task(_filter_batch(client, fb_listing_text, batch, start_index))
-        for batch, start_index in batches
-    ]
-    try:
-        while True:
-            done, pending = await asyncio.wait(tasks, timeout=0.5, return_when=asyncio.ALL_COMPLETED)
-            if not pending:
-                break
-            if cancelled and cancelled.is_set():
-                for t in pending:
-                    t.cancel()
-                raise SearchCancelledError("Search was cancelled by user")
-        results = []
-        for t in tasks:
-            results.extend(t.result())
-    except asyncio.CancelledError:
-        for t in tasks:
-            if not t.done():
-                t.cancel()
-        raise
+    results = []
+    for batch, start_index in batches:
+        if cancelled and cancelled.is_set():
+            raise SearchCancelledError("Search was cancelled by user")
+        batch_result = await _filter_batch(client, fb_listing_text, batch, start_index)
+        results.extend(batch_result)
     
     # Aggregate results
     comparable_indices = []
@@ -433,7 +415,7 @@ def filter_ebay_results_with_openai(
     """
     Filter eBay search results to keep only items comparable to the Facebook Marketplace listing.
 
-    Chunks eBay items into batches and makes parallel async OpenAI calls (one per batch)
+    Chunks eBay items into batches of 5 and makes parallel async OpenAI calls (one per batch)
     to analyze each item's title, description, and condition against the FB listing. Removes
     items that are accessories, different models, or otherwise not comparable. This improves
     price comparison accuracy by ensuring only truly similar items are used for the market average.
@@ -454,25 +436,22 @@ def filter_ebay_results_with_openai(
         return ([], ebay_items, {})
     
     try:
-        # Run the async filtering. Use a worker thread if we're in an async context
-        # (asyncio.run cannot be called when a loop is already running).
+        # Run the async filtering in a new event loop
+        # Check if we're already in an async context
         try:
-            asyncio.get_running_loop()
-            has_loop = True
-        except RuntimeError:
-            has_loop = False
-
-        if has_loop:
+            loop = asyncio.get_running_loop()
+            # We're in an async context, use nest_asyncio pattern or run in executor
+            # For simplicity, create a new thread with its own event loop
             import concurrent.futures
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            with concurrent.futures.ThreadPoolExecutor() as executor:
                 future = executor.submit(
-                    lambda: asyncio.run(_filter_ebay_results_async(listing, ebay_items, cancelled))
+                    asyncio.run,
+                    _filter_ebay_results_async(listing, ebay_items, cancelled),
                 )
-                result = future.result()
-        else:
-            result = asyncio.run(_filter_ebay_results_async(listing, ebay_items, cancelled))
-
-        return result
+                return future.result()
+        except RuntimeError:
+            # No running event loop, we can use asyncio.run directly
+            return asyncio.run(_filter_ebay_results_async(listing, ebay_items, cancelled))
     except SearchCancelledError:
         raise
     except Exception as e:
