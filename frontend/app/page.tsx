@@ -350,20 +350,25 @@ export default function Home() {
    * Cancels the current search by canceling the stream reader and aborting the fetch request.
    * Resets state and returns the app to the form view.
    */
-  const cancelSearch = useCallback(() => {
+  const cancelSearch = useCallback(async () => {
     // Tell the backend to cancel immediately (kills Chrome, stops scraping)
-    fetch(`${API_URL}/api/search/cancel`, { method: "POST" }).catch(() => {});
+    // Await so cleanup starts before we allow a new search
+    try {
+      await fetch(`${API_URL}/api/search/cancel`, { method: "POST" });
+    } catch {
+      // Backend may already be down, continue with local cleanup
+    }
 
     // Cancel the reader first to stop reading from the stream
     if (readerRef.current) {
       try {
         readerRef.current.cancel();
-      } catch (err) {
+      } catch {
         // Reader may already be cancelled or released, ignore
       }
       try {
         readerRef.current.releaseLock();
-      } catch (err) {
+      } catch {
         // Lock may already be released, ignore
       }
       readerRef.current = null;
@@ -373,7 +378,7 @@ export default function Home() {
     if (abortControllerRef.current) {
       try {
         abortControllerRef.current.abort();
-      } catch (err) {
+      } catch {
         // AbortController may already be aborted, ignore
       }
       abortControllerRef.current = null;
@@ -483,7 +488,7 @@ export default function Home() {
     
     console.log("✅ onSubmit: Form submitted, starting search");
     
-    // Reset state
+    // Reset all state — clean slate for the new search
     setScannedCount(0);
     setEvaluatedCount(0);
     setMaxListings(Number(data.maxListings) || 20);
@@ -495,9 +500,10 @@ export default function Home() {
     setDebugSearchParams(null);
     setDebugFacebookListings([]);
     setDebugEbayQueries([]);
+    setDebugLogs([]);
     setAppState("loading");
     
-    // Start search directly - no useEffect needed
+    // Start search directly — backend handles killing any previous search before starting
     performSearch(data);
   };
 

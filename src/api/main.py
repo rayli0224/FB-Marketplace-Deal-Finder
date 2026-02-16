@@ -2,10 +2,12 @@
 FastAPI application for FB Marketplace Deal Finder.
 """
 
+import glob
 import json
 import logging
 import os
 import queue
+import signal
 import sys
 import threading
 from fastapi import FastAPI
@@ -18,7 +20,13 @@ from typing import List, Optional
 RADIUS_OPTIONS = (1, 2, 5, 10, 20, 40, 60, 80, 100, 250, 500)
 DEFAULT_RADIUS = 20
 
-from src.scrapers.fb_marketplace_scraper import search_marketplace as search_fb_marketplace, FacebookNotLoggedInError, SearchCancelledError, force_close_active_scraper
+from src.scrapers.fb_marketplace_scraper import (
+    search_marketplace as search_fb_marketplace,
+    FacebookNotLoggedInError,
+    SearchCancelledError,
+    force_close_active_scraper,
+    CHROME_DEBUG_PORT as FB_CHROME_DEBUG_PORT,
+)
 from src.scrapers.ebay_scraper_v2 import (
     get_market_price,
     DEFAULT_EBAY_ITEMS,
@@ -26,6 +34,7 @@ from src.scrapers.ebay_scraper_v2 import (
     force_close_active_ebay_scraper,
     register_ebay_scraper,
     unregister_ebay_scraper,
+    EBAY_CHROME_DEBUG_PORT,
 )
 from src.api.deal_calculator import score_listings
 from src.utils.listing_processor import process_single_listing
@@ -34,8 +43,75 @@ from src.utils.colored_logger import setup_colored_logger, log_step_sep, log_ste
 logger = setup_colored_logger("api")
 
 # Active search state for immediate cancellation from a separate HTTP request.
-_active_search: dict = {"cancelled": None, "thread_id": None, "eval_thread_id": None}
+# "complete" is set when a search finishes all cleanup; new searches wait on it.
+_active_search: dict = {
+    "cancelled": None,
+    "thread_id": None,
+    "eval_thread_id": None,
+    "complete": threading.Event(),
+}
+_active_search["complete"].set()
 _active_search_lock = threading.Lock()
+
+# Chrome debug ports used by our scrapers — used by cleanup to kill lingering processes.
+_CHROME_DEBUG_PORTS = [FB_CHROME_DEBUG_PORT, EBAY_CHROME_DEBUG_PORT]
+_CHROME_USER_DATA_DIRS = ["/tmp/chrome-fb", "/tmp/chrome-ebay"]
+
+_PREVIOUS_SEARCH_CLEANUP_TIMEOUT = 10.0
+
+
+def _cancel_and_wait_for_previous_search():
+    """Cancel any running search and block until its cleanup is fully done.
+
+    Sets the cancelled flag on the active search, kills Chrome processes for
+    both scraper threads, then waits for the event_generator's finally block
+    to signal completion. Called at the start of every new search so the old
+    one is guaranteed to be cleaned up before we launch new browsers.
+    """
+    with _active_search_lock:
+        cancelled = _active_search.get("cancelled")
+        thread_id = _active_search.get("thread_id")
+        eval_thread_id = _active_search.get("eval_thread_id")
+        complete = _active_search["complete"]
+
+    if cancelled is not None:
+        cancelled.set()
+    if thread_id is not None:
+        force_close_active_scraper(thread_id)
+    if eval_thread_id is not None:
+        force_close_active_ebay_scraper(eval_thread_id)
+
+    complete.wait(timeout=_PREVIOUS_SEARCH_CLEANUP_TIMEOUT)
+
+
+def _kill_lingering_chrome():
+    """Kill any Chrome processes still using our debug ports and clean up lock files.
+
+    Safety net for the rare case where normal cleanup didn't fully terminate Chrome
+    (e.g. the process ignored SIGTERM, or cleanup timed out). Also removes Chrome's
+    SingletonLock files so a fresh browser can start without "profile in use" errors.
+
+    Scans /proc for processes launched with our specific --remote-debugging-port flags
+    so it only targets our scrapers' Chrome instances, not unrelated processes.
+    Pure Python — no external tools (fuser, lsof) needed in the container.
+    """
+    port_markers = [f"remote-debugging-port={p}" for p in _CHROME_DEBUG_PORTS]
+    for cmdline_path in glob.glob("/proc/[0-9]*/cmdline"):
+        try:
+            with open(cmdline_path, "rb") as f:
+                cmdline = f.read().decode("utf-8", errors="replace")
+            if any(marker in cmdline for marker in port_markers):
+                pid = int(cmdline_path.split("/")[2])
+                os.kill(pid, signal.SIGKILL)
+        except (ProcessLookupError, ValueError, FileNotFoundError, PermissionError):
+            pass
+
+    for chrome_dir in _CHROME_USER_DATA_DIRS:
+        lock_file = os.path.join(chrome_dir, "SingletonLock")
+        try:
+            os.remove(lock_file)
+        except OSError:
+            pass
 
 
 class QueueLogHandler(logging.Handler):
@@ -350,9 +426,15 @@ def search_deals_stream(request: SearchRequest):
     Cancellation: When the client disconnects, the generator detects it and signals
     cancellation to stop all processing (scraping thread and listing evaluation).
     """
+    _cancel_and_wait_for_previous_search()
+    _kill_lingering_chrome()
+
     event_queue = queue.Queue()
     fb_listings = []
     cancelled = threading.Event()
+
+    with _active_search_lock:
+        _active_search["complete"].clear()
 
     debug_log_handler = None
     if DEBUG_MODE:
@@ -665,6 +747,8 @@ def search_deals_stream(request: SearchRequest):
                         logging.getLogger(name).removeHandler(debug_log_handler)
                     except Exception:
                         pass
+            with _active_search_lock:
+                _active_search["complete"].set()
 
     return StreamingResponse(
         event_generator(),
