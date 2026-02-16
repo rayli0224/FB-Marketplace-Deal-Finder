@@ -66,7 +66,7 @@ def generate_ebay_query_for_listing(
         pre_raw = extract_response_output_text(pre_filtering_response)
         pre_result = try_parse_json_dict(pre_raw)
         if pre_result is None:
-            logger.debug(f"Pre-filter response was not valid JSON: {pre_raw[:200] if pre_raw else '(empty)'}")
+            logger.debug(f"Pre-filter response was not valid JSON: {pre_raw if pre_raw else '(empty)'}")
         elif pre_result.get("rejected"):
             logger.debug(f"Pre-filter rejected: {pre_result.get('reason', 'insufficient information')}")
             return (None, pre_result.get("reason", "insufficient information"))
