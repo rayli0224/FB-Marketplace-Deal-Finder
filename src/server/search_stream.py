@@ -212,16 +212,8 @@ def create_search_stream(request, debug_mode: bool):
             set_active_search(cancelled=cancelled, thread_id=thread_id)
 
             while True:
-                if cancelled.is_set():
-                    force_close_active_scraper(thread_id)
-                    break
-
                 try:
                     event = event_queue.get(timeout=0.5)
-
-                    if cancelled.is_set():
-                        force_close_active_scraper(thread_id)
-                        break
 
                     if event["type"] == "auth_error":
                         logger.warning("🔒 Sending auth_error to client")
@@ -236,10 +228,6 @@ def create_search_stream(request, debug_mode: bool):
                     if event["type"] == "scrape_done":
                         break
 
-                    if cancelled.is_set():
-                        force_close_active_scraper(thread_id)
-                        break
-
                     try:
                         yield f"data: {json.dumps(event)}\n\n"
                     except (GeneratorExit, BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
@@ -247,6 +235,9 @@ def create_search_stream(request, debug_mode: bool):
                         force_close_active_scraper(thread_id)
                         raise
                 except queue.Empty:
+                    if cancelled.is_set():
+                        force_close_active_scraper(thread_id)
+                        break
                     continue
 
             yield from drain_log_queue()

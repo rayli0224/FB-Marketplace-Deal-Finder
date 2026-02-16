@@ -40,6 +40,8 @@ PROXY_DEBUG_PORT = 9222
 NAVIGATION_TIMEOUT_MS = 20000
 ELEMENT_WAIT_TIMEOUT_MS = 8000
 ACTION_TIMEOUT_MS = 4000
+CONTINUE_AS_WAIT_TIMEOUT_MS = 5000
+
 
 # Results area: wait for this after search page loads.
 SEARCH_RESULTS_SELECTOR = "div[role='main']"
@@ -341,21 +343,43 @@ class FBMarketplaceScraper:
 
         Inspects the current URL and page content for signs of being redirected to a login
         page. Facebook redirects unauthenticated users to /login or shows a login form when
-        session cookies are missing or expired. Raises FacebookNotLoggedInError if any
-        login-wall signal is detected.
+        session cookies are missing or expired. If the login form is present, it attempts to
+        click the "Continue as ..." button once, then checks again. Raises
+        FacebookNotLoggedInError if the login-wall signal remains.
         """
+        login_form = self.page.locator("form[action*='login']").first
+        if login_form.is_visible(timeout=500):
+            logger.warning("🔒 Found a Facebook login prompt — trying to continue")
+            continue_button = self.page.get_by_text(
+                re.compile(r"^Continue as", re.IGNORECASE)
+            ).first
+            try:
+                continue_button.wait_for(state="visible", timeout=ACTION_TIMEOUT_MS)
+                self._check_cancelled()
+                logger.info("⏳ Waiting for Facebook login confirmation")
+                continue_button.click(timeout=ACTION_TIMEOUT_MS)
+                self._check_cancelled()
+                self.page.wait_for_load_state("domcontentloaded", timeout=CONTINUE_AS_WAIT_TIMEOUT_MS)
+                logger.info("✅ Facebook login confirmation accepted")
+            except Exception as e:
+                logger.warning("🔒 Could not continue past the Facebook login prompt: %s", e)
+
+        self._check_cancelled()
         current_url = self.page.url.lower()
 
-        # Facebook redirects logged-out users to /login or /checkpoint
+        # Facebook redirects logged-out users to /login or /checkpoint.
+        # This check runs after the optional "Continue as..." click attempt above.
         if "/login" in current_url or "/checkpoint" in current_url:
             logger.warning("🔒 Detected login redirect — Facebook session is invalid")
             raise FacebookNotLoggedInError("Facebook session expired or invalid")
 
-        # Check for login form (single selector: if present, we're on a login wall)
-        login_form = self.page.locator("form[action*='login']").first
+        # Check for login form (single selector: if present, we're on a login wall).
+        # This is the second check when we attempted "Continue as...".
         if login_form.is_visible(timeout=500):
             logger.warning("🔒 Detected login form — Facebook session is invalid")
             raise FacebookNotLoggedInError("Facebook session expired or invalid")
+
+        logger.info("✅ Facebook session check passed")
 
     def _goto_search_results(self, query: str):
         """Navigate directly to Marketplace search results URL, verify login, and wait for results.

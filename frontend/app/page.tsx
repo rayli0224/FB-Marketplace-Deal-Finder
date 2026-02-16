@@ -26,6 +26,12 @@ const DEFAULT_DEBUG_RADIUS = DEFAULT_RADIUS;
 const DEFAULT_DEBUG_MAX_LISTINGS = 20;
 const DEFAULT_DEBUG_THRESHOLD = 20;
 
+type CancelSearchOptions = {
+  cancelBackend?: boolean;
+  clearError?: boolean;
+  addCancelLog?: boolean;
+};
+
 type SSEDispatchHandlers = {
   handlePhaseUpdate: (phase: SearchPhase) => void;
   handleProgressUpdate: (scannedCount: number) => void;
@@ -254,13 +260,17 @@ export default function Home() {
    * Cancels the current search by canceling the stream reader and aborting the fetch request.
    * Resets state and returns the app to the form view.
    */
-  const cancelSearch = useCallback(async () => {
+  const cancelSearch = useCallback(async (options: CancelSearchOptions = {}) => {
+    const { cancelBackend = true, clearError = true, addCancelLog = true } = options;
+
     // Tell the backend to cancel immediately (kills Chrome, stops scraping)
-    // Await so cleanup starts before we allow a new search
-    try {
-      await fetch(`${API_URL}/api/search/cancel`, { method: "POST" });
-    } catch {
-      // Backend may already be down, continue with local cleanup
+    // Await so cleanup starts before we allow a new search.
+    if (cancelBackend) {
+      try {
+        await fetch(`${API_URL}/api/search/cancel`, { method: "POST" });
+      } catch {
+        // Backend may already be down, continue with local cleanup
+      }
     }
 
     // Cancel the reader first to stop reading from the stream
@@ -289,10 +299,12 @@ export default function Home() {
     }
     
     // Keep logs from this run and append a cancellation message
-    setDebugLogs((prev) => [
-      ...prev,
-      { level: "WARNING", message: "Search cancelled by user" },
-    ]);
+    if (addCancelLog) {
+      setDebugLogs((prev: Array<{ level: string; message: string }>) => [
+        ...prev,
+        { level: "WARNING", message: "Search cancelled by user" },
+      ]);
+    }
     
     isSearchingRef.current = false;
     setIsSearching(false);
@@ -301,13 +313,23 @@ export default function Home() {
     setFilteredCount(0);
     setEvaluatedCount(0);
     setPhase("scraping");
-    setError(null);
+    if (clearError) {
+      setError(null);
+    }
   }, []);
 
   const handleLocationError = useCallback((message: string) => {
-    cancelSearch();
+    // Reset search state immediately
+    isSearchingRef.current = false;
+    setIsSearching(false);
+    setScannedCount(0);
+    setFilteredCount(0);
+    setEvaluatedCount(0);
+    setPhase("scraping");
     setAppState("form");
     setError(message);
+    // The backend already reported a terminal location error, so only cancel local stream.
+    void cancelSearch({ cancelBackend: false, clearError: false, addCancelLog: false });
   }, [cancelSearch]);
 
   /**
@@ -336,7 +358,7 @@ export default function Home() {
    * Appends the listing to the results array for incremental display.
    */
   const onListingResult = useCallback((listing: Listing, evaluatedCount: number) => {
-    setListings((prev) => [...prev, listing]);
+    setListings((prev: Listing[]) => [...prev, listing]);
     setEvaluatedCount(evaluatedCount);
   }, []);
 
@@ -477,7 +499,6 @@ export default function Home() {
     } catch (err) {
       // Don't show error if search was cancelled
       if (err instanceof Error && err.name === "AbortError") {
-        console.log("Search cancelled by user");
         return;
       }
       
@@ -509,11 +530,8 @@ export default function Home() {
    */
   const onSubmit = (data: ValidationFormData) => {
     if (isSearchingRef.current) {
-      console.log("⚠️ onSubmit: Search already in progress, preventing duplicate submission");
       return;
     }
-    
-    console.log("✅ onSubmit: Form submitted, starting search");
     
     // Reset all state — clean slate for the new search
     setScannedCount(0);
@@ -583,6 +601,11 @@ export default function Home() {
 
             {appState === "form" && (
               <>
+                {error && (
+                  <div className="mb-4 rounded border-2 border-destructive bg-destructive/10 px-4 py-3">
+                    <p className="font-mono text-sm text-destructive">{error}</p>
+                  </div>
+                )}
                 <MarketplaceSearchForm
                   register={register}
                   errors={errors}
