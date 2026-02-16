@@ -35,6 +35,7 @@ type SSEDispatchHandlers = {
   onListingResult?: (listing: Listing, evaluatedCount: number) => void;
   onDebugMode?: (params?: DebugSearchParams) => void;
   onDebugFacebook?: (listings: DebugFacebookListing[]) => void;
+  onDebugFacebookListing?: (listing: DebugFacebookListing) => void;
   onDebugEbayQuery?: (entry: DebugEbayQueryEntry) => void;
   onDebugLog?: (entry: { level: string; message: string }) => void;
 };
@@ -97,6 +98,8 @@ function dispatchSSEEvent(payloadString: string, handlers: SSEDispatchHandlers):
     handlers.onDebugMode?.(params);
   } else if (data.type === "debug_facebook" && Array.isArray(data.listings)) {
     handlers.onDebugFacebook?.(data.listings as DebugFacebookListing[]);
+  } else if (data.type === "debug_facebook_listing" && data.listing) {
+    handlers.onDebugFacebookListing?.(data.listing as DebugFacebookListing);
   } else if (data.type === "debug_ebay_query" && data.fbTitle != null && data.ebayQuery != null) {
     handlers.onDebugEbayQuery?.({ fbTitle: data.fbTitle, ebayQuery: data.ebayQuery });
   } else if (data.type === "debug_log" && data.level != null && data.message != null) {
@@ -284,6 +287,8 @@ export default function Home() {
           if (params) setDebugSearchParams(params);
         },
         onDebugFacebook: setDebugFacebookListings,
+        onDebugFacebookListing: (listing: DebugFacebookListing) =>
+          setDebugFacebookListings((prev: DebugFacebookListing[]) => [...prev, listing]),
         onDebugEbayQuery: onDebugEbayQuery,
         onDebugLog: (entry) => setDebugLogs((prev: Array<{ level: string; message: string }>) => [...prev, entry]),
       };
