@@ -2,7 +2,7 @@
 Facebook Marketplace Scraper
 
 Scrapes Facebook Marketplace listings using Playwright for better anti-detection.
-Supports searching by query, zip code, and radius.
+Supports searching by query, location (city name or postal code), and radius.
 
 Authentication is handled by the app: users provide login data via the in-app setup,
 which is stored and loaded from the path in FB_COOKIES_FILE. The scraper expects
@@ -40,6 +40,8 @@ PROXY_DEBUG_PORT = 9222
 NAVIGATION_TIMEOUT_MS = 20000
 ELEMENT_WAIT_TIMEOUT_MS = 8000
 ACTION_TIMEOUT_MS = 4000
+CONTINUE_AS_WAIT_TIMEOUT_MS = 5000
+
 
 # Results area: wait for this after search page loads.
 SEARCH_RESULTS_SELECTOR = "div[role='main']"
@@ -88,6 +90,16 @@ class FacebookNotLoggedInError(Exception):
     This happens when navigating to Marketplace results in a redirect to the login page
     or when login-wall elements are visible on the page, indicating the saved login data
     is no longer valid and needs to be re-exported.
+    """
+    pass
+
+
+class LocationNotFoundError(Exception):
+    """
+    Raised when the location (city name or postal code) cannot be found or selected in Facebook Marketplace.
+    
+    This happens when the location autocomplete doesn't find matches, or when the Apply button
+    remains disabled after attempting to select a location, indicating the location is invalid.
     """
     pass
 
@@ -331,21 +343,44 @@ class FBMarketplaceScraper:
 
         Inspects the current URL and page content for signs of being redirected to a login
         page. Facebook redirects unauthenticated users to /login or shows a login form when
-        session cookies are missing or expired. Raises FacebookNotLoggedInError if any
-        login-wall signal is detected.
+        session cookies are missing or expired. If the login form is present, it attempts to
+        click the "Continue as ..." button once, then checks again. Raises
+        FacebookNotLoggedInError if the login-wall signal remains.
         """
+        login_form = self.page.locator("form[action*='login']").first
+        if login_form.is_visible(timeout=500):
+            logger.warning("🔒 Found a Facebook login prompt — trying to continue")
+            continue_button = self.page.get_by_text(
+                re.compile(r"^Continue as", re.IGNORECASE)
+            ).first
+            try:
+                continue_button.wait_for(state="visible", timeout=ACTION_TIMEOUT_MS)
+                self._check_cancelled()
+                logger.info("⏳ Waiting for Facebook login confirmation")
+                continue_button.click(timeout=ACTION_TIMEOUT_MS)
+                self._check_cancelled()
+                self.page.wait_for_load_state("domcontentloaded", timeout=CONTINUE_AS_WAIT_TIMEOUT_MS)
+                logger.info("✅ Facebook login confirmation accepted")
+            except Exception as e:
+                logger.warning("🔒 Could not continue past the Facebook login prompt")
+                logger.debug("Continue-as click failure details: %s", e)
+
+        self._check_cancelled()
         current_url = self.page.url.lower()
 
-        # Facebook redirects logged-out users to /login or /checkpoint
+        # Facebook redirects logged-out users to /login or /checkpoint.
+        # This check runs after the optional "Continue as..." click attempt above.
         if "/login" in current_url or "/checkpoint" in current_url:
             logger.warning("🔒 Detected login redirect — Facebook session is invalid")
             raise FacebookNotLoggedInError("Facebook session expired or invalid")
 
-        # Check for login form (single selector: if present, we're on a login wall)
-        login_form = self.page.locator("form[action*='login']").first
+        # Check for login form (single selector: if present, we're on a login wall).
+        # This is the second check when we attempted "Continue as...".
         if login_form.is_visible(timeout=500):
             logger.warning("🔒 Detected login form — Facebook session is invalid")
             raise FacebookNotLoggedInError("Facebook session expired or invalid")
+
+        logger.info("✅ Facebook session check passed")
 
     def _goto_search_results(self, query: str):
         """Navigate directly to Marketplace search results URL, verify login, and wait for results.
@@ -362,21 +397,14 @@ class FBMarketplaceScraper:
         self.page.wait_for_selector(SEARCH_RESULTS_SELECTOR, timeout=ELEMENT_WAIT_TIMEOUT_MS)
         self._check_cancelled()
 
-    def _set_location(self, zip_code: Optional[str], radius: int):
-        """Open the location dialog, set zip code and radius, then apply the filters.
+    def _set_location(self, zip_code: str, radius: int):
+        """Open the location dialog, set location (city or postal code) and radius, then apply the filters.
 
         Opens the location dialog by clicking the location pill, sets the radius dropdown
-        first (while the dialog is fresh and fully interactive), then fills the zip code
-        input and selects the first autocomplete suggestion. Finally clicks Apply and waits
-        for the search results to reload with the new filters applied.
-        
-        If zip_code is None or empty, skips location setting entirely and uses Facebook's
-        default location (based on browser/IP location).
+        first (while the dialog is fresh and fully interactive), then fills the location
+        input (supports city names or postal codes) and selects the first autocomplete suggestion.
+        Finally clicks Apply and waits for the search results to reload with the new filters applied.
         """
-        if not zip_code:
-            logger.info("No zip code provided — using your current location")
-            return
-            
         try:
             self._check_cancelled()
             location_pill = self.page.locator(LOCATION_PILL_SELECTOR).first
@@ -392,6 +420,17 @@ class FBMarketplaceScraper:
             location_input.fill(zip_code, timeout=ACTION_TIMEOUT_MS)
             self._check_cancelled()
             random_delay(0.4, 0.8)
+            
+            # Wait for autocomplete suggestions to appear
+            try:
+                autocomplete_listbox = self.page.locator("[role='listbox']").filter(
+                    has=self.page.locator("[role='option']")
+                ).first
+                autocomplete_listbox.wait_for(state="visible", timeout=ACTION_TIMEOUT_MS)
+            except Exception:
+                raise LocationNotFoundError(f"Could not find location suggestions for '{zip_code}'")
+            
+            self._check_cancelled()
             location_input.press("ArrowDown")
             self._check_cancelled()
             random_delay(0.2, 0.4)
@@ -399,7 +438,21 @@ class FBMarketplaceScraper:
             self._check_cancelled()
             random_delay(0.5, 1)
 
+            # Wait for Apply button to become enabled
             apply_button = self.page.locator(LOCATION_APPLY_SELECTOR).first
+            apply_button.wait_for(state="visible", timeout=ACTION_TIMEOUT_MS)
+            
+            # Check if button is enabled (not aria-disabled="true")
+            for attempt in range(20):  # Try up to 20 times (4 seconds total)
+                self._check_cancelled()
+                is_disabled = apply_button.get_attribute("aria-disabled")
+                if is_disabled != "true":
+                    break
+                if attempt < 19:  # Don't delay on last attempt
+                    random_delay(0.2, 0.2)
+            else:
+                raise LocationNotFoundError(f"Location '{zip_code}' could not be selected — Apply button remained disabled")
+            
             apply_button.click(timeout=ACTION_TIMEOUT_MS)
             self._check_cancelled()
 
@@ -412,8 +465,11 @@ class FBMarketplaceScraper:
             raise
         except FacebookNotLoggedInError:
             raise
+        except LocationNotFoundError:
+            raise
         except Exception as e:
             logger.warning("Setting your location failed — %s", e)
+            raise LocationNotFoundError(f"Failed to set location '{zip_code}': {e}") from e
 
     def _set_radius(self, radius: int):
         """Open the radius dropdown and select the given radius value.
@@ -454,9 +510,10 @@ class FBMarketplaceScraper:
         listbox.wait_for(state="visible", timeout=timeout)
         self._check_cancelled()
         
-        # Try miles first, then km (for UK/EU locales)
+        # Match various formats: "5 miles", "5 mi", "5 km", "5 kilometer", "5 kilometers", etc.
+        # Facebook uses "1 kilometer", "2 kilometers" format (American spelling) in some locales
         option = self.page.locator("[role='option']").filter(
-            has_text=re.compile(f"^{radius}\\s*(miles?|mi|km|kilometres?)$", re.IGNORECASE)
+            has_text=re.compile(f"^{radius}\\s*(miles?|mi|km|kilometers?|kilometres?)$", re.IGNORECASE)
         ).first
         option.click(timeout=timeout)
         self._check_cancelled()
@@ -1093,7 +1150,7 @@ class FBMarketplaceScraper:
     def search_marketplace(
         self,
         query: str,
-        zip_code: Optional[str] = None,
+        zip_code: str,
         radius: int = 25,
         max_listings: int = 20,
         on_listing_found=None,
@@ -1110,7 +1167,7 @@ class FBMarketplaceScraper:
         on_inspector_url: optional callback invoked with the DevTools inspector URL when browser is created (headed mode).
         """
         self._on_inspector_url = on_inspector_url
-        location_info = zip_code if zip_code else "current location"
+        location_info = zip_code
         if step_sep == "main":
             logger.info("FB Marketplace search")
             log_data_block(
@@ -1228,7 +1285,7 @@ _scraper_lock = threading.Lock()
 
 def search_marketplace(
     query: str,
-    zip_code: Optional[str] = None,
+    zip_code: str,
     radius: int = 25,
     max_listings: int = 20,
     headless: bool = None,

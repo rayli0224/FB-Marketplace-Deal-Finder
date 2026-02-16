@@ -26,12 +26,19 @@ const DEFAULT_DEBUG_RADIUS = DEFAULT_RADIUS;
 const DEFAULT_DEBUG_MAX_LISTINGS = 20;
 const DEFAULT_DEBUG_THRESHOLD = 20;
 
+type CancelSearchOptions = {
+  cancelBackend?: boolean;
+  clearError?: boolean;
+  addCancelLog?: boolean;
+};
+
 type SSEDispatchHandlers = {
   handlePhaseUpdate: (phase: SearchPhase) => void;
   handleProgressUpdate: (scannedCount: number) => void;
   handleFilteredUpdate?: (filteredCount: number) => void;
   handleCompletion: (data: { scannedCount: number; filteredCount?: number; evaluatedCount: number; listings: Listing[]; threshold?: number; averageConfidence?: number | null }) => void;
   handleAuthError: () => void;
+  handleLocationError: (message: string) => void;
   setEvaluatedCount: (n: number) => void;
   onListingResult?: (listing: Listing, evaluatedCount: number) => void;
   onDebugMode?: (params?: DebugSearchParams) => void;
@@ -70,6 +77,8 @@ function dispatchSSEEvent(payloadString: string, handlers: SSEDispatchHandlers):
   };
   if (data.type === "auth_error") {
     handlers.handleAuthError();
+  } else if (data.type === "location_error") {
+    handlers.handleLocationError(data.message || "Location not found");
   } else if (data.type === "phase" && data.phase != null) {
     handlers.handlePhaseUpdate(data.phase);
   } else if (data.type === "filtered" && typeof data.filteredCount === "number") {
@@ -248,6 +257,82 @@ export default function Home() {
   }, []);
 
   /**
+   * Cancels the current search by canceling the stream reader and aborting the fetch request.
+   * Resets state and returns the app to the form view.
+   */
+  const cancelSearch = useCallback(async (options: CancelSearchOptions = {}) => {
+    const { cancelBackend = true, clearError = true, addCancelLog = true } = options;
+
+    // Tell the backend to cancel immediately (kills Chrome, stops scraping)
+    // Await so cleanup starts before we allow a new search.
+    if (cancelBackend) {
+      try {
+        await fetch(`${API_URL}/api/search/cancel`, { method: "POST" });
+      } catch {
+        // Backend may already be down, continue with local cleanup
+      }
+    }
+
+    // Cancel the reader first to stop reading from the stream
+    if (readerRef.current) {
+      try {
+        readerRef.current.cancel();
+      } catch {
+        // Reader may already be cancelled or released, ignore
+      }
+      try {
+        readerRef.current.releaseLock();
+      } catch {
+        // Lock may already be released, ignore
+      }
+      readerRef.current = null;
+    }
+    
+    // Then abort the fetch request
+    if (abortControllerRef.current) {
+      try {
+        abortControllerRef.current.abort();
+      } catch {
+        // AbortController may already be aborted, ignore
+      }
+      abortControllerRef.current = null;
+    }
+    
+    // Keep logs from this run and append a cancellation message
+    if (addCancelLog) {
+      setDebugLogs((prev: Array<{ level: string; message: string }>) => [
+        ...prev,
+        { level: "WARNING", message: "Search cancelled by user" },
+      ]);
+    }
+    
+    isSearchingRef.current = false;
+    setIsSearching(false);
+    setAppState("form");
+    setScannedCount(0);
+    setFilteredCount(0);
+    setEvaluatedCount(0);
+    setPhase("scraping");
+    if (clearError) {
+      setError(null);
+    }
+  }, []);
+
+  const handleLocationError = useCallback((message: string) => {
+    // Reset search state immediately
+    isSearchingRef.current = false;
+    setIsSearching(false);
+    setScannedCount(0);
+    setFilteredCount(0);
+    setEvaluatedCount(0);
+    setPhase("scraping");
+    setAppState("form");
+    setError(message);
+    // The backend already reported a terminal location error, so only cancel local stream.
+    void cancelSearch({ cancelBackend: false, clearError: false, addCancelLog: false });
+  }, [cancelSearch]);
+
+  /**
    * Applies the final search result: sets listings, counts, threshold, generates CSV blob,
    * and switches the app to the done state so the results table is shown.
    */
@@ -273,7 +358,7 @@ export default function Home() {
    * Appends the listing to the results array for incremental display.
    */
   const onListingResult = useCallback((listing: Listing, evaluatedCount: number) => {
-    setListings((prev) => [...prev, listing]);
+    setListings((prev: Listing[]) => [...prev, listing]);
     setEvaluatedCount(evaluatedCount);
   }, []);
 
@@ -296,6 +381,7 @@ export default function Home() {
         handleFilteredUpdate,
         handleCompletion,
         handleAuthError,
+        handleLocationError,
         setEvaluatedCount,
         onListingResult,
         onDebugMode: (params) => {
@@ -359,62 +445,8 @@ export default function Home() {
         reader.releaseLock();
       }
     },
-    [handlePhaseUpdate, handleProgressUpdate, handleFilteredUpdate, handleCompletion, handleAuthError, onListingResult, onDebugEbayQuery]
+    [handlePhaseUpdate, handleProgressUpdate, handleFilteredUpdate, handleCompletion, handleAuthError, handleLocationError, onListingResult, onDebugEbayQuery]
   );
-
-  /**
-   * Cancels the current search by canceling the stream reader and aborting the fetch request.
-   * Resets state and returns the app to the form view.
-   */
-  const cancelSearch = useCallback(async () => {
-    // Tell the backend to cancel immediately (kills Chrome, stops scraping)
-    // Await so cleanup starts before we allow a new search
-    try {
-      await fetch(`${API_URL}/api/search/cancel`, { method: "POST" });
-    } catch {
-      // Backend may already be down, continue with local cleanup
-    }
-
-    // Cancel the reader first to stop reading from the stream
-    if (readerRef.current) {
-      try {
-        readerRef.current.cancel();
-      } catch {
-        // Reader may already be cancelled or released, ignore
-      }
-      try {
-        readerRef.current.releaseLock();
-      } catch {
-        // Lock may already be released, ignore
-      }
-      readerRef.current = null;
-    }
-    
-    // Then abort the fetch request
-    if (abortControllerRef.current) {
-      try {
-        abortControllerRef.current.abort();
-      } catch {
-        // AbortController may already be aborted, ignore
-      }
-      abortControllerRef.current = null;
-    }
-    
-    // Keep logs from this run and append a cancellation message
-    setDebugLogs((prev) => [
-      ...prev,
-      { level: "WARNING", message: "Search cancelled by user" },
-    ]);
-    
-    isSearchingRef.current = false;
-    setIsSearching(false);
-    setAppState("form");
-    setScannedCount(0);
-    setFilteredCount(0);
-    setEvaluatedCount(0);
-    setPhase("scraping");
-    setError(null);
-  }, []);
 
   /**
    * Runs the marketplace search: POSTs form data to the stream endpoint, reads the SSE response,
@@ -467,7 +499,6 @@ export default function Home() {
     } catch (err) {
       // Don't show error if search was cancelled
       if (err instanceof Error && err.name === "AbortError") {
-        console.log("Search cancelled by user");
         return;
       }
       
@@ -499,11 +530,8 @@ export default function Home() {
    */
   const onSubmit = (data: ValidationFormData) => {
     if (isSearchingRef.current) {
-      console.log("⚠️ onSubmit: Search already in progress, preventing duplicate submission");
       return;
     }
-    
-    console.log("✅ onSubmit: Form submitted, starting search");
     
     // Reset all state — clean slate for the new search
     setScannedCount(0);
@@ -573,6 +601,11 @@ export default function Home() {
 
             {appState === "form" && (
               <>
+                {error && (
+                  <div className="mb-4 rounded border-2 border-destructive bg-destructive/10 px-4 py-3">
+                    <p className="font-mono text-sm text-destructive">{error}</p>
+                  </div>
+                )}
                 <MarketplaceSearchForm
                   register={register}
                   errors={errors}

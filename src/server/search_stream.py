@@ -15,6 +15,7 @@ from typing import Optional
 from src.scrapers.fb_marketplace_scraper import (
     search_marketplace as search_fb_marketplace,
     FacebookNotLoggedInError,
+    LocationNotFoundError,
     SearchCancelledError,
     force_close_active_scraper,
 )
@@ -93,7 +94,7 @@ def create_search_stream(request, debug_mode: bool):
         for name in _DEBUG_LOG_LOGGER_NAMES:
             logging.getLogger(name).addHandler(debug_log_handler)
 
-    location_info_req = request.zipCode if request.zipCode else "current location"
+    location_info_req = request.zipCode
     log_step_sep(logger, f"Search request — query='{request.query}', location={location_info_req}, radius={request.radius}mi")
 
     filtered_count_holder = [0]
@@ -160,6 +161,11 @@ def create_search_stream(request, debug_mode: bool):
             if not cancelled.is_set():
                 logger.warning("🔒 Facebook session expired — notifying client")
                 event_queue.put({"type": "auth_error"})
+        except LocationNotFoundError as e:
+            if not cancelled.is_set():
+                logger.warning(f"⚠️ {e}")
+                event_queue.put({"type": "location_error", "message": str(e)})
+                cancelled.set()
         except Exception as e:
             if not cancelled.is_set():
                 log_error_short(logger, f"Step 2 failed: {e}")
@@ -182,7 +188,7 @@ def create_search_stream(request, debug_mode: bool):
 
         thread_id: Optional[int] = None
         try:
-            location_info_stream = request.zipCode if request.zipCode else "current location"
+            location_info_stream = request.zipCode
             log_step_sep(logger, f"🔍 Step 1: Starting search — query='{request.query}', location={location_info_stream}, radius={request.radius}mi")
             log_step_sep(logger, "📜 Step 2: Scraping Facebook Marketplace")
             yield f"data: {json.dumps({'type': 'phase', 'phase': 'scraping'})}\n\n"
@@ -206,27 +212,20 @@ def create_search_stream(request, debug_mode: bool):
             set_active_search(cancelled=cancelled, thread_id=thread_id)
 
             while True:
-                if cancelled.is_set():
-                    force_close_active_scraper(thread_id)
-                    break
-
                 try:
                     event = event_queue.get(timeout=0.5)
-
-                    if cancelled.is_set():
-                        force_close_active_scraper(thread_id)
-                        break
 
                     if event["type"] == "auth_error":
                         logger.warning("🔒 Sending auth_error to client")
                         yield f"data: {json.dumps({'type': 'auth_error'})}\n\n"
                         return
+                    
+                    if event["type"] == "location_error":
+                        logger.warning("⚠️ Sending location_error to client")
+                        yield f"data: {json.dumps({'type': 'location_error', 'message': event.get('message', 'Location not found')})}\n\n"
+                        return
 
                     if event["type"] == "scrape_done":
-                        break
-
-                    if cancelled.is_set():
-                        force_close_active_scraper(thread_id)
                         break
 
                     try:
@@ -236,6 +235,9 @@ def create_search_stream(request, debug_mode: bool):
                         force_close_active_scraper(thread_id)
                         raise
                 except queue.Empty:
+                    if cancelled.is_set():
+                        force_close_active_scraper(thread_id)
+                        break
                     continue
 
             yield from drain_log_queue()

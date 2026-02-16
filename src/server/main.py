@@ -55,7 +55,7 @@ app.add_middleware(
 
 class SearchRequest(BaseModel):
     query: str
-    zipCode: Optional[str] = None
+    zipCode: str
     radius: int = DEFAULT_RADIUS
     threshold: float
     maxListings: int = 20
@@ -205,7 +205,7 @@ def search_deals(request: SearchRequest):
     """
     Search Facebook Marketplace and calculate deal scores using eBay market data.
     """
-    location_info = request.zipCode if request.zipCode else "current location"
+    location_info = request.zipCode
     log_step_sep(logger, f"🔍 Step 1: Starting search — query='{request.query}', location={location_info}, radius={request.radius}mi")
     log_step_sep(logger, "📜 Step 2: Scraping Facebook Marketplace")
     fb_listings = []

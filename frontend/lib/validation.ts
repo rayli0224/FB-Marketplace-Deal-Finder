@@ -17,25 +17,14 @@ export const DEFAULT_RADIUS = 20;
 
 /**
  * Validation schema for the marketplace search form.
- * Validates query (required), zipCode (digits only, exactly 5), radius (one of RADIUS_OPTIONS),
+ * Validates query (required), zipCode (required - supports cities or postal codes), radius (one of RADIUS_OPTIONS),
  * threshold (0-100%), and maxListings (1-200). Uses Zod's preprocess to handle empty
  * string inputs from number fields before converting to numbers. Provides specific
  * error messages for missing input, non-numeric characters, wrong length, and out-of-range values.
  */
 export const formSchema = z.object({
   query: z.string().min(1, "Query is required"),
-  zipCode: z
-    .string()
-    .refine(
-      (val: string) => val === "" || /^\d+$/.test(val),
-      { message: "Zip code must contain only digits" }
-    )
-    .refine(
-      (val: string) => val === "" || val.length === 5,
-      { message: "Zip code must be exactly 5 digits" }
-    )
-    .transform((val: string) => val || undefined)
-    .optional(),
+  zipCode: z.string().min(1, "Location is required"),
   radius: z.preprocess(
     preprocessNumber,
     z.number({ required_error: "Radius is required" }).refine(
