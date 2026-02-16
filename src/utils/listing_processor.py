@@ -12,10 +12,10 @@ import asyncio
 import threading
 
 from src.scrapers.fb_marketplace_scraper import Listing, SearchCancelledError
-from src.scrapers.ebay_scraper import get_market_price, DEFAULT_EBAY_ITEMS
+from src.scrapers.ebay_scraper_v2 import get_market_price, DEFAULT_EBAY_ITEMS
 from src.api.deal_calculator import calculate_deal_score
 from src.utils.openai_helpers import generate_ebay_query_for_listing, filter_ebay_results_with_openai
-from src.utils.colored_logger import setup_colored_logger, log_data_block, log_listing_box_sep, set_step_indent, clear_step_indent, wait_status
+from src.utils.colored_logger import setup_colored_logger, log_data_block, log_listing_box_sep, log_warning, set_step_indent, clear_step_indent, wait_status
 import statistics
 
 logger = setup_colored_logger("listing_processor")
@@ -66,6 +66,7 @@ def process_single_listing(
     listing_index: Optional[int] = None,
     total_listings: Optional[int] = None,
     cancelled: Optional[threading.Event] = None,
+    ebay_scraper=None,
 ) -> Dict:
     """
     Process a single FB listing: generate eBay query via OpenAI, fetch comparable
@@ -83,11 +84,13 @@ def process_single_listing(
     logger.info(f"{progress}FB listing: {listing.title}")
     set_step_indent("  ")
     try:
-        return _process_listing_inner(listing, original_query, threshold, n_items, cancelled)
+        return _process_listing_inner(
+            listing, original_query, threshold, n_items, cancelled, ebay_scraper
+        )
     except SearchCancelledError:
         raise
     except Exception as e:
-        logger.warning(f"Error processing listing: {e}")
+        log_warning(logger, f"Error processing listing: {e}")
         return _listing_result(listing, None, no_comp_reason="Unable to generate eBay comparisons")
     finally:
         clear_step_indent()
@@ -100,6 +103,7 @@ def _process_listing_inner(
     threshold: float,
     n_items: int,
     cancelled: Optional[threading.Event] = None,
+    ebay_scraper=None,
 ) -> Dict:
     """Inner processing logic. Caller handles exceptions and returns fallback result."""
     log_data_block(logger, "Data", price=listing.price, location=listing.location, url=listing.url)
@@ -110,9 +114,9 @@ def _process_listing_inner(
     with wait_status(logger, "eBay search"):
         query_result = generate_ebay_query_for_listing(listing, original_query)
     if query_result is None:
-        logger.warning("Could not prepare search — skipping deal score")
+        log_warning(logger, "Could not prepare search — skipping deal score")
         return _listing_result(listing, None, no_comp_reason="Could not prepare search")
-    enhanced_query, browse_api_parameters, skip_reason = query_result
+    enhanced_query, skip_reason = query_result
     if skip_reason is not None:
         return _listing_result(listing, None, no_comp_reason=skip_reason)
 
@@ -121,14 +125,15 @@ def _process_listing_inner(
         ebay_stats = get_market_price(
             search_term=enhanced_query,
             n_items=n_items,
-            browse_api_parameters=browse_api_parameters,
+            scraper=ebay_scraper,
+            cancelled=cancelled,
         )
 
     if not ebay_stats:
-        logger.warning("No eBay results — skipping deal score")
+        log_warning(logger, "No eBay results — skipping deal score")
         return _listing_result(listing, None, no_comp_reason="No similar items found on eBay")
     if ebay_stats.sample_size < 3:
-        logger.warning(f"Only {ebay_stats.sample_size} similar listing(s) — small sample")
+        log_warning(logger, f"Only {ebay_stats.sample_size} similar listing(s) — small sample")
     logger.info(f"📋 {ebay_stats.sample_size} similar listings on eBay (avg ${ebay_stats.average:.2f})")
 
     logger.info("🔍 Keeping only true matches")
@@ -138,7 +143,7 @@ def _process_listing_inner(
         with wait_status(logger, "matching listings"):
             filter_result = filter_ebay_results_with_openai(listing, ebay_items, cancelled=cancelled)
         if filter_result is not None and asyncio.iscoroutine(filter_result):
-            logger.warning("Filter returned coroutine instead of result — using all listings")
+            log_warning(logger, "Filter returned coroutine instead of result — using all listings")
             filter_result = None
         if filter_result is not None:
             comparable_indices, filtered_items, filter_reasons = filter_result
@@ -170,9 +175,9 @@ def _process_listing_inner(
                     ebay_stats.average = statistics.mean(filtered_prices)
                     ebay_stats.sample_size = len(filtered_prices)
                     ebay_stats.item_summaries = all_items_with_filter_flag
-                    logger.warning(f"Only {ebay_stats.sample_size} matches (need at least 3 to compare)")
+                    log_warning(logger, f"Only {ebay_stats.sample_size} matches (need at least 3 to compare)")
                 else:
-                    logger.warning("No matching listings — can't compare price")
+                    log_warning(logger, "No matching listings — can't compare price")
                     ebay_stats.average = 0
                     ebay_stats.sample_size = 0
                     ebay_stats.raw_prices = []
@@ -201,7 +206,7 @@ def _process_listing_inner(
     comp_items = all_items_with_filter_flag if all_items_with_filter_flag is not None else getattr(ebay_stats, "item_summaries", None)
 
     if deal_score is None:
-        logger.warning("Could not compare price")
+        log_warning(logger, "Could not compare price")
         return _listing_result(
             listing,
             None,

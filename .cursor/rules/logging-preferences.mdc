@@ -37,8 +37,9 @@ alwaysApply: true
   - `log_data_line` — one-line key=value data.
   - `log_data_block` — label then one line per field (indented); for listing/retrieved blocks.
   - `log_listing_box_sep` — single dash line above and below each list element (Retrieved block, FB listing block).
-  - `log_error_short` — errors with consistent truncation (no raw `logger.error` with manual truncation).
-- When adding new logging, prefer these helpers over ad-hoc `logger.info`/`logger.error` patterns.
+  - `log_warning` — warnings with ⚠️ prefix (non-blocking, recoverable).
+  - `log_error_short` — errors with ❌ prefix and truncation (blocking, full failures).
+- When adding new logging, prefer these helpers over ad-hoc `logger.info`/`logger.error`/`logger.warning` patterns.
 
 ## Human-Readable Messages
 
@@ -51,8 +52,8 @@ alwaysApply: true
 - Use emojis **sparingly** to make log types easy to distinguish at a glance. Do not overkill.
 - **Steps / phases**: 🔍 Step 1 (search start), 📜 Step 2 (scrape), 💰 Step 3 (eBay), 📊 Step 4 (scores / processing), ✅ Step 5 (completed).
 - **Success / done**: ✅ for completion, "Done:", "Found N deals", "Search done".
-- **Warning**: ⚠️ for warnings (auth, no listings, below threshold, cancellation).
-- **Error**: ❌ applied in `log_error_short` so errors stand out.
+- **Warnings** (non-blocking): Always prefix with ⚠️. Use for `logger.warning` — auth issues, no listings, below threshold, cancellation, recoverable failures.
+- **Errors** (blocking / full failures): Always prefix with ❌. Use for `logger.error` and `log_error_short` — package missing, request failed, unrecoverable failures.
 - **Waiting**: ⏳ "Waiting for {label}..."; ✅ "Done: {label}" (from `wait_status`).
 - **Data / counts**: 📋 for "Found N listings" or similar summary counts.
 - Emojis appear in the raw log message so they propagate to any debug log UI unchanged.
