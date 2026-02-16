@@ -26,5 +26,5 @@ if [[ -n "$DEBUG_MODE" ]]; then
 fi
 echo ""
 
-uvicorn src.api.main:app --host 0.0.0.0 --port 8000 --reload --no-access-log
+uvicorn src.server.main:app --host 0.0.0.0 --port 8000 --reload --no-access-log
 

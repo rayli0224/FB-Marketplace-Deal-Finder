@@ -29,12 +29,14 @@ const DEFAULT_DEBUG_THRESHOLD = 20;
 type SSEDispatchHandlers = {
   handlePhaseUpdate: (phase: SearchPhase) => void;
   handleProgressUpdate: (scannedCount: number) => void;
-  handleCompletion: (data: { scannedCount: number; evaluatedCount: number; listings: Listing[]; threshold?: number; averageConfidence?: number | null }) => void;
+  handleFilteredUpdate?: (filteredCount: number) => void;
+  handleCompletion: (data: { scannedCount: number; filteredCount?: number; evaluatedCount: number; listings: Listing[]; threshold?: number; averageConfidence?: number | null }) => void;
   handleAuthError: () => void;
   setEvaluatedCount: (n: number) => void;
   onListingResult?: (listing: Listing, evaluatedCount: number) => void;
   onDebugMode?: (params?: DebugSearchParams) => void;
   onDebugFacebook?: (listings: DebugFacebookListing[]) => void;
+  onDebugFacebookListing?: (listing: DebugFacebookListing) => void;
   onDebugEbayQuery?: (entry: DebugEbayQueryEntry) => void;
   onDebugLog?: (entry: { level: string; message: string }) => void;
 };
@@ -48,6 +50,7 @@ function dispatchSSEEvent(payloadString: string, handlers: SSEDispatchHandlers):
     type: string;
     phase?: SearchPhase;
     scannedCount?: number;
+    filteredCount?: number;
     evaluatedCount?: number;
     listing?: Listing;
     listings?: Listing[] | DebugFacebookListing[];
@@ -69,6 +72,8 @@ function dispatchSSEEvent(payloadString: string, handlers: SSEDispatchHandlers):
     handlers.handleAuthError();
   } else if (data.type === "phase" && data.phase != null) {
     handlers.handlePhaseUpdate(data.phase);
+  } else if (data.type === "filtered" && typeof data.filteredCount === "number") {
+    handlers.handleFilteredUpdate?.(data.filteredCount);
   } else if (data.type === "progress" && typeof data.scannedCount === "number") {
     handlers.handleProgressUpdate(data.scannedCount);
   } else if (data.type === "listing_result" && data.listing != null && typeof data.evaluatedCount === "number") {
@@ -78,6 +83,7 @@ function dispatchSSEEvent(payloadString: string, handlers: SSEDispatchHandlers):
   } else if (data.type === "done" && data.listings != null && Array.isArray(data.listings)) {
     handlers.handleCompletion({
       scannedCount: data.scannedCount ?? 0,
+      filteredCount: data.filteredCount ?? 0,
       evaluatedCount: data.evaluatedCount ?? 0,
       listings: data.listings as Listing[],
       threshold: data.threshold,
@@ -97,6 +103,8 @@ function dispatchSSEEvent(payloadString: string, handlers: SSEDispatchHandlers):
     handlers.onDebugMode?.(params);
   } else if (data.type === "debug_facebook" && Array.isArray(data.listings)) {
     handlers.onDebugFacebook?.(data.listings as DebugFacebookListing[]);
+  } else if (data.type === "debug_facebook_listing" && data.listing) {
+    handlers.onDebugFacebookListing?.(data.listing as DebugFacebookListing);
   } else if (data.type === "debug_ebay_query" && data.fbTitle != null && data.ebayQuery != null) {
     handlers.onDebugEbayQuery?.({ fbTitle: data.fbTitle, ebayQuery: data.ebayQuery });
   } else if (data.type === "debug_log" && data.level != null && data.message != null) {
@@ -147,6 +155,7 @@ export default function Home() {
     checkCookies();
   }, []);
   const [scannedCount, setScannedCount] = useState(0);
+  const [filteredCount, setFilteredCount] = useState(0);
   const [evaluatedCount, setEvaluatedCount] = useState(0);
   const [maxListings, setMaxListings] = useState<number>(20);
   const [csvBlob, setCsvBlob] = useState<Blob | null>(null);
@@ -216,6 +225,13 @@ export default function Home() {
   }, []);
 
   /**
+   * Updates the filtered count when listings are filtered for suspicious prices.
+   */
+  const handleFilteredUpdate = useCallback((filteredCount: number) => {
+    setFilteredCount(filteredCount);
+  }, []);
+
+  /**
    * Handles an auth_error event from the backend, indicating the Facebook session has expired.
    * Resets the search state and sends the user back to the cookie setup guide so they can
    * re-connect their Facebook account.
@@ -224,6 +240,7 @@ export default function Home() {
     isSearchingRef.current = false;
     setIsSearching(false);
     setScannedCount(0);
+    setFilteredCount(0);
     setEvaluatedCount(0);
     setPhase("scraping");
     setError("Your Facebook session has expired. Please re-connect your account to keep searching.");
@@ -234,8 +251,9 @@ export default function Home() {
    * Applies the final search result: sets listings, counts, threshold, generates CSV blob,
    * and switches the app to the done state so the results table is shown.
    */
-  const handleCompletion = useCallback((data: { scannedCount: number; evaluatedCount: number; listings: Listing[]; threshold?: number }) => {
+  const handleCompletion = useCallback((data: { scannedCount: number; filteredCount?: number; evaluatedCount: number; listings: Listing[]; threshold?: number }) => {
     setScannedCount(data.scannedCount);
+    setFilteredCount(data.filteredCount ?? 0);
     setEvaluatedCount(data.evaluatedCount);
     setListings(data.listings);
     setThreshold(data.threshold || 0);
@@ -275,6 +293,7 @@ export default function Home() {
       const sseHandlers: SSEDispatchHandlers = {
         handlePhaseUpdate,
         handleProgressUpdate,
+        handleFilteredUpdate,
         handleCompletion,
         handleAuthError,
         setEvaluatedCount,
@@ -284,6 +303,8 @@ export default function Home() {
           if (params) setDebugSearchParams(params);
         },
         onDebugFacebook: setDebugFacebookListings,
+        onDebugFacebookListing: (listing: DebugFacebookListing) =>
+          setDebugFacebookListings((prev: DebugFacebookListing[]) => [...prev, listing]),
         onDebugEbayQuery: onDebugEbayQuery,
         onDebugLog: (entry) => setDebugLogs((prev: Array<{ level: string; message: string }>) => [...prev, entry]),
       };
@@ -338,27 +359,32 @@ export default function Home() {
         reader.releaseLock();
       }
     },
-    [handlePhaseUpdate, handleProgressUpdate, handleCompletion, handleAuthError, onListingResult, onDebugEbayQuery]
+    [handlePhaseUpdate, handleProgressUpdate, handleFilteredUpdate, handleCompletion, handleAuthError, onListingResult, onDebugEbayQuery]
   );
 
   /**
    * Cancels the current search by canceling the stream reader and aborting the fetch request.
    * Resets state and returns the app to the form view.
    */
-  const cancelSearch = useCallback(() => {
+  const cancelSearch = useCallback(async () => {
     // Tell the backend to cancel immediately (kills Chrome, stops scraping)
-    fetch(`${API_URL}/api/search/cancel`, { method: "POST" }).catch(() => {});
+    // Await so cleanup starts before we allow a new search
+    try {
+      await fetch(`${API_URL}/api/search/cancel`, { method: "POST" });
+    } catch {
+      // Backend may already be down, continue with local cleanup
+    }
 
     // Cancel the reader first to stop reading from the stream
     if (readerRef.current) {
       try {
         readerRef.current.cancel();
-      } catch (err) {
+      } catch {
         // Reader may already be cancelled or released, ignore
       }
       try {
         readerRef.current.releaseLock();
-      } catch (err) {
+      } catch {
         // Lock may already be released, ignore
       }
       readerRef.current = null;
@@ -368,7 +394,7 @@ export default function Home() {
     if (abortControllerRef.current) {
       try {
         abortControllerRef.current.abort();
-      } catch (err) {
+      } catch {
         // AbortController may already be aborted, ignore
       }
       abortControllerRef.current = null;
@@ -384,6 +410,7 @@ export default function Home() {
     setIsSearching(false);
     setAppState("form");
     setScannedCount(0);
+    setFilteredCount(0);
     setEvaluatedCount(0);
     setPhase("scraping");
     setError(null);
@@ -478,8 +505,9 @@ export default function Home() {
     
     console.log("✅ onSubmit: Form submitted, starting search");
     
-    // Reset state
+    // Reset all state — clean slate for the new search
     setScannedCount(0);
+    setFilteredCount(0);
     setEvaluatedCount(0);
     setMaxListings(Number(data.maxListings) || 20);
     setCsvBlob(null);
@@ -490,9 +518,10 @@ export default function Home() {
     setDebugSearchParams(null);
     setDebugFacebookListings([]);
     setDebugEbayQueries([]);
+    setDebugLogs([]);
     setAppState("loading");
     
-    // Start search directly - no useEffect needed
+    // Start search directly — backend handles killing any previous search before starting
     performSearch(data);
   };
 
@@ -505,6 +534,7 @@ export default function Home() {
   const handleReset = () => {
     setAppState("form");
     setScannedCount(0);
+    setFilteredCount(0);
     setEvaluatedCount(0);
     setCsvBlob(null);
     setListings([]);
@@ -568,6 +598,7 @@ export default function Home() {
                 <SearchLoadingState
                   phase={phase}
                   scannedCount={scannedCount}
+                  filteredCount={filteredCount}
                   evaluatedCount={evaluatedCount}
                   maxListings={maxListings}
                   onCancel={cancelSearch}
@@ -576,6 +607,7 @@ export default function Home() {
                   <SearchResultsTable
                     listings={listings}
                     scannedCount={scannedCount}
+                    suspiciousFilteredCount={filteredCount}
                     threshold={threshold}
                     onDownloadCSV={downloadCSV}
                     onReset={handleReset}
@@ -589,6 +621,7 @@ export default function Home() {
               <SearchResultsTable
                 listings={listings}
                 scannedCount={scannedCount}
+                suspiciousFilteredCount={filteredCount}
                 threshold={threshold}
                 onDownloadCSV={downloadCSV}
                 onReset={handleReset}

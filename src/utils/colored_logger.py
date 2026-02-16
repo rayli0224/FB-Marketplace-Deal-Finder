@@ -236,6 +236,14 @@ def log_data_block(logger: logging.Logger, label: str, indent: str = "  ", **kwa
             logger.info(f"{indent}{k}={_format_data_value(k, v)}")
 
 
+def log_warning(logger: logging.Logger, message: str) -> None:
+    """
+    Log message at WARNING level. Uses the logger's warning method which will be
+    colored yellow by the ColoredFormatter when stdout is a TTY.
+    """
+    logger.warning(message)
+
+
 def log_error_short(logger: logging.Logger, message: str, max_len: int = DEFAULT_ERROR_MAX_LEN) -> None:
     """
     Log message at ERROR level with a short prefix. The message is truncated so the

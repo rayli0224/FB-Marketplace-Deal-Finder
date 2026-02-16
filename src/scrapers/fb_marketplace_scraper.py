@@ -998,6 +998,8 @@ class FBMarketplaceScraper:
         self,
         max_listings: int = 20,
         on_listing_found=None,
+        on_listing_filtered=None,
+        listing_filter=None,
         extract_descriptions: bool = False,
     ) -> List[Listing]:
         """
@@ -1006,6 +1008,7 @@ class FBMarketplaceScraper:
         Scrolls to load content, locates listing DOM elements, then iterates until
         max_listings valid listings are extracted or elements run out. Skips
         elements that fail extraction (e.g. odd price formats) and continues.
+        If listing_filter is provided, only listings that pass the filter are kept.
         Checks for cancellation at each iteration and exits early if requested.
         """
         listings = []
@@ -1024,6 +1027,12 @@ class FBMarketplaceScraper:
                 
                 listing = self._extract_listing_from_element(element, extract_descriptions=extract_descriptions)
                 if listing:
+                    # Apply filter if provided
+                    if listing_filter and not listing_filter(listing):
+                        if on_listing_filtered:
+                            on_listing_filtered(listing)
+                        continue
+                    
                     idx = len(listings) + 1
                     label = f"[{idx}/{max_listings}] Retrieved:"
                     log_listing_box_sep(logger)
@@ -1052,6 +1061,8 @@ class FBMarketplaceScraper:
         radius: int = 25,
         max_listings: int = 20,
         on_listing_found=None,
+        on_listing_filtered=None,
+        listing_filter=None,
         extract_descriptions: bool = False,
         step_sep: Optional[str] = "main",
         on_inspector_url: Optional[Callable[[str], None]] = None,
@@ -1108,6 +1119,8 @@ class FBMarketplaceScraper:
                 listings = self._extract_listings(
                     max_listings=max_listings,
                     on_listing_found=on_listing_found,
+                    on_listing_filtered=on_listing_filtered,
+                    listing_filter=listing_filter,
                     extract_descriptions=extract_descriptions,
                 )
             return listings
@@ -1184,6 +1197,8 @@ def search_marketplace(
     max_listings: int = 20,
     headless: bool = None,
     on_listing_found=None,
+    on_listing_filtered=None,
+    listing_filter=None,
     extract_descriptions: bool = False,
     step_sep: Optional[str] = "main",
     on_inspector_url: Optional[Callable[[str], None]] = None,
@@ -1209,6 +1224,8 @@ def search_marketplace(
             query, zip_code, radius,
             max_listings=max_listings,
             on_listing_found=on_listing_found,
+            on_listing_filtered=on_listing_filtered,
+            listing_filter=listing_filter,
             extract_descriptions=extract_descriptions,
             step_sep=step_sep,
             on_inspector_url=on_inspector_url,

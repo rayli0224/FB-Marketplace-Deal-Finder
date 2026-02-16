@@ -11,7 +11,8 @@ services:
     ports:
       - "3000:3000"
       - "8000:8000"
-      - "9222:9222"  # Chromium remote debugging (used in debug mode)
+      - "9222:9222"  # FB Chromium remote debugging (debug mode)
+      - "9224:9224"  # eBay Chromium remote debugging (debug mode)
     env_file:
       - .env
     environment:
