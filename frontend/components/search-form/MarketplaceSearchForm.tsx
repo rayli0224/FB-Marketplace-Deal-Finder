@@ -48,13 +48,11 @@ export function MarketplaceSearchForm({ register, errors, isValid, handleSubmit,
         label="PORT_CODE"
         id="zipCode"
         type="text"
-        placeholder="e.g. 10001 (optional)"
+        placeholder="e.g. 10001 or SW1A 1AA"
         register={register}
-        pattern="[0-9]{5}"
-        digitsOnly
-        inputMode="numeric"
+        required
         error={errors.zipCode?.message}
-        tooltip="5-digit ZIP code for your search area. Leave empty to use your current location."
+        tooltip="Postal code for your search area."
       />
 
       <div className="grid grid-cols-3 gap-4">
@@ -62,7 +60,7 @@ export function MarketplaceSearchForm({ register, errors, isValid, handleSubmit,
           <label htmlFor="radius" className="mb-2 flex items-center gap-2 font-mono text-xs text-muted-foreground">
             <span className="text-primary">$</span>
             RAID_RADIUS
-            <InfoIcon tooltip="Search radius in miles from your ZIP code." />
+            <InfoIcon tooltip="Search radius in miles from your postal code." />
           </label>
           <Combobox
             id="radius"

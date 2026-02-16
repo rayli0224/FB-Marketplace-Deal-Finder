@@ -362,21 +362,14 @@ class FBMarketplaceScraper:
         self.page.wait_for_selector(SEARCH_RESULTS_SELECTOR, timeout=ELEMENT_WAIT_TIMEOUT_MS)
         self._check_cancelled()
 
-    def _set_location(self, zip_code: Optional[str], radius: int):
+    def _set_location(self, zip_code: str, radius: int):
         """Open the location dialog, set zip code and radius, then apply the filters.
 
         Opens the location dialog by clicking the location pill, sets the radius dropdown
         first (while the dialog is fresh and fully interactive), then fills the zip code
         input and selects the first autocomplete suggestion. Finally clicks Apply and waits
         for the search results to reload with the new filters applied.
-        
-        If zip_code is None or empty, skips location setting entirely and uses Facebook's
-        default location (based on browser/IP location).
         """
-        if not zip_code:
-            logger.info("No zip code provided — using your current location")
-            return
-            
         try:
             self._check_cancelled()
             location_pill = self.page.locator(LOCATION_PILL_SELECTOR).first
@@ -1093,7 +1086,7 @@ class FBMarketplaceScraper:
     def search_marketplace(
         self,
         query: str,
-        zip_code: Optional[str] = None,
+        zip_code: str,
         radius: int = 25,
         max_listings: int = 20,
         on_listing_found=None,
@@ -1110,7 +1103,7 @@ class FBMarketplaceScraper:
         on_inspector_url: optional callback invoked with the DevTools inspector URL when browser is created (headed mode).
         """
         self._on_inspector_url = on_inspector_url
-        location_info = zip_code if zip_code else "current location"
+        location_info = zip_code
         if step_sep == "main":
             logger.info("FB Marketplace search")
             log_data_block(
@@ -1228,7 +1221,7 @@ _scraper_lock = threading.Lock()
 
 def search_marketplace(
     query: str,
-    zip_code: Optional[str] = None,
+    zip_code: str,
     radius: int = 25,
     max_listings: int = 20,
     headless: bool = None,
