@@ -83,13 +83,14 @@ async def _filter_batch(
     fb_listing_text: str,
     items: List[dict],
     start_index: int,
-) -> List[Tuple[int, bool, str]]:
+) -> List[Tuple[int, str, str]]:
     """
     Filter a batch of eBay items against a FB listing using OpenAI.
 
     start_index: 1-based global index of the first item in this batch.
-    Returns list of (1-based global index, rejected, reason) for each item.
-    On API error or invalid response, keeps all items in the batch (fail-open).
+    Returns list of (1-based global index, decision, reason) for each item.
+    Decision is one of: "accept", "reject", "maybe".
+    On API error or invalid response, keeps all items in the batch (fail-open with "accept").
     """
     if not items:
         return []
@@ -108,38 +109,45 @@ async def _filter_batch(
         raw_content = extract_response_output_text(response)
         if not raw_content:
             logger.debug(f"Batch {start_index}-{start_index + len(items) - 1}: empty response — keeping all")
-            return [(start_index + i, False, "") for i in range(len(items))]
+            return [(start_index + i, "accept", "") for i in range(len(items))]
         results_list = _try_parse_results_list(raw_content, len(items))
         if results_list is None:
             logger.debug(f"Batch {start_index}-{start_index + len(items) - 1}: invalid JSON — keeping all")
-            return [(start_index + i, False, "") for i in range(len(items))]
+            return [(start_index + i, "accept", "") for i in range(len(items))]
         out = []
         for i, r in enumerate(results_list):
             if not isinstance(r, dict):
-                out.append((start_index + i, False, ""))
+                out.append((start_index + i, "accept", ""))
                 continue
-            rejected = bool(r.get("rejected", False))
+            decision = r.get("decision", "accept")
+            if decision not in ("accept", "reject", "maybe"):
+                decision = "accept"
             reason = r.get("reason", "")
             if not isinstance(reason, str):
                 reason = str(reason)
-            out.append((start_index + i, rejected, reason))
+            out.append((start_index + i, decision, reason))
         return out
     except Exception as e:
         logger.debug(f"Batch {start_index}-{start_index + len(items) - 1}: API error ({e}) — keeping all")
-        return [(start_index + i, False, "") for i in range(len(items))]
+        return [(start_index + i, "accept", "") for i in range(len(items))]
 
 
 async def _filter_ebay_results_async(
     listing: Listing,
     ebay_items: List[dict],
     cancelled: Optional[threading.Event] = None,
-) -> Optional[Tuple[List[int], List[dict], dict]]:
+) -> Optional[Tuple[List[int], List[int], List[dict], dict]]:
     """
     Async implementation of eBay result filtering using batched API calls.
 
     Chunks items into batches of 5 and runs one async OpenAI call per batch.
     Runs batches sequentially so cancellation can be checked between each.
-    Aggregates results into the same format as the original single-call version.
+    
+    Returns tuple of (accept_indices, maybe_indices, filtered_items, decisions) where:
+    - accept_indices: 1-based indices of items marked "accept"
+    - maybe_indices: 1-based indices of items marked "maybe"
+    - filtered_items: list of items that passed filtering (accept + maybe)
+    - decisions: dict mapping 1-based index to {decision, reason}
     """
     if not AsyncOpenAI:
         logger.debug("Async OpenAI unavailable — skipping match filter")
@@ -149,7 +157,7 @@ async def _filter_ebay_results_async(
         return None
 
     if not ebay_items:
-        return ([], ebay_items, {})
+        return ([], [], ebay_items, {})
 
     if cancelled and cancelled.is_set():
         raise SearchCancelledError("Search was cancelled by user")
@@ -157,67 +165,84 @@ async def _filter_ebay_results_async(
     client = AsyncOpenAI(api_key=OPENAI_API_KEY)
     fb_listing_text = format_fb_listing_for_prompt(listing)
 
-    batches = []
-    for i in range(0, len(ebay_items), POST_FILTER_BATCH_SIZE):
-        batch = ebay_items[i : i + POST_FILTER_BATCH_SIZE]
-        start_index = i + 1
-        batches.append((batch, start_index))
+    try:
+        batches = []
+        for i in range(0, len(ebay_items), POST_FILTER_BATCH_SIZE):
+            batch = ebay_items[i : i + POST_FILTER_BATCH_SIZE]
+            start_index = i + 1
+            batches.append((batch, start_index))
 
-    results = []
-    for batch, start_index in batches:
-        if cancelled and cancelled.is_set():
-            raise SearchCancelledError("Search was cancelled by user")
-        batch_result = await _filter_batch(client, fb_listing_text, batch, start_index)
-        results.extend(batch_result)
+        results = []
+        for batch, start_index in batches:
+            if cancelled and cancelled.is_set():
+                raise SearchCancelledError("Search was cancelled by user")
+            batch_result = await _filter_batch(client, fb_listing_text, batch, start_index)
+            results.extend(batch_result)
+    finally:
+        # Ensure client is closed before event loop closes
+        try:
+            await client.close()
+        except Exception:
+            pass
 
-    comparable_indices = []
-    reasons = {}
+    # Aggregate results by decision type
+    accept_indices = []
+    maybe_indices = []
+    decisions = {}
 
-    for item_index, rejected, reason in results:
-        reasons[str(item_index)] = reason
-        if not rejected:
-            comparable_indices.append(item_index)
+    for item_index, decision, reason in results:
+        decisions[str(item_index)] = {"decision": decision, "reason": reason}
+        if decision == "accept":
+            accept_indices.append(item_index)
+        elif decision == "maybe":
+            maybe_indices.append(item_index)
+        # "reject" items are not added to any list
 
-    comparable_indices.sort()
+    # Sort indices to maintain order
+    accept_indices.sort()
+    maybe_indices.sort()
 
+    # Combine accept + maybe for filtered items (indices are 1-based, convert to 0-based)
+    all_kept_indices = sorted(accept_indices + maybe_indices)
     filtered_items = [
         ebay_items[idx - 1]
-        for idx in comparable_indices
+        for idx in all_kept_indices
         if 1 <= idx <= len(ebay_items)
     ]
 
-    removed_count = len(ebay_items) - len(filtered_items)
-    if removed_count > 0:
-        logger.debug(f"Dropped {removed_count} non-matches ({len(filtered_items)} kept)")
+    reject_count = len(ebay_items) - len(filtered_items)
+    if reject_count > 0 or maybe_indices:
+        logger.debug(f"Filter results: {len(accept_indices)} accept, {len(maybe_indices)} maybe, {reject_count} reject")
     else:
-        logger.debug("All listings matched")
+        logger.debug("All listings accepted")
 
-    if removed_count > 0 and reasons:
-        logger.debug("Why items were dropped (first 3):")
-        rejected_reasons = [(idx, r) for idx, r in reasons.items() if int(idx) not in comparable_indices]
-        for idx, reason in rejected_reasons[:3]:
-            logger.debug(f"   {idx}: {reason}")
+    if reject_count > 0 and decisions:
+        logger.debug("Why items were rejected (first 3):")
+        rejected = [(idx, d) for idx, d in decisions.items() if d["decision"] == "reject"]
+        for idx, d in rejected[:3]:
+            logger.debug(f"   {idx}: {d['reason']}")
 
-    return (comparable_indices, filtered_items, reasons)
+    return (accept_indices, maybe_indices, filtered_items, decisions)
 
 
 def filter_ebay_results_with_openai(
     listing: Listing,
     ebay_items: List[dict],
     cancelled: Optional[threading.Event] = None,
-) -> Optional[Tuple[List[int], List[dict], dict]]:
+) -> Optional[Tuple[List[int], List[int], List[dict], dict]]:
     """
     Filter eBay search results to keep only items comparable to the Facebook Marketplace listing.
 
     Chunks eBay items into batches of 5 and makes parallel async OpenAI calls (one per batch)
-    to analyze each item's title, description, and condition against the FB listing. Removes
-    items that are accessories, different models, or otherwise not comparable. This improves
-    price comparison accuracy by ensuring only truly similar items are used for the market average.
-
-    Returns tuple of (comparable_indices, filtered list of eBay items, reasons dict) or None if filtering fails.
-    comparable_indices is a list of 1-based indices of items that passed filtering.
-    The reasons dict maps 1-based item indices to short reason strings explaining accept/reject decisions.
-    Format: [1, 3, 5], [{title, price, url}, ...], {"1": "reason", "2": "reason", ...}
+    to analyze each item's title, description, and condition against the FB listing. Categorizes
+    items as accept, maybe, or reject. This improves price comparison accuracy by ensuring only
+    truly similar items are used for the market average, with "maybe" items receiving partial weight.
+    
+    Returns tuple of (accept_indices, maybe_indices, filtered_items, decisions) or None if filtering fails.
+    - accept_indices: 1-based indices of items marked "accept" (full weight in average)
+    - maybe_indices: 1-based indices of items marked "maybe" (0.5 weight in average)
+    - filtered_items: list of items that passed filtering (accept + maybe)
+    - decisions: dict mapping 1-based index to {decision, reason}
     """
     if not AsyncOpenAI:
         logger.debug("Search suggestions unavailable — skipping match filter")
@@ -227,7 +252,7 @@ def filter_ebay_results_with_openai(
         return None
 
     if not ebay_items:
-        return ([], ebay_items, {})
+        return ([], [], ebay_items, {})
 
     try:
         try:

@@ -148,33 +148,57 @@ def _compare_listing_to_ebay_inner(
             log_warning(logger, "Filter returned coroutine instead of result — using all listings")
             filter_result = None
         if filter_result is not None:
-            comparable_indices, filtered_items, filter_reasons = filter_result
+            accept_indices, maybe_indices, filtered_items, decisions = filter_result
 
-            comparable_indices_set = set(comparable_indices)
+            accept_indices_set = set(accept_indices)
+            maybe_indices_set = set(maybe_indices)
             all_items_with_filter_flag = []
             for i, item in enumerate(ebay_items):
                 item_idx = i + 1  # 1-based index
-                reason = filter_reasons.get(str(item_idx), "")
-                is_filtered = item_idx not in comparable_indices_set
+                decision_info = decisions.get(str(item_idx), {})
+                decision = decision_info.get("decision", "accept")
+                reason = decision_info.get("reason", "")
+                
+                # filterStatus: "accept", "maybe", or "reject"
+                # filtered: True only for rejected items (backwards compatibility)
+                is_rejected = decision == "reject"
                 item_with_flags = {
                     **item,
-                    "filtered": is_filtered,
+                    "filtered": is_rejected,
+                    "filterStatus": decision,
                 }
                 if reason:
                     item_with_flags["filterReason"] = reason
                 all_items_with_filter_flag.append(item_with_flags)
 
-            if len(filtered_items) != len(ebay_items):
+            # Calculate weighted average: accept=1.0 weight, maybe=0.5 weight
+            weighted_sum = 0.0
+            total_weight = 0.0
+            for i, item in enumerate(ebay_items):
+                item_idx = i + 1
+                if item_idx in accept_indices_set:
+                    weighted_sum += item["price"] * 1.0
+                    total_weight += 1.0
+                elif item_idx in maybe_indices_set:
+                    weighted_sum += item["price"] * 0.5
+                    total_weight += 0.5
+
+            if len(filtered_items) != len(ebay_items) or maybe_indices:
+                # Get prices for logging (unweighted list of kept items)
                 filtered_prices = [item["price"] for item in filtered_items]
-                if len(filtered_prices) > 0:
+                
+                if total_weight >= 3.0:
                     ebay_stats.raw_prices = sorted(filtered_prices)
-                    ebay_stats.average = statistics.mean(filtered_prices)
-                    ebay_stats.sample_size = len(filtered_prices)
+                    ebay_stats.average = weighted_sum / total_weight
+                    ebay_stats.sample_size = len(filtered_items)
                     ebay_stats.item_summaries = all_items_with_filter_flag
-                    if len(filtered_prices) >= 3:
-                        logger.info(f"📋 {ebay_stats.sample_size} matches (avg ${ebay_stats.average:.2f})")
-                    else:
-                        log_warning(logger, f"Only {ebay_stats.sample_size} matches (need at least 3 to compare)")
+                    logger.info(f"📋 {len(accept_indices)} accept + {len(maybe_indices)} maybe (weighted avg ${ebay_stats.average:.2f})")
+                elif total_weight > 0:
+                    ebay_stats.raw_prices = sorted(filtered_prices)
+                    ebay_stats.average = weighted_sum / total_weight
+                    ebay_stats.sample_size = len(filtered_items)
+                    ebay_stats.item_summaries = all_items_with_filter_flag
+                    log_warning(logger, f"Only {len(accept_indices)} accept + {len(maybe_indices)} maybe (need more to compare reliably)")
                 else:
                     log_warning(logger, "No matching listings — can't compare price")
                     ebay_stats.average = 0
@@ -195,7 +219,7 @@ def _compare_listing_to_ebay_inner(
             logger.debug("Filtering unavailable (OpenAI not configured) - using original results")
             if ebay_items:
                 all_items_with_filter_flag = [
-                    {**item, "filtered": False}
+                    {**item, "filtered": False, "filterStatus": "accept"}
                     for item in ebay_items
                 ]
                 ebay_stats.item_summaries = all_items_with_filter_flag

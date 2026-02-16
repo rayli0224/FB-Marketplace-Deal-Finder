@@ -18,6 +18,7 @@ from src.scrapers.fb_marketplace_scraper import Listing
 from src.utils.colored_logger import setup_colored_logger, log_error_short, log_warning, truncate_lines
 from src.evaluation.prompts import (
     QUERY_GENERATION_SYSTEM_MESSAGE,
+    PRE_FILTERING_SYSTEM_MESSAGE,
     format_fb_listing_for_prompt,
     get_pre_filtering_prompt,
     get_query_generation_prompt,
@@ -32,7 +33,7 @@ logger = setup_colored_logger("ebay_query_generator")
 
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 QUERY_GENERATION_MAX_OUTPUT_TOKENS = 1000
-PRE_FILTER_MAX_OUTPUT_TOKENS = 150
+PRE_FILTER_MAX_OUTPUT_TOKENS = 300
 
 
 def generate_ebay_query_for_listing(
@@ -55,21 +56,25 @@ def generate_ebay_query_for_listing(
     fb_listing_text = format_fb_listing_for_prompt(listing)
 
     pre_filtering_prompt = get_pre_filtering_prompt(fb_listing_text)
-    pre_filtering_response = create_sync_response(
-        client,
-        instructions=None,
-        prompt=pre_filtering_prompt,
-        max_output_tokens=PRE_FILTER_MAX_OUTPUT_TOKENS,
-    )
-    pre_raw = extract_response_output_text(pre_filtering_response)
-    pre_result = try_parse_json_dict(pre_raw)
-    if isinstance(pre_result, dict) and pre_result.get("rejected"):
-        logger.debug(
-            f"\nPre-filter for FB listing rejected:\n\t{pre_result.get('reason', 'insufficient information')}"
+    try:
+        pre_filtering_response = create_sync_response(
+            client,
+            instructions=PRE_FILTERING_SYSTEM_MESSAGE,
+            prompt=pre_filtering_prompt,
+            max_output_tokens=PRE_FILTER_MAX_OUTPUT_TOKENS,
         )
-        return (None, pre_result.get("reason", "insufficient information"))
-    if isinstance(pre_result, dict):
-        logger.debug(f"\nPre-filter for FB listing accepted:\n\t{pre_result.get('reason', '')}")
+        pre_raw = extract_response_output_text(pre_filtering_response)
+        pre_result = try_parse_json_dict(pre_raw)
+        if pre_result is None:
+            logger.debug(f"Pre-filter response was not valid JSON: {pre_raw[:200] if pre_raw else '(empty)'}")
+        elif pre_result.get("rejected"):
+            logger.debug(f"Pre-filter rejected: {pre_result.get('reason', 'insufficient information')}")
+            return (None, pre_result.get("reason", "insufficient information"))
+        else:
+            logger.debug(f"Pre-filter accepted: {pre_result.get('reason', '')}")
+    except Exception as e:
+        logger.warning(f"Pre-filter API call failed: {e}")
+        pre_result = None
 
     prompt = get_query_generation_prompt(fb_listing_text)
 
