@@ -368,6 +368,17 @@ def search_deals_stream(request: SearchRequest):
             return
         fb_listings.append(listing)
         event_queue.put({"type": "progress", "scannedCount": count})
+        if DEBUG_MODE:
+            event_queue.put({
+                "type": "debug_facebook_listing",
+                "listing": {
+                    "title": listing.title,
+                    "price": listing.price,
+                    "location": listing.location,
+                    "url": listing.url,
+                    "description": listing.description or "",
+                },
+            })
 
     def on_inspector_url(url: str):
         if not cancelled.is_set():
@@ -502,18 +513,6 @@ def search_deals_stream(request: SearchRequest):
 
             logger.info(f"📋 Found {len(fb_listings)} listings")
             yield from drain_log_queue()
-            if DEBUG_MODE:
-                debug_facebook_payload = [
-                    {
-                        "title": listing.title,
-                        "price": listing.price,
-                        "location": listing.location,
-                        "url": listing.url,
-                        "description": listing.description or "",
-                    }
-                    for listing in fb_listings
-                ]
-                yield f"data: {json.dumps({'type': 'debug_facebook', 'listings': debug_facebook_payload})}\n\n"
             yield f"data: {json.dumps({'type': 'phase', 'phase': 'evaluating'})}\n\n"
 
             def evaluation_worker():
