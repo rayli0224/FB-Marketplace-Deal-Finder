@@ -16,23 +16,10 @@ from src.evaluation.deal_calculator import calculate_deal_score
 from src.evaluation.ebay_query_generator import generate_ebay_query_for_listing
 from src.evaluation.ebay_result_filter import filter_ebay_results_with_openai
 from src.utils.colored_logger import setup_colored_logger, log_data_block, log_listing_box_sep, log_warning, set_step_indent, clear_step_indent, wait_status
+from src.utils.currency import convert_fb_price_to_usd
 import statistics
 
 logger = setup_colored_logger("listing_ebay_comparison")
-
-# GBP to USD conversion rate: 1 USD = 0.73 GBP, so 1 GBP = 1/0.73 USD
-GBP_TO_USD_RATE = 1 / 0.73
-
-
-def _convert_fb_price_to_usd(price: float, currency: str) -> float:
-    """
-    Convert Facebook Marketplace price to USD for eBay comparison.
-    eBay prices are always in USD, so we convert FB GBP prices to USD.
-    Returns the price unchanged if currency is not GBP.
-    """
-    if currency == "£":
-        return price * GBP_TO_USD_RATE
-    return price
 
 
 def _listing_result(
@@ -128,7 +115,7 @@ def _compare_listing_to_ebay_inner(
         logger.debug(f"  Description: {listing.description}")
 
     # Convert FB price to USD for eBay comparison (eBay prices are always in USD)
-    fb_price_usd = _convert_fb_price_to_usd(listing.price, listing.currency)
+    fb_price_usd = convert_fb_price_to_usd(listing.price, listing.currency)
     if listing.currency == "£":
         logger.info(f"Converting GBP to USD: {listing.currency}{listing.price:.2f} → ${fb_price_usd:.2f}")
 
