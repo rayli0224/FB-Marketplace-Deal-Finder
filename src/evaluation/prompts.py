@@ -39,7 +39,7 @@ def get_pre_filtering_prompt(fb_listing_text: str) -> str:
 {fb_listing_text}
 
 ### Output Format
-Return ONLY a JSON object:
+Return ONLY a valid JSON object with this exact format:
 {{
   "rejected": true,
   "reason": "brief explanation"
@@ -84,8 +84,8 @@ Facebook Marketplace listing:
 
 Output:
 {{
-  "rejected": true,
-  "reason": "Listing contains brand name, but doesn't contain any product details"
+  "rejected": false,
+  "reason": "Listing contains brand name and general product detail"
 }}
 """
 
@@ -185,7 +185,8 @@ Only attributes that materially affect price:
 - Books/Media: title, edition, author, condition  
 - Miscellaneous: brand, model, size, material, condition  
 
-Do NOT invent attributes; treat missing as unknown.  
+Do NOT invent attributes; treat missing as unknown.
+For electronics, OEM stands for Original Equipment Manufacturer, and it is typically comparable to the original brand.
 
 ---
 
