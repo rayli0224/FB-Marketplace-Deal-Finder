@@ -35,6 +35,9 @@ logger = setup_colored_logger("ebay_result_filter")
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 BATCH_FILTER_MAX_OUTPUT_TOKENS = 3000
 POST_FILTER_BATCH_SIZE = 5
+POST_FILTER_MAX_CONCURRENT_BATCHES = 2
+POST_FILTER_BATCH_START_DELAY_SEC = 0.35
+POST_FILTER_CANCEL_POLL_INTERVAL_SEC = 0.2
 
 
 def _format_ebay_batch(items: List[dict]) -> str:
@@ -140,8 +143,10 @@ async def _filter_ebay_results_async(
     """
     Async implementation of eBay result filtering using batched API calls.
 
-    Chunks items into batches of 5 and runs one async OpenAI call per batch.
-    Runs batches sequentially so cancellation can be checked between each.
+    Chunks items into batches of 5 and runs async OpenAI calls with bounded
+    concurrency. Batch starts are staggered by a small delay to reduce
+    rate-limit pressure. Cancellation is checked while launching and while
+    waiting for batch completion.
     
     Returns tuple of (accept_indices, maybe_indices, filtered_items, decisions) where:
     - accept_indices: 1-based indices of items marked "accept"
@@ -165,6 +170,15 @@ async def _filter_ebay_results_async(
     client = AsyncOpenAI(api_key=OPENAI_API_KEY)
     fb_listing_text = format_fb_listing_for_prompt(listing)
 
+    async def _cancel_running_tasks(tasks: set[asyncio.Task]) -> None:
+        """Cancel running batch tasks and wait for them to finish cleanup."""
+        if not tasks:
+            return
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        tasks.clear()
+
     try:
         batches = []
         for i in range(0, len(ebay_items), POST_FILTER_BATCH_SIZE):
@@ -172,12 +186,58 @@ async def _filter_ebay_results_async(
             start_index = i + 1
             batches.append((batch, start_index))
 
-        results = []
-        for batch, start_index in batches:
+        running_tasks: set[asyncio.Task] = set()
+        results: List[Tuple[int, str, str]] = []
+        next_batch_idx = 0
+
+        while next_batch_idx < len(batches) or running_tasks:
             if cancelled and cancelled.is_set():
+                await _cancel_running_tasks(running_tasks)
                 raise SearchCancelledError("Search was cancelled by user")
-            batch_result = await _filter_batch(client, fb_listing_text, batch, start_index)
-            results.extend(batch_result)
+
+            can_launch_more = (
+                next_batch_idx < len(batches)
+                and len(running_tasks) < POST_FILTER_MAX_CONCURRENT_BATCHES
+            )
+            if can_launch_more:
+                batch, start_index = batches[next_batch_idx]
+                if cancelled and cancelled.is_set():
+                    await _cancel_running_tasks(running_tasks)
+                    raise SearchCancelledError("Search was cancelled by user")
+                task = asyncio.create_task(
+                    _filter_batch(client, fb_listing_text, batch, start_index)
+                )
+                running_tasks.add(task)
+                next_batch_idx += 1
+
+                if POST_FILTER_BATCH_START_DELAY_SEC > 0 and next_batch_idx < len(batches):
+                    done, _ = await asyncio.wait(
+                        running_tasks,
+                        timeout=POST_FILTER_BATCH_START_DELAY_SEC,
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                    for finished_task in done:
+                        running_tasks.remove(finished_task)
+                        try:
+                            results.extend(finished_task.result())
+                        except asyncio.CancelledError:
+                            await _cancel_running_tasks(running_tasks)
+                            raise SearchCancelledError("Search was cancelled by user")
+                continue
+
+            if running_tasks:
+                done, _ = await asyncio.wait(
+                    running_tasks,
+                    timeout=POST_FILTER_CANCEL_POLL_INTERVAL_SEC,
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                for finished_task in done:
+                    running_tasks.remove(finished_task)
+                    try:
+                        results.extend(finished_task.result())
+                    except asyncio.CancelledError:
+                        await _cancel_running_tasks(running_tasks)
+                        raise SearchCancelledError("Search was cancelled by user")
     finally:
         # Ensure client is closed before event loop closes
         try:
@@ -233,10 +293,11 @@ def filter_ebay_results_with_openai(
     """
     Filter eBay search results to keep only items comparable to the Facebook Marketplace listing.
 
-    Chunks eBay items into batches of 5 and makes parallel async OpenAI calls (one per batch)
-    to analyze each item's title, description, and condition against the FB listing. Categorizes
-    items as accept, maybe, or reject. This improves price comparison accuracy by ensuring only
-    truly similar items are used for the market average, with "maybe" items receiving partial weight.
+    Chunks eBay items into batches of 5 and makes bounded concurrent async OpenAI calls to
+    analyze each item's title, description, and condition against the FB listing. Batch starts
+    are slightly staggered to reduce rate-limit pressure. Categorizes items as accept, maybe,
+    or reject. This improves price comparison accuracy by ensuring only truly similar items are
+    used for the market average, with "maybe" items receiving partial weight.
     
     Returns tuple of (accept_indices, maybe_indices, filtered_items, decisions) or None if filtering fails.
     - accept_indices: 1-based indices of items marked "accept" (full weight in average)
