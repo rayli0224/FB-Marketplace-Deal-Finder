@@ -22,7 +22,7 @@ from src.scrapers.fb_marketplace_scraper import search_marketplace as search_fb_
 from src.scrapers.ebay_scraper import get_market_price, DEFAULT_EBAY_ITEMS
 from src.api.deal_calculator import score_listings
 from src.utils.listing_processor import process_single_listing
-from src.utils.colored_logger import setup_colored_logger, log_step_sep, log_step_title, log_error_short, wait_status
+from src.utils.colored_logger import setup_colored_logger, set_all_loggers_level, log_step_sep, log_step_title, log_error_short, wait_status
 
 logger = setup_colored_logger("api")
 
@@ -59,6 +59,11 @@ DEBUG_MODE = (
     or "--debug" in sys.argv
 )
 
+# If DEBUG_MODE is on, reconfigure all loggers to DEBUG level.
+# This is needed because loggers are created at module import time before DEBUG env var is set.
+if DEBUG_MODE:
+    set_all_loggers_level(logging.DEBUG)
+
 # Loggers that receive the queue handler in debug mode (they use propagate=False).
 _DEBUG_LOG_LOGGER_NAMES = ("api", "fb_scraper", "listing_processor", "openai_helpers", "ebay_scraper")
 
@@ -78,7 +83,7 @@ app.add_middleware(
 
 class SearchRequest(BaseModel):
     query: str
-    zipCode: str
+    zipCode: Optional[str] = None
     radius: int = DEFAULT_RADIUS
     threshold: float
     maxListings: int = 20
@@ -226,7 +231,8 @@ def search_deals(request: SearchRequest):
     """
     Search Facebook Marketplace and calculate deal scores using eBay market data.
     """
-    log_step_sep(logger, f"🔍 Step 1: Starting search — query='{request.query}', zip={request.zipCode}, radius={request.radius}mi")
+    location_info = request.zipCode if request.zipCode else "current location"
+    log_step_sep(logger, f"🔍 Step 1: Starting search — query='{request.query}', location={location_info}, radius={request.radius}mi")
     log_step_sep(logger, "📜 Step 2: Scraping Facebook Marketplace")
     fb_listings = []
     try:
@@ -351,7 +357,8 @@ def search_deals_stream(request: SearchRequest):
         for name in _DEBUG_LOG_LOGGER_NAMES:
             logging.getLogger(name).addHandler(debug_log_handler)
 
-    log_step_sep(logger, f"Search request — query='{request.query}', zip={request.zipCode}, radius={request.radius}mi")
+    location_info_req = request.zipCode if request.zipCode else "current location"
+    log_step_sep(logger, f"Search request — query='{request.query}', location={location_info_req}, radius={request.radius}mi")
     
     def on_listing_found(listing, count):
         if cancelled.is_set():
@@ -409,7 +416,8 @@ def search_deals_stream(request: SearchRequest):
 
         thread_id: Optional[int] = None
         try:
-            log_step_sep(logger, f"🔍 Step 1: Starting search — query='{request.query}', zip={request.zipCode}, radius={request.radius}mi")
+            location_info_stream = request.zipCode if request.zipCode else "current location"
+            log_step_sep(logger, f"🔍 Step 1: Starting search — query='{request.query}', location={location_info_stream}, radius={request.radius}mi")
             log_step_sep(logger, "📜 Step 2: Scraping Facebook Marketplace")
             yield f"data: {json.dumps({'type': 'phase', 'phase': 'scraping'})}\n\n"
             if DEBUG_MODE:

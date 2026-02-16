@@ -22,6 +22,7 @@ except ImportError:
 from src.scrapers.fb_marketplace_scraper import Listing, SearchCancelledError
 from src.utils.colored_logger import setup_colored_logger, log_error_short, truncate_lines
 from src.utils.prompts import (
+    PRE_FILTERING_SYSTEM_MESSAGE,
     QUERY_GENERATION_SYSTEM_MESSAGE,
     RESULT_FILTERING_SYSTEM_MESSAGE,
     get_query_generation_prompt,
@@ -32,7 +33,7 @@ from src.utils.prompts import (
 logger = setup_colored_logger("openai_helpers")
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 OPENAI_MODEL = "gpt-5-mini"
-PRE_FILTER_MAX_OUTPUT_TOKENS = 150
+PRE_FILTER_MAX_OUTPUT_TOKENS = 500
 QUERY_GENERATION_MAX_OUTPUT_TOKENS = 1000
 BATCH_FILTER_MAX_OUTPUT_TOKENS = 3000
 POST_FILTER_BATCH_SIZE = 5
@@ -57,22 +58,53 @@ def _extract_response_output_text(response: Any) -> str:
     """
     Extract plain text from an OpenAI Responses API result.
 
-    Uses the convenience output_text when available, then falls back to the
-    structured output blocks if needed.
+    Uses the convenience output_text property when available, then falls back to
+    manually traversing the structured output blocks.
     """
-    output_text = (getattr(response, "output_text", "") or "").strip()
-    if output_text:
-        return output_text
-
+    # Try the convenience property first
+    if hasattr(response, "output_text"):
+        try:
+            output_text = response.output_text
+            logger.debug(f"output_text property returned: {repr(output_text[:100]) if output_text else '(empty)'}")
+            if output_text and output_text.strip():
+                return output_text.strip()
+        except Exception as e:
+            logger.debug(f"Error accessing output_text property: {e}")
+    
+    # Fallback: manually traverse the output structure
     output_blocks = getattr(response, "output", None) or []
-    for message in output_blocks:
-        contents = getattr(message, "content", None) or []
-        for block in contents:
-            text = getattr(block, "text", None)
-            if not text:
-                continue
-            return text.strip()
-    return ""
+    logger.debug(f"output blocks: {len(output_blocks) if output_blocks else 0}")
+    
+    texts = []
+    for idx, output_item in enumerate(output_blocks):
+        logger.debug(f"Output item {idx}: type={getattr(output_item, 'type', 'unknown')}, class={type(output_item).__name__}")
+        
+        # Check if this is a message output item
+        item_type = getattr(output_item, "type", None)
+        if item_type == "message":
+            # Get the content list
+            content_list = getattr(output_item, "content", None) or []
+            logger.debug(f"  Message has {len(content_list)} content items")
+            for content_idx, content_item in enumerate(content_list):
+                content_type = getattr(content_item, "type", None)
+                logger.debug(f"    Content {content_idx}: type={content_type}")
+                # Check if this is a text content item
+                if content_type == "output_text":
+                    text = getattr(content_item, "text", None)
+                    logger.debug(f"      Found text: {repr(text[:50]) if text else '(none)'}")
+                    if text:
+                        texts.append(text)
+        else:
+            # Try to get text directly if it's not a message
+            if hasattr(output_item, "text"):
+                text = getattr(output_item, "text", None)
+                logger.debug(f"  Non-message item has text attribute: {repr(text[:50]) if text else '(none)'}")
+                if text:
+                    texts.append(text)
+    
+    result = "".join(texts).strip() if texts else ""
+    logger.debug(f"Final extracted text length: {len(result)}")
+    return result
 
 
 def _strip_markdown_code_fences(raw_content: str) -> str:
@@ -186,22 +218,39 @@ def generate_ebay_query_for_listing(
     
     client = OpenAI(api_key=OPENAI_API_KEY)
     
+    # Verify the responses API is available
+    if not hasattr(client, 'responses'):
+        logger.error("OpenAI client does not have 'responses' attribute - API may not be available")
+        return None
+    
     fb_listing_text = _format_fb_listing(listing)
     
     pre_filtering_prompt = get_pre_filtering_prompt(fb_listing_text)
-    pre_filtering_response = _create_sync_response(
-        client,
-        instructions=None,
-        prompt=pre_filtering_prompt,
-        max_output_tokens=PRE_FILTER_MAX_OUTPUT_TOKENS,
-    )
-    pre_raw = _extract_response_output_text(pre_filtering_response)
-    pre_result = _try_parse_json_dict(pre_raw)
-    if isinstance(pre_result, dict) and pre_result.get("rejected"):
-        logger.debug(f"\nPre-filter for FB listing rejected:\n\t{pre_result.get('reason', 'insufficient information')}")
+    try:
+        logger.debug("Calling pre-filter API...")
+        pre_filtering_response = _create_sync_response(
+            client,
+            instructions=PRE_FILTERING_SYSTEM_MESSAGE,
+            prompt=pre_filtering_prompt,
+            max_output_tokens=PRE_FILTER_MAX_OUTPUT_TOKENS,
+        )
+        logger.debug("Pre-filter API call completed")
+        pre_raw = _extract_response_output_text(pre_filtering_response)
+        logger.debug(f"Pre-filter extracted text length: {len(pre_raw) if pre_raw else 0}")
+        if pre_raw:
+            logger.debug(f"Pre-filter content: {pre_raw}")
+        pre_result = _try_parse_json_dict(pre_raw)
+    except Exception as e:
+        logger.warning(f"Pre-filter API call failed: {e}")
+        pre_result = None
+        pre_raw = ""
+    if pre_result is None:
+        logger.debug(f"Pre-filter response was not valid JSON: {pre_raw[:200] if pre_raw else '(empty)'}")
+    elif pre_result.get("rejected"):
+        logger.info(f"Pre-filter rejected: {pre_result.get('reason', 'insufficient information')}")
         return None, None, pre_result.get("reason", "insufficient information")
-    if isinstance(pre_result, dict):
-        logger.debug(f"\nPre-filter for FB listing accepted:\n\t{pre_result.get('reason', '')}")
+    else:
+        logger.info(f"Pre-filter accepted: {pre_result.get('reason', '')}")
     
     prompt = get_query_generation_prompt(fb_listing_text)
 
@@ -285,13 +334,14 @@ async def _filter_batch(
     fb_listing_text: str,
     items: List[dict],
     start_index: int,
-) -> List[Tuple[int, bool, str]]:
+) -> List[Tuple[int, str, str]]:
     """
     Filter a batch of eBay items against a FB listing using OpenAI.
 
     start_index: 1-based global index of the first item in this batch.
-    Returns list of (1-based global index, rejected, reason) for each item.
-    On API error or invalid response, keeps all items in the batch (fail-open).
+    Returns list of (1-based global index, decision, reason) for each item.
+    Decision is one of: "accept", "reject", "maybe".
+    On API error or invalid response, keeps all items in the batch (fail-open with "accept").
     """
     if not items:
         return []
@@ -310,25 +360,27 @@ async def _filter_batch(
         raw_content = _extract_response_output_text(response)
         if not raw_content:
             logger.debug(f"Batch {start_index}-{start_index + len(items) - 1}: empty response — keeping all")
-            return [(start_index + i, False, "") for i in range(len(items))]
+            return [(start_index + i, "accept", "") for i in range(len(items))]
         results_list = _try_parse_results_list(raw_content, len(items))
         if results_list is None:
             logger.debug(f"Batch {start_index}-{start_index + len(items) - 1}: invalid JSON — keeping all")
-            return [(start_index + i, False, "") for i in range(len(items))]
+            return [(start_index + i, "accept", "") for i in range(len(items))]
         out = []
         for i, r in enumerate(results_list):
             if not isinstance(r, dict):
-                out.append((start_index + i, False, ""))
+                out.append((start_index + i, "accept", ""))
                 continue
-            rejected = bool(r.get("rejected", False))
+            decision = r.get("decision", "accept")
+            if decision not in ("accept", "reject", "maybe"):
+                decision = "accept"
             reason = r.get("reason", "")
             if not isinstance(reason, str):
                 reason = str(reason)
-            out.append((start_index + i, rejected, reason))
+            out.append((start_index + i, decision, reason))
         return out
     except Exception as e:
         logger.debug(f"Batch {start_index}-{start_index + len(items) - 1}: API error ({e}) — keeping all")
-        return [(start_index + i, False, "") for i in range(len(items))]
+        return [(start_index + i, "accept", "") for i in range(len(items))]
 
 
 
@@ -336,13 +388,18 @@ async def _filter_ebay_results_async(
     listing: Listing,
     ebay_items: List[dict],
     cancelled: Optional[threading.Event] = None,
-) -> Optional[Tuple[List[int], List[dict], dict]]:
+) -> Optional[Tuple[List[int], List[int], List[dict], dict]]:
     """
     Async implementation of eBay result filtering using batched API calls.
 
     Chunks items into batches of 5 and runs one async OpenAI call per batch.
     Runs batches sequentially so cancellation can be checked between each.
-    Aggregates results into the same format as the original single-call version.
+    
+    Returns tuple of (accept_indices, maybe_indices, filtered_items, decisions) where:
+    - accept_indices: 1-based indices of items marked "accept"
+    - maybe_indices: 1-based indices of items marked "maybe"
+    - filtered_items: list of items that passed filtering (accept + maybe)
+    - decisions: dict mapping 1-based index to {decision, reason}
     """
     if not AsyncOpenAI:
         logger.debug("Async OpenAI unavailable — skipping match filter")
@@ -352,7 +409,7 @@ async def _filter_ebay_results_async(
         return None
 
     if not ebay_items:
-        return ([], ebay_items, {})
+        return ([], [], ebay_items, {})
 
     if cancelled and cancelled.is_set():
         raise SearchCancelledError("Search was cancelled by user")
@@ -373,57 +430,64 @@ async def _filter_ebay_results_async(
         batch_result = await _filter_batch(client, fb_listing_text, batch, start_index)
         results.extend(batch_result)
     
-    # Aggregate results
-    comparable_indices = []
-    reasons = {}
+    # Aggregate results by decision type
+    accept_indices = []
+    maybe_indices = []
+    decisions = {}
     
-    for item_index, rejected, reason in results:
-        reasons[str(item_index)] = reason
-        if not rejected:
-            comparable_indices.append(item_index)
+    for item_index, decision, reason in results:
+        decisions[str(item_index)] = {"decision": decision, "reason": reason}
+        if decision == "accept":
+            accept_indices.append(item_index)
+        elif decision == "maybe":
+            maybe_indices.append(item_index)
+        # "reject" items are not added to any list
     
-    # Sort comparable_indices to maintain order
-    comparable_indices.sort()
+    # Sort indices to maintain order
+    accept_indices.sort()
+    maybe_indices.sort()
     
-    # Filter items (indices are 1-based, convert to 0-based)
+    # Combine accept + maybe for filtered items (indices are 1-based, convert to 0-based)
+    all_kept_indices = sorted(accept_indices + maybe_indices)
     filtered_items = [
         ebay_items[idx - 1]
-        for idx in comparable_indices
+        for idx in all_kept_indices
         if 1 <= idx <= len(ebay_items)
     ]
     
-    removed_count = len(ebay_items) - len(filtered_items)
-    if removed_count > 0:
-        logger.debug(f"Dropped {removed_count} non-matches ({len(filtered_items)} kept)")
+    reject_count = len(ebay_items) - len(filtered_items)
+    if reject_count > 0 or maybe_indices:
+        logger.debug(f"Filter results: {len(accept_indices)} accept, {len(maybe_indices)} maybe, {reject_count} reject")
     else:
-        logger.debug("All listings matched")
+        logger.debug("All listings accepted")
 
-    if removed_count > 0 and reasons:
-        logger.debug("Why items were dropped (first 3):")
-        rejected_reasons = [(idx, r) for idx, r in reasons.items() if int(idx) not in comparable_indices]
-        for idx, reason in rejected_reasons[:3]:
-            logger.debug(f"   {idx}: {reason}")
+    if reject_count > 0 and decisions:
+        logger.debug("Why items were rejected (first 3):")
+        rejected = [(idx, d) for idx, d in decisions.items() if d["decision"] == "reject"]
+        for idx, d in rejected[:3]:
+            logger.debug(f"   {idx}: {d['reason']}")
     
-    return (comparable_indices, filtered_items, reasons)
+    return (accept_indices, maybe_indices, filtered_items, decisions)
 
 
 def filter_ebay_results_with_openai(
     listing: Listing,
     ebay_items: List[dict],
     cancelled: Optional[threading.Event] = None,
-) -> Optional[Tuple[List[int], List[dict], dict]]:
+) -> Optional[Tuple[List[int], List[int], List[dict], dict]]:
     """
     Filter eBay search results to keep only items comparable to the Facebook Marketplace listing.
 
     Chunks eBay items into batches of 5 and makes parallel async OpenAI calls (one per batch)
-    to analyze each item's title, description, and condition against the FB listing. Removes
-    items that are accessories, different models, or otherwise not comparable. This improves
-    price comparison accuracy by ensuring only truly similar items are used for the market average.
+    to analyze each item's title, description, and condition against the FB listing. Categorizes
+    items as accept, maybe, or reject. This improves price comparison accuracy by ensuring only
+    truly similar items are used for the market average, with "maybe" items receiving partial weight.
     
-    Returns tuple of (comparable_indices, filtered list of eBay items, reasons dict) or None if filtering fails.
-    comparable_indices is a list of 1-based indices of items that passed filtering.
-    The reasons dict maps 1-based item indices to short reason strings explaining accept/reject decisions.
-    Format: [1, 3, 5], [{title, price, url}, ...], {"1": "reason", "2": "reason", ...}
+    Returns tuple of (accept_indices, maybe_indices, filtered_items, decisions) or None if filtering fails.
+    - accept_indices: 1-based indices of items marked "accept" (full weight in average)
+    - maybe_indices: 1-based indices of items marked "maybe" (0.5 weight in average)
+    - filtered_items: list of items that passed filtering (accept + maybe)
+    - decisions: dict mapping 1-based index to {decision, reason}
     """
     if not AsyncOpenAI:
         logger.debug("Search suggestions unavailable — skipping match filter")
@@ -433,7 +497,7 @@ def filter_ebay_results_with_openai(
         return None
     
     if not ebay_items:
-        return ([], ebay_items, {})
+        return ([], [], ebay_items, {})
     
     try:
         # Run the async filtering in a new event loop

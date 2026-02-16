@@ -7,8 +7,9 @@ export interface CompItem {
   title: string;
   price: number;
   url: string;
-  filtered?: boolean;  // True if this item was filtered out as non-comparable
-  filterReason?: string;  // Short reason explaining why item was accepted or rejected
+  filtered?: boolean;  // True if this item was filtered out as non-comparable (backwards compat)
+  filterStatus?: "accept" | "maybe" | "reject";  // Decision status from filtering
+  filterReason?: string;  // Short reason explaining why item was accepted, maybe, or rejected
 }
 
 export interface Listing {
@@ -91,27 +92,54 @@ function ListingCompsPanel({ listing }: { listing: Listing }) {
           <ul className="mt-1 max-h-40 overflow-auto space-y-0.5 pl-2 border-l-2 border-border">
             {compItems && compItems.length > 0
               ? compItems.map((item, i) => {
-                  const isFiltered = item.filtered === true;
+                  const status = item.filterStatus ?? (item.filtered ? "reject" : "accept");
+                  const isRejected = status === "reject";
+                  const isMaybe = status === "maybe";
+                  
+                  // Style classes based on status
+                  const opacityClass = isRejected ? 'opacity-60' : '';
+                  const linkClass = isRejected 
+                    ? 'text-red-500 line-through' 
+                    : isMaybe 
+                    ? 'text-yellow-500' 
+                    : 'text-primary';
+                  const priceClass = isRejected 
+                    ? 'text-red-500' 
+                    : isMaybe 
+                    ? 'text-yellow-500' 
+                    : 'text-primary';
+                  const reasonClass = isRejected 
+                    ? 'text-red-500/70' 
+                    : isMaybe 
+                    ? 'text-yellow-500/70' 
+                    : 'text-muted-foreground';
+                  const statusLabel = isRejected ? '(filtered)' : isMaybe ? '(maybe)' : null;
+                  const titleText = isRejected 
+                    ? 'Filtered out as non-comparable' 
+                    : isMaybe 
+                    ? 'Partial match (0.5x weight in average)' 
+                    : undefined;
+
                   return (
-                    <li key={i} className={`flex items-baseline gap-2 flex-wrap ${isFiltered ? 'opacity-60' : ''}`} style={{ wordBreak: 'break-word', overflowWrap: 'anywhere' }}>
+                    <li key={i} className={`flex items-baseline gap-2 flex-wrap ${opacityClass}`} style={{ wordBreak: 'break-word', overflowWrap: 'anywhere' }}>
                       <a
                         href={item.url}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className={`truncate max-w-[280px] hover:underline ${isFiltered ? 'text-red-500 line-through' : 'text-primary'}`}
-                        title={isFiltered ? 'Filtered out as non-comparable' : undefined}
+                        className={`truncate max-w-[280px] hover:underline ${linkClass}`}
+                        title={titleText}
                       >
                         {item.title || "eBay listing"}
                       </a>
-                      <span className={`font-bold shrink-0 ${isFiltered ? 'text-red-500' : 'text-primary'}`}>
+                      <span className={`font-bold shrink-0 ${priceClass}`}>
                         ${item.price.toFixed(2)}
                       </span>
-                      {isFiltered && (
-                        <span className="text-xs text-red-500/70 shrink-0">(filtered)</span>
+                      {statusLabel && (
+                        <span className={`text-xs ${reasonClass} shrink-0`}>{statusLabel}</span>
                       )}
                       {item.filterReason && (
                         <span 
-                          className={`text-xs ${isFiltered ? 'text-red-500/70' : 'text-muted-foreground'}`}
+                          className={`text-xs ${reasonClass}`}
                           style={{
                             wordBreak: 'break-word',
                             overflowWrap: 'break-word',

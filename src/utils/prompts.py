@@ -5,6 +5,9 @@ Contains prompt templates used for generating eBay search queries and filtering
 eBay results to match Facebook Marketplace listings.
 """
 
+# System message for pre-filtering (determining if listing has enough info)
+PRE_FILTERING_SYSTEM_MESSAGE = "You are an expert at evaluating marketplace listings. Always respond with valid JSON only."
+
 # System message for query generation
 QUERY_GENERATION_SYSTEM_MESSAGE = "You are an expert at creating precise search queries for online marketplaces. Always respond with valid JSON only."
 
@@ -14,9 +17,11 @@ RESULT_FILTERING_SYSTEM_MESSAGE = "You are an expert at comparing products acros
 def get_pre_filtering_prompt(fb_listing_text: str) -> str:
   return f"""You will be given a Facebook Marketplace listing. Determine whether the listing contains enough information to generate a useful eBay search that will find a comparable product for a rational buyer. The listing should not be too vague and should contain enough detail to identify the product and its attributes. 
 
+### Facebook Marketplace Listing:
 {fb_listing_text}
 
-Output Format:
+### Output Format
+Return ONLY a JSON object:
 {{
   "rejected": true,
   "reason": "brief explanation"
@@ -138,114 +143,72 @@ def get_batch_filtering_prompt(
 
     Used for post-filtering in groups of 5. Output is a JSON array, one object per eBay item.
     """
-    return f"""You are determining whether multiple eBay items are truly comparable to a single Facebook Marketplace (FB) listing for accurate price comparison.
+    return f"""You are comparing multiple eBay items to a single Facebook Marketplace (FB) listing to determine if each item is truly comparable for pricing.
 
-Your job is NOT to find similar items.
-Your job is to decide, for each eBay item, whether it represents the same economic product as the FB listing.
-
-If there is any meaningful doubt for an item, you must reject it.
+**Important:** Do NOT find similar items. Decide only if the eBay item is the same economic product.  
+**Principle:** A rational buyer must consider it interchangeable for pricing. Prefer false negatives over false positives.  
 
 ---
 
 Facebook listing:
-
 {fb_listing_text}
 
-eBay items (compare each individually):
-
+eBay items:
 {ebay_items_text}
 
 ---
 
-## Core Principle (Most Important Rule)
-
-Each eBay item is comparable ONLY if:
-A rational buyer would consider the FB listing and eBay item interchangeable for pricing.
-
-If they would reasonably pay different prices → reject.
-
-Prefer false negatives over false positives.
-
----
-
-## Step 1 — Extract Price-Defining Attributes (from FB only)
-
-From the Facebook listing, identify ONLY attributes that materially affect price.
-
-Examples:
-- Electronics: brand, model, generation, size, storage, key specs.
-- Clothing/shoes: brand, model/line, condition.
-- Furniture/other: brand, model, material, dimensions (if relevant).
-
-Do NOT invent attributes.
-If an attribute is not stated or implied in the FB listing, treat it as unknown.
+### Step 1 — Category
+Examples:  
+- Electronics: laptop, smartphone, headphones  
+- Clothing/Shoes: jacket, shoes, bag  
+- Furniture/Home Goods: chair, table, sofa  
+- Vehicles: car, motorcycle, bicycle  
+- Musical Instruments: guitar, keyboard  
+- Collectibles/Toys: LEGO set, board game  
+- Books/Media: books, DVDs  
+- Miscellaneous: other  
 
 ---
 
-## Step 2 — Compare eBay Items to Those Attributes
+### Step 2 — Price-Defining Attributes
+Only attributes that materially affect price:  
+- Electronics: brand, model, generation/year, specs, size, condition  
+- Clothing/Shoes: brand, model/line, material, condition, size  
+- Furniture/Home Goods: brand, material, dimensions, condition  
+- Vehicles: brand, model, year, mileage, condition, included accessories  
+- Musical Instruments: brand, model, type, condition, included accessories  
+- Collectibles/Toys: brand, edition, year, completeness, condition  
+- Books/Media: title, edition, author, condition  
+- Miscellaneous: brand, model, size, material, condition  
 
-For each eBay item:
-
-- If the FB listing specifies a price-defining attribute → it MUST match.
-- If the FB listing is vague → use overall semantic similarity.
-- If information is missing or unclear → reject.
-
----
-
-## Hard Rejection Rules (Automatic Reject)
-
-Reject an eBay item if ANY of the following is true:
-
-1. Different Core Product (brand, model, line, generation)
-2. Different Functional Variant (locked/unlocked, mini/pro/max, wrong generation/year, storage tier differences)
-3. Different Condition Class (new, used, refurbished, broken)
-4. Not a Full Product (accessories, parts, services, bundles)
-5. Size Rules (Clothing/shoes: size differences allowed; Electronics/furniture: size differences NOT allowed)
-6. Missing Critical Information (key attribute cannot be verified)
+Do NOT invent attributes; treat missing as unknown.  
 
 ---
 
-## Allowed Differences (Do NOT Reject For These)
-
-- Color
-- Cosmetic wear
-- Missing minor accessories (charger, cable, box)
-- Clothing/shoe size differences
-
-These differences must NOT change the fundamental product class.
+### Step 3 — Decision Rules
+- **Reject:** Key attribute differs, functional variant differs, extreme condition difference, missing critical components, or critical info missing.  
+- **Maybe:** Core product mostly matches, but minor difference exists (missing minor part, small accessory change, slight ambiguity).  
+- **Accept:** All key attributes match; minor allowed differences (color, cosmetic wear, size for clothing/shoes).  
 
 ---
 
-## Decision Rule
-
-Accept ONLY if:
-All price-defining attributes match
-AND no hard rejection rule is triggered
-AND there is no meaningful ambiguity.
-
-Otherwise → reject.
+### Examples
+FB: "MacBook Pro 2019 16 inch i9" vs eBay: "MacBook Pro 2020 16 inch i9" → `reject`  
+FB: "Leather jacket, size M" vs eBay: "Leather jacket, size L" → `accept`  
+FB: "LEGO set, complete" vs eBay: "LEGO set, missing minifigure" → `maybe`  
 
 ---
 
-## Output Format (MANDATORY)
-
-Return a **JSON array** of objects, in the same order as the eBay items, one object per item:
+### Output Format
+Return JSON array in same order as eBay items:  
 
 [
-  {{
-    "rejected": false,
-    "reason": "Exact model and specs (2019, 16 inch, i9)"
-  }},
-  {{
-    "rejected": true,
-    "reason": "Different generation (2020 vs 2019)"
-  }}
+  {{"decision": "accept", "reason": "Size difference allowed (M vs L)"}},
+  {{"decision": "reject", "reason": "Different generation (2020 vs 2019)"}},
+  {{"decision": "maybe", "reason": "Missing minor part (minifigure)"}}
 ]
 
-Rules:
-- rejected: true = reject, false = accept.
-- reason: ≤ 10 words.
-- Include exact distinguishing details in parentheses when applicable.
-- No extra text. No markdown. Only valid JSON.
+No extra text. Reason ≤10 words, include key detail.
 """
 

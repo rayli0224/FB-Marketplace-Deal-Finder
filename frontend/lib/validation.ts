@@ -26,9 +26,16 @@ export const formSchema = z.object({
   query: z.string().min(1, "Query is required"),
   zipCode: z
     .string()
-    .min(1, "Zip code is required")
-    .refine((val: string) => /^\d+$/.test(val), { message: "Zip code must contain only digits" })
-    .refine((val: string) => val.length === 5, { message: "Zip code must be exactly 5 digits" }),
+    .refine(
+      (val: string) => val === "" || /^\d+$/.test(val),
+      { message: "Zip code must contain only digits" }
+    )
+    .refine(
+      (val: string) => val === "" || val.length === 5,
+      { message: "Zip code must be exactly 5 digits" }
+    )
+    .transform((val: string) => val || undefined)
+    .optional(),
   radius: z.preprocess(
     preprocessNumber,
     z.number({ required_error: "Radius is required" }).refine(

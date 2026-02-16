@@ -124,6 +124,22 @@ def setup_colored_logger(module_name: str, level: int = None) -> logging.Logger:
     return logger
 
 
+def set_all_loggers_level(level: int):
+    """
+    Update the level of all loggers that were created with setup_colored_logger.
+    
+    This is useful when DEBUG mode is detected after module import time (e.g. when
+    the DEBUG env var is set by a shell script that runs uvicorn). Call this at
+    application startup to ensure all loggers respect the current DEBUG setting.
+    """
+    logger_names = ("api", "fb_scraper", "listing_processor", "openai_helpers", "ebay_scraper")
+    for name in logger_names:
+        logger = logging.getLogger(name)
+        logger.setLevel(level)
+        for handler in logger.handlers:
+            handler.setLevel(level)
+
+
 # Length of the separator line used to break between steps (full-width line of dashes).
 SEP_LINE_LEN = 76
 
