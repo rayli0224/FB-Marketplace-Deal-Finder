@@ -25,21 +25,43 @@ def extract_response_output_text(response: Any) -> str:
     """
     Extract plain text from an OpenAI Responses API result.
 
-    Uses the convenience output_text when available, then falls back to the
-    structured output blocks if needed.
+    Uses the convenience output_text property when available, then falls back to
+    manually traversing the structured output blocks.
     """
-    output_text = (getattr(response, "output_text", "") or "").strip()
-    if output_text:
-        return output_text
-
+    # Try the convenience property first
+    if hasattr(response, "output_text"):
+        try:
+            output_text = response.output_text
+            if output_text and output_text.strip():
+                return output_text.strip()
+        except Exception:
+            pass
+    
+    # Fallback: manually traverse the output structure
     output_blocks = getattr(response, "output", None) or []
-    for message in output_blocks:
-        contents = getattr(message, "content", None) or []
-        for block in contents:
-            text = getattr(block, "text", None)
-            if not text:
-                continue
-            return text.strip()
+    texts = []
+    for output_item in output_blocks:
+        # Check if this is a message output item
+        item_type = getattr(output_item, "type", None)
+        if item_type == "message":
+            # Get the content list
+            content_list = getattr(output_item, "content", None) or []
+            for content_item in content_list:
+                # Check if this is a text content item
+                content_type = getattr(content_item, "type", None)
+                if content_type == "output_text":
+                    text = getattr(content_item, "text", None)
+                    if text:
+                        texts.append(text)
+        else:
+            # Try to get text directly if it's not a message
+            if hasattr(output_item, "text"):
+                text = getattr(output_item, "text", None)
+                if text:
+                    texts.append(text)
+    
+    if texts:
+        return "".join(texts).strip()
     return ""
 
 
