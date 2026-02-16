@@ -856,7 +856,9 @@ class FBMarketplaceScraper:
     def _extract_listings(
         self,
         max_listings: int = 20,
-        on_listing_found=None,
+        on_listing_found: Optional[Callable[[Listing, int], None]] = None,
+        on_listing_filtered: Optional[Callable[[Listing], None]] = None,
+        listing_filter: Optional[Callable[[Listing], bool]] = None,
         extract_descriptions: bool = False,
     ) -> List[Listing]:
         """
@@ -865,9 +867,12 @@ class FBMarketplaceScraper:
         Scrolls to load content, locates listing DOM elements, then iterates until
         max_listings valid listings are extracted or elements run out. Skips
         elements that fail extraction (e.g. odd price formats) and continues.
+        When listing_filter is provided, listings that fail the filter are not counted
+        toward max_listings but are reported via on_listing_filtered.
         Checks for cancellation at each iteration and exits early if requested.
         """
         listings = []
+        filtered_out = []
         try:
             self._check_cancelled()
             
@@ -882,7 +887,10 @@ class FBMarketplaceScraper:
                 self._check_cancelled()
                 listing = self._extract_listing_from_element(element)
                 if listing:
-                    listings.append(listing)
+                    if listing_filter and not listing_filter(listing):
+                        filtered_out.append(listing)
+                    else:
+                        listings.append(listing)
 
             search_url = self.page.url if extract_descriptions else ""
             for idx, listing in enumerate(listings, 1):
@@ -908,6 +916,11 @@ class FBMarketplaceScraper:
                 log_listing_box_sep(logger)
                 if on_listing_found:
                     on_listing_found(listing, idx)
+
+            for listing in filtered_out:
+                logger.debug(f"Filtered: {listing.title} (${listing.price:.2f})")
+                if on_listing_filtered:
+                    on_listing_filtered(listing)
             
         except SearchCancelledError:
             raise
@@ -922,7 +935,9 @@ class FBMarketplaceScraper:
         zip_code: str,
         radius: int = 25,
         max_listings: int = 20,
-        on_listing_found=None,
+        on_listing_found: Optional[Callable[[Listing, int], None]] = None,
+        on_listing_filtered: Optional[Callable[[Listing], None]] = None,
+        listing_filter: Optional[Callable[[Listing], bool]] = None,
         extract_descriptions: bool = False,
         step_sep: Optional[str] = "main",
         on_inspector_url: Optional[Callable[[str], None]] = None,
@@ -930,6 +945,8 @@ class FBMarketplaceScraper:
         """
         Run a Marketplace search and return up to max_listings results.
 
+        When listing_filter is provided, listings that fail the filter are not counted
+        toward max_listings but are reported via on_listing_filtered.
         step_sep: "main" = main step separator line; "sub" = section separator (within Step 2); None = plain title line only.
         on_inspector_url: optional callback invoked with the DevTools inspector URL when browser is created (headed mode).
         """
@@ -978,6 +995,8 @@ class FBMarketplaceScraper:
                 listings = self._extract_listings(
                     max_listings=max_listings,
                     on_listing_found=on_listing_found,
+                    on_listing_filtered=on_listing_filtered,
+                    listing_filter=listing_filter,
                     extract_descriptions=extract_descriptions,
                 )
             return listings
@@ -1053,7 +1072,9 @@ def search_marketplace(
     radius: int = 25,
     max_listings: int = 20,
     headless: bool = None,
-    on_listing_found=None,
+    on_listing_found: Optional[Callable[[Listing, int], None]] = None,
+    on_listing_filtered: Optional[Callable[[Listing], None]] = None,
+    listing_filter: Optional[Callable[[Listing], bool]] = None,
     extract_descriptions: bool = False,
     step_sep: Optional[str] = "main",
     on_inspector_url: Optional[Callable[[str], None]] = None,
@@ -1062,6 +1083,8 @@ def search_marketplace(
     """
     Run a one-off Facebook Marketplace search and return the results.
 
+    When listing_filter is provided, listings that fail the filter are not counted
+    toward max_listings but are reported via on_listing_filtered.
     step_sep: "main" = main step separator; "sub" = section separator; None = plain title only.
     on_inspector_url: optional callback invoked with the DevTools inspector URL when browser is created (headed mode).
     cancelled: Optional threading.Event that signals cancellation when set. The scraper will check this
@@ -1079,6 +1102,8 @@ def search_marketplace(
             query, zip_code, radius,
             max_listings=max_listings,
             on_listing_found=on_listing_found,
+            on_listing_filtered=on_listing_filtered,
+            listing_filter=listing_filter,
             extract_descriptions=extract_descriptions,
             step_sep=step_sep,
             on_inspector_url=on_inspector_url,

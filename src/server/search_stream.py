@@ -26,6 +26,7 @@ from src.scrapers.ebay_scraper_v2 import (
     unregister_ebay_scraper,
 )
 from src.evaluation.listing_ebay_comparison import compare_listing_to_ebay
+from src.evaluation.fb_listing_filter import is_suspicious_price
 from src.utils.colored_logger import setup_colored_logger, log_step_sep, log_error_short, log_warning
 
 from src.server.search_state import (
@@ -94,22 +95,39 @@ def create_search_stream(request, debug_mode: bool):
 
     log_step_sep(logger, f"Search request — query='{request.query}', zip={request.zipCode}, radius={request.radius}mi")
 
+    filtered_count_holder = [0]
+
+    def build_debug_listing_dict(listing, filtered: bool = False) -> dict:
+        """Build the dict payload for a debug_facebook_listing SSE event."""
+        entry = {
+            "title": listing.title,
+            "price": listing.price,
+            "location": listing.location,
+            "url": listing.url,
+            "description": listing.description or "",
+        }
+        if filtered:
+            entry["filtered"] = True
+        return entry
+
     def on_listing_found(listing, count):
         if cancelled.is_set():
             return
         fb_listings.append(listing)
         event_queue.put({"type": "progress", "scannedCount": count})
         if debug_mode:
-            event_queue.put({
-                "type": "debug_facebook_listing",
-                "listing": {
-                    "title": listing.title,
-                    "price": listing.price,
-                    "location": listing.location,
-                    "url": listing.url,
-                    "description": listing.description or "",
-                },
-            })
+            event_queue.put({"type": "debug_facebook_listing", "listing": build_debug_listing_dict(listing)})
+
+    def on_listing_filtered(listing):
+        if cancelled.is_set():
+            return
+        filtered_count_holder[0] += 1
+        if debug_mode:
+            event_queue.put({"type": "debug_facebook_listing", "listing": build_debug_listing_dict(listing, filtered=True)})
+
+    def listing_passes_filter(listing) -> bool:
+        """Return True if the listing should be kept (not suspicious)."""
+        return not is_suspicious_price(listing.price)
 
     def on_inspector_url(url: str):
         if not cancelled.is_set():
@@ -127,6 +145,8 @@ def create_search_stream(request, debug_mode: bool):
                 max_listings=request.maxListings,
                 headless=not debug_mode,
                 on_listing_found=on_listing_found,
+                on_listing_filtered=on_listing_filtered,
+                listing_filter=listing_passes_filter,
                 extract_descriptions=request.extractDescriptions,
                 step_sep=None,
                 on_inspector_url=on_inspector_url if debug_mode else None,
@@ -230,7 +250,10 @@ def create_search_stream(request, debug_mode: bool):
 
             yield from drain_log_queue()
 
-            logger.info(f"📋 Found {len(fb_listings)} listings")
+            filtered_count = filtered_count_holder[0]
+            logger.info(f"📋 Found {len(fb_listings)} listings" + (f" ({filtered_count} filtered out)" if filtered_count > 0 else ""))
+            if filtered_count > 0:
+                yield f"data: {json.dumps({'type': 'filtered', 'filteredCount': filtered_count})}\n\n"
             yield from drain_log_queue()
             yield f"data: {json.dumps({'type': 'phase', 'phase': 'evaluating'})}\n\n"
 
@@ -348,11 +371,13 @@ def create_search_stream(request, debug_mode: bool):
             if cancelled.is_set():
                 force_close_active_ebay_scraper(eval_thread.ident)
                 return
-            log_step_sep(logger, f"✅ Step 4: Search completed — {len(fb_listings)} scanned, {len(scored_listings)} deals found")
+            total_scanned = len(fb_listings) + filtered_count
+            log_step_sep(logger, f"✅ Step 4: Search completed — {total_scanned} scanned, {filtered_count} filtered, {len(scored_listings)} deals found")
             yield from drain_log_queue()
             done_event = {
                 "type": "done",
-                "scannedCount": len(fb_listings),
+                "scannedCount": total_scanned,
+                "filteredCount": filtered_count,
                 "evaluatedCount": evaluated_count,
                 "listings": scored_listings,
                 "threshold": request.threshold,
