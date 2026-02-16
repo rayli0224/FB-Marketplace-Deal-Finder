@@ -78,6 +78,12 @@ INCORRECT_TITLES = ("Partner Listing", "Just listed", "Free")
 # Regex for currency-prefixed price lines (CA$20, CAD $20, US$15) mistaken for title.
 PRICE_LIKE_LINE_RE = re.compile(r"^(CA|CAD|US|USD)?\s*\$?\s*[\d,.]+\s*$", re.IGNORECASE)
 
+# Patterns to strip from description — FB detail page often includes condition, price, location.
+DESCRIPTION_CONDITION_RE = re.compile(r"\bCondition\s*:?\s*(New|Used|Like New|Refurbished|Open Box)\b", re.IGNORECASE)
+DESCRIPTION_PRICE_RE = re.compile(r"\$\s*[\d,]+(?:\.\d{2})?\b")
+DESCRIPTION_LOCATION_RE = re.compile(r"\b[A-Za-z\s]+,\s*[A-Z]{2}\b")
+DESCRIPTION_FOR_SALE_RE = re.compile(r"\bFor\s+(?:all|sale|trade)\b", re.IGNORECASE)
+
 
 class FacebookNotLoggedInError(Exception):
     """
@@ -765,6 +771,23 @@ class FBMarketplaceScraper:
             return False
         
         return True
+
+    def _strip_metadata_from_description(self, text: str) -> str:
+        """
+        Remove condition, price, location, and "For sale/trade" from extracted text.
+
+        FB detail page often includes these in the same block as the description.
+        Stripping them leaves only the actual listing description. Returns empty
+        if input is empty or result is too short to be useful.
+        """
+        if not text or not text.strip():
+            return ""
+        out = DESCRIPTION_CONDITION_RE.sub("", text)
+        out = DESCRIPTION_PRICE_RE.sub("", out)
+        out = DESCRIPTION_LOCATION_RE.sub("", out)
+        out = DESCRIPTION_FOR_SALE_RE.sub("", out)
+        out = re.sub(r"\s+", " ", out).strip()
+        return out if len(out) >= DESCRIPTION_MIN_LENGTH else ""
     
     def _extract_description_from_detail_page(self, url: str) -> str:
         """
@@ -889,8 +912,8 @@ class FBMarketplaceScraper:
                     detail_page.close()
                 except Exception:
                     pass
-        
-        return description
+
+        return self._strip_metadata_from_description(description)
     
     def _scroll_page_to_load_content(self):
         """Scroll the page to load more listing content."""
