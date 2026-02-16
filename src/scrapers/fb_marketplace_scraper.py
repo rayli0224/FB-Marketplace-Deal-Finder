@@ -2,7 +2,6 @@
 Facebook Marketplace Scraper
 
 Scrapes Facebook Marketplace listings using Playwright for better anti-detection.
-Uses its own Chrome process (separate from the eBay scraper — different ports).
 Supports searching by query, zip code, and radius.
 
 Authentication is handled by the app: users provide login data via the in-app setup,
@@ -22,7 +21,7 @@ from dataclasses import dataclass
 from typing import Optional, List, Callable, Tuple
 from playwright.sync_api import sync_playwright, Browser, Page, BrowserContext, TimeoutError as PlaywrightTimeoutError
 from src.scrapers.utils import random_delay, parse_price, is_valid_listing_price
-from src.utils.colored_logger import setup_colored_logger, log_data_block, log_listing_box_sep, log_warning, set_step_indent, clear_step_indent, wait_status
+from src.utils.colored_logger import setup_colored_logger, log_data_block, log_listing_box_sep, set_step_indent, clear_step_indent, wait_status
 from src.utils.debug_chrome_proxy import start_debug_proxy
 
 logger = setup_colored_logger("fb_scraper")
@@ -66,15 +65,9 @@ LOCATION_UNKNOWN = "Unknown"
 LOCATION_SHIPPED = "Shipped"
 
 # Description extraction constants
-# On the listing detail page, span[dir="auto"] order after Details: (1) Condition label,
-# (2) Condition value, (3) Description, then Location. We take the 3rd (index 2).
-DESCRIPTION_SPAN_INDEX = 2
-DETAILS_HEADING_XPATH = (
-    "xpath=//span[normalize-space()='Details'] | //div[normalize-space()='Details']"
-    " | //h2[normalize-space()='Details'] | //h3[normalize-space()='Details']"
-)
-DETAILS_ELEMENT_TIMEOUT_MS = 3000
-RETURN_NAVIGATION_TIMEOUT_MS = 15000
+DESCRIPTION_MAX_LINES = 50
+DESCRIPTION_MIN_LENGTH = 10
+DESCRIPTION_SIBLING_CHECK_COUNT = 3
 SCROLL_ATTEMPTS = 3
 
 # Incorrect titles: small image overlays (e.g. "Partner Listing", "Just listed") that appear
@@ -266,12 +259,7 @@ class FBMarketplaceScraper:
             "--disable-blink-features=AutomationControlled",
             "--disable-dev-shm-usage",
             "--no-sandbox",
-            "--no-first-run",
             "--window-size=1920,1080",
-            "--disable-gpu",
-            "--disable-logging",
-            "--log-level=3",
-            "--user-data-dir=/tmp/chrome-fb",
         ]
 
         self._check_cancelled()
@@ -281,7 +269,7 @@ class FBMarketplaceScraper:
         # directly on cancellation without going through Playwright's sync API.
         launch_args = [chrome_path]
         if self.headless:
-            launch_args.append("--headless=new")
+            launch_args.append("--headless")
         launch_args.extend([
             f"--remote-debugging-port={CHROME_DEBUG_PORT}",
             "--remote-allow-origins=*",
@@ -289,31 +277,13 @@ class FBMarketplaceScraper:
             "about:blank",
         ])
 
-        self._chrome_process = subprocess.Popen(
-            launch_args,
-            stderr=subprocess.PIPE,
-            stdout=subprocess.DEVNULL,
-        )
-        try:
-            self._wait_for_chrome_debug_port()
-        except RuntimeError as e:
-            if self._chrome_process.poll() is not None:
-                stderr = self._chrome_process.stderr
-                extra = ""
-                if stderr:
-                    try:
-                        err_text = stderr.read().decode("utf-8", errors="replace").strip()
-                        if err_text:
-                            extra = f" — Chrome output: {err_text[:500]}"
-                    except Exception:
-                        pass
-                raise RuntimeError(str(e) + extra) from e
-            raise
+        self._chrome_process = subprocess.Popen(launch_args)
+        self._wait_for_chrome_debug_port()
 
         self._check_cancelled()
 
         if not self.headless:
-            start_debug_proxy(proxy_port=PROXY_DEBUG_PORT, chrome_port=CHROME_DEBUG_PORT)
+            start_debug_proxy()
 
         self.browser = self.playwright.chromium.connect_over_cdp(
             f"http://localhost:{CHROME_DEBUG_PORT}"
@@ -432,7 +402,7 @@ class FBMarketplaceScraper:
         except FacebookNotLoggedInError:
             raise
         except Exception as e:
-            log_warning(logger, f"Setting your location failed — {e}")
+            logger.warning("Setting your location failed — %s", e)
 
     def _set_radius(self, radius: int):
         """Open the radius dropdown and select the given miles value.
@@ -456,7 +426,7 @@ class FBMarketplaceScraper:
 
         box = combobox.bounding_box(timeout=timeout)
         if not box:
-            log_warning(logger, "Could not find the radius control on the page")
+            logger.warning("Could not find the radius control on the page")
             return
 
         cx = box["x"] + box["width"] / 2
@@ -726,40 +696,176 @@ class FBMarketplaceScraper:
             logger.debug("Could not read location for this listing — %s", e)
         return ""
     
-    def _extract_description_from_detail_page(self, url: str, return_url: str = "") -> str:
+    def _is_valid_description(self, text: str) -> bool:
+        """
+        Validate that extracted text is a real description and not Facebook internal code.
+        
+        Filters out JSON/script content, Facebook internal identifiers, and other non-description
+        content. Returns True if the text appears to be a valid listing description.
+        """
+        if not text or len(text.strip()) < DESCRIPTION_MIN_LENGTH:
+            return False
+        
+        text_lower = text.lower()
+        
+        # Filter out JSON-like content
+        if text.strip().startswith("{") or text.strip().startswith("["):
+            return False
+        
+        # Filter out Facebook internal identifiers
+        facebook_internal_patterns = [
+            "require",
+            "cometssrmergedcontentinjector",
+            "onpayloadreceived",
+            "fizzrootid",
+            "render_pass",
+            "payloadtype",
+            "readypreloaders",
+            "clientrendererrors",
+            "productrecoverableerrors",
+            "adp_",
+            "ssrb_root_content",
+        ]
+        
+        for pattern in facebook_internal_patterns:
+            if pattern in text_lower:
+                return False
+        
+        # Filter out content that's mostly JSON structure
+        if text.count("{") > 2 or text.count("}") > 2 or text.count("[") > 2:
+            return False
+        
+        # Valid descriptions should have some normal text (letters, spaces, punctuation)
+        # Not just special characters or JSON structure
+        if not re.search(r'[A-Za-z]{3,}', text):
+            return False
+        
+        return True
+    
+    def _extract_description_from_detail_page(self, url: str) -> str:
         """
         Navigate to listing detail page and extract description text under 'Details' section.
-
-        Uses the main page so the navigation is visible in the browser. Navigates to the
-        listing URL, extracts the description, then navigates back to return_url.
+        
+        Opens the listing URL in a new page, waits for it to load, finds the 'Details' text,
+        and extracts the description content that appears underneath it. Tries multiple strategies:
+        finding sibling elements, parent containers, and text analysis. Filters out Facebook
+        internal JSON/script content. Returns empty string if description cannot be found or
+        if navigation fails. Checks for cancellation and exits early if requested.
         """
         self._check_cancelled()
-
+        
         description = ""
-
+        detail_page = None
+        
         try:
+            # Open detail page in new page to avoid losing search results context
+            detail_page = self.context.new_page()
+            
             self._check_cancelled()
-            self.page.goto(url, wait_until="load", timeout=NAVIGATION_TIMEOUT_MS)
+            
+            detail_page.goto(url, wait_until="networkidle", timeout=15000)
+            
             self._check_cancelled()
-
-            # Span order after Details: Condition label, Condition value, Description, Location.
-            details_element = self.page.locator(DETAILS_HEADING_XPATH).first
-            if details_element.is_visible(timeout=DETAILS_ELEMENT_TIMEOUT_MS):
-                spans = details_element.locator("xpath=following::span[@dir='auto']")
-                if spans.count() > DESCRIPTION_SPAN_INDEX:
-                    description = spans.nth(DESCRIPTION_SPAN_INDEX).inner_text().strip()
-
+            
+            random_delay(2, 3)
+            self._check_cancelled()
+            
+            # Find "Details" text and get the description underneath
+            details_selectors = [
+                "span:has-text('Details')",
+                "div:has-text('Details')",
+                "h2:has-text('Details')",
+                "h3:has-text('Details')",
+            ]
+            
+            for selector in details_selectors:
+                try:
+                    details_element = detail_page.locator(selector).first
+                    if details_element.is_visible(timeout=3000):
+                        # Strategy 1: Try to find next sibling element containing description
+                        try:
+                            next_sibling = details_element.locator("xpath=following-sibling::*[1]")
+                            if next_sibling.count() > 0:
+                                sibling_text = next_sibling.inner_text().strip()
+                                if self._is_valid_description(sibling_text):
+                                    description = sibling_text
+                                    break
+                        except Exception:
+                            pass
+                        
+                        # Strategy 2: Try to find description in following siblings (not just immediate)
+                        try:
+                            for i in range(1, DESCRIPTION_SIBLING_CHECK_COUNT + 1):
+                                sibling = details_element.locator(f"xpath=following-sibling::*[{i}]")
+                                if sibling.count() > 0:
+                                    sibling_text = sibling.inner_text().strip()
+                                    if self._is_valid_description(sibling_text):
+                                        description = sibling_text
+                                        break
+                            if description:
+                                break
+                        except Exception:
+                            pass
+                        
+                        # Strategy 3: Get parent container and extract text after "Details"
+                        try:
+                            parent = details_element.locator("xpath=..")
+                            full_text = parent.inner_text().strip()
+                            
+                            # Extract text after "Details"
+                            details_index = full_text.find("Details")
+                            if details_index >= 0:
+                                description_candidate = full_text[details_index + len("Details"):].strip()
+                                # Remove any leading colons, dashes, or whitespace
+                                description_candidate = description_candidate.lstrip(":-\n\r\t ")
+                                # Take first reasonable chunk (stop at common separators or new sections)
+                                lines = description_candidate.split("\n")
+                                description_parts = []
+                                for line in lines:
+                                    line = line.strip()
+                                    if not line:
+                                        continue
+                                    # Stop if we hit "Location is approximate" marker
+                                    if "location is approximate" in line.lower():
+                                        break
+                                    # Stop if we hit another section header (all caps or common patterns)
+                                    if re.match(r'^[A-Z\s]{10,}$', line) and len(line) > 15:
+                                        break
+                                    description_parts.append(line)
+                                    if len(description_parts) >= DESCRIPTION_MAX_LINES:
+                                        break
+                                
+                                description_candidate = "\n".join(description_parts).strip()
+                                if self._is_valid_description(description_candidate):
+                                    description = description_candidate
+                                    break
+                        except Exception:
+                            pass
+                        
+                        # Strategy 4: Look for description in nearby div/span elements
+                        try:
+                            nearby_elements = detail_page.locator("xpath=//span[contains(text(), 'Details')]/following::div[1] | //div[contains(text(), 'Details')]/following::div[1] | //h2[contains(text(), 'Details')]/following::div[1]")
+                            if nearby_elements.count() > 0:
+                                nearby_text = nearby_elements.first.inner_text().strip()
+                                if self._is_valid_description(nearby_text):
+                                    description = nearby_text
+                                    break
+                        except Exception:
+                            pass
+                except Exception:
+                    continue
+            
         except SearchCancelledError:
             raise
         except Exception as e:
-            logger.debug("Failed to extract description from %s: %s", url, e)
+            logger.debug(f"Failed to extract description from {url}: {e}")
         finally:
-            if return_url:
+            if detail_page:
                 try:
-                    self.page.goto(return_url, wait_until="domcontentloaded", timeout=RETURN_NAVIGATION_TIMEOUT_MS)
-                except Exception as e:
-                    logger.debug("Could not navigate back to search: %s", e)
-
+                    detail_page.close()
+                except Exception:
+                    pass
+        
         return description
     
     def _scroll_page_to_load_content(self):
@@ -792,16 +898,17 @@ class FBMarketplaceScraper:
             except Exception:
                 continue
         
-        log_warning(logger, "We could not find any listing cards on the page. Facebook may have changed their layout.")
+        logger.warning("We could not find any listing cards on the page. Facebook may have changed their layout.")
         return []
     
-    def _extract_listing_from_element(self, element) -> Optional[Listing]:
+    def _extract_listing_from_element(self, element, extract_descriptions: bool = False) -> Optional[Listing]:
         """
         Extract a single listing from a listing element.
-
+        
         Extracts URL, price, title, and location from the element. When strikethrough
-        pricing is detected, uses DOM-order extraction. Description is extracted in a
-        separate pass that navigates to each listing.
+        pricing is detected, uses DOM-order extraction (sale price = first non-strike
+        price, title = first non-price line). Otherwise uses standard selectors.
+        Optionally navigates to the listing's detail page for description.
         """
         try:
             url = element.get_attribute("href") or ""
@@ -833,8 +940,16 @@ class FBMarketplaceScraper:
                 title = ""
             
             location = self._extract_location(element)
-            description = ""
-
+            
+            # Extract description from detail page if enabled
+            if extract_descriptions:
+                try:
+                    description = self._extract_description_from_detail_page(url)
+                except SearchCancelledError:
+                    description = ""
+            else:
+                description = ""  # Skip description extraction for performance
+            
             if title and PRICE_LIKE_LINE_RE.match(title.strip()) and price:
                 title = self._try_extract_title_by_dom_structure(element, price)
 
@@ -856,9 +971,9 @@ class FBMarketplaceScraper:
     def _extract_listings(
         self,
         max_listings: int = 20,
-        on_listing_found: Optional[Callable[[Listing, int], None]] = None,
-        on_listing_filtered: Optional[Callable[[Listing], None]] = None,
-        listing_filter: Optional[Callable[[Listing], bool]] = None,
+        on_listing_found=None,
+        on_listing_filtered=None,
+        listing_filter=None,
         extract_descriptions: bool = False,
     ) -> List[Listing]:
         """
@@ -867,12 +982,10 @@ class FBMarketplaceScraper:
         Scrolls to load content, locates listing DOM elements, then iterates until
         max_listings valid listings are extracted or elements run out. Skips
         elements that fail extraction (e.g. odd price formats) and continues.
-        When listing_filter is provided, listings that fail the filter are not counted
-        toward max_listings but are reported via on_listing_filtered.
+        If listing_filter is provided, only listings that pass the filter are kept.
         Checks for cancellation at each iteration and exits early if requested.
         """
         listings = []
-        filtered_out = []
         try:
             self._check_cancelled()
             
@@ -885,47 +998,33 @@ class FBMarketplaceScraper:
                 if len(listings) >= max_listings:
                     break
                 self._check_cancelled()
-                listing = self._extract_listing_from_element(element)
+                
+                listing = self._extract_listing_from_element(element, extract_descriptions=extract_descriptions)
                 if listing:
+                    # Apply filter if provided
                     if listing_filter and not listing_filter(listing):
-                        filtered_out.append(listing)
-                    else:
-                        listings.append(listing)
-
-            search_url = self.page.url if extract_descriptions else ""
-            for idx, listing in enumerate(listings, 1):
-                self._check_cancelled()
-
-                if extract_descriptions:
-                    try:
-                        desc = self._extract_description_from_detail_page(listing.url, search_url)
-                        if desc:
-                            listing.description = desc
-                    except SearchCancelledError:
-                        raise
-                    except Exception as e:
-                        logger.debug("Could not get description for %s: %s", listing.url, e)
-
-                log_listing_box_sep(logger)
-                log_data_block(
-                    logger, f"[{idx}/{max_listings}] Retrieved:",
-                    title=listing.title, price=listing.price, location=listing.location, url=listing.url,
-                )
-                if listing.description:
-                    logger.debug(f"  Description: {listing.description}")
-                log_listing_box_sep(logger)
-                if on_listing_found:
-                    on_listing_found(listing, idx)
-
-            for listing in filtered_out:
-                logger.debug(f"Filtered: {listing.title} (${listing.price:.2f})")
-                if on_listing_filtered:
-                    on_listing_filtered(listing)
+                        if on_listing_filtered:
+                            on_listing_filtered(listing)
+                        continue
+                    
+                    idx = len(listings) + 1
+                    label = f"[{idx}/{max_listings}] Retrieved:"
+                    log_listing_box_sep(logger)
+                    log_data_block(
+                        logger, label,
+                        title=listing.title, price=listing.price, location=listing.location, url=listing.url,
+                    )
+                    if listing.description:
+                        logger.debug(f"  Description: {listing.description}")
+                    log_listing_box_sep(logger)
+                    listings.append(listing)
+                    if on_listing_found:
+                        on_listing_found(listing, len(listings))
             
         except SearchCancelledError:
             raise
         except Exception as e:
-            log_warning(logger, f"Reading the list of listings from the page failed — {e}")
+            logger.warning("Reading the list of listings from the page failed — %s", e)
         
         return listings
     
@@ -935,9 +1034,9 @@ class FBMarketplaceScraper:
         zip_code: str,
         radius: int = 25,
         max_listings: int = 20,
-        on_listing_found: Optional[Callable[[Listing, int], None]] = None,
-        on_listing_filtered: Optional[Callable[[Listing], None]] = None,
-        listing_filter: Optional[Callable[[Listing], bool]] = None,
+        on_listing_found=None,
+        on_listing_filtered=None,
+        listing_filter=None,
         extract_descriptions: bool = False,
         step_sep: Optional[str] = "main",
         on_inspector_url: Optional[Callable[[str], None]] = None,
@@ -945,8 +1044,6 @@ class FBMarketplaceScraper:
         """
         Run a Marketplace search and return up to max_listings results.
 
-        When listing_filter is provided, listings that fail the filter are not counted
-        toward max_listings but are reported via on_listing_filtered.
         step_sep: "main" = main step separator line; "sub" = section separator (within Step 2); None = plain title line only.
         on_inspector_url: optional callback invoked with the DevTools inspector URL when browser is created (headed mode).
         """
@@ -1072,9 +1169,9 @@ def search_marketplace(
     radius: int = 25,
     max_listings: int = 20,
     headless: bool = None,
-    on_listing_found: Optional[Callable[[Listing, int], None]] = None,
-    on_listing_filtered: Optional[Callable[[Listing], None]] = None,
-    listing_filter: Optional[Callable[[Listing], bool]] = None,
+    on_listing_found=None,
+    on_listing_filtered=None,
+    listing_filter=None,
     extract_descriptions: bool = False,
     step_sep: Optional[str] = "main",
     on_inspector_url: Optional[Callable[[str], None]] = None,
@@ -1083,8 +1180,6 @@ def search_marketplace(
     """
     Run a one-off Facebook Marketplace search and return the results.
 
-    When listing_filter is provided, listings that fail the filter are not counted
-    toward max_listings but are reported via on_listing_filtered.
     step_sep: "main" = main step separator; "sub" = section separator; None = plain title only.
     on_inspector_url: optional callback invoked with the DevTools inspector URL when browser is created (headed mode).
     cancelled: Optional threading.Event that signals cancellation when set. The scraper will check this
@@ -1146,5 +1241,5 @@ def force_close_active_scraper(thread_id: Optional[int] = None):
             try:
                 scraper._chrome_process.kill()
             except Exception as e:
-                log_warning(logger, f"Could not kill Chrome process: {e}")
+                logger.warning(f"Could not kill Chrome process: {e}")
 
