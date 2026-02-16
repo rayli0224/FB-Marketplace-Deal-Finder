@@ -2,7 +2,7 @@
 Facebook Marketplace Scraper
 
 Scrapes Facebook Marketplace listings using Playwright for better anti-detection.
-Supports searching by query, zip code, and radius.
+Supports searching by query, location (city name or postal code), and radius.
 
 Authentication is handled by the app: users provide login data via the in-app setup,
 which is stored and loaded from the path in FB_COOKIES_FILE. The scraper expects
@@ -88,6 +88,16 @@ class FacebookNotLoggedInError(Exception):
     This happens when navigating to Marketplace results in a redirect to the login page
     or when login-wall elements are visible on the page, indicating the saved login data
     is no longer valid and needs to be re-exported.
+    """
+    pass
+
+
+class LocationNotFoundError(Exception):
+    """
+    Raised when the location (city name or postal code) cannot be found or selected in Facebook Marketplace.
+    
+    This happens when the location autocomplete doesn't find matches, or when the Apply button
+    remains disabled after attempting to select a location, indicating the location is invalid.
     """
     pass
 
@@ -363,12 +373,12 @@ class FBMarketplaceScraper:
         self._check_cancelled()
 
     def _set_location(self, zip_code: str, radius: int):
-        """Open the location dialog, set zip code and radius, then apply the filters.
+        """Open the location dialog, set location (city or postal code) and radius, then apply the filters.
 
         Opens the location dialog by clicking the location pill, sets the radius dropdown
-        first (while the dialog is fresh and fully interactive), then fills the zip code
-        input and selects the first autocomplete suggestion. Finally clicks Apply and waits
-        for the search results to reload with the new filters applied.
+        first (while the dialog is fresh and fully interactive), then fills the location
+        input (supports city names or postal codes) and selects the first autocomplete suggestion.
+        Finally clicks Apply and waits for the search results to reload with the new filters applied.
         """
         try:
             self._check_cancelled()
@@ -385,6 +395,17 @@ class FBMarketplaceScraper:
             location_input.fill(zip_code, timeout=ACTION_TIMEOUT_MS)
             self._check_cancelled()
             random_delay(0.4, 0.8)
+            
+            # Wait for autocomplete suggestions to appear
+            try:
+                autocomplete_listbox = self.page.locator("[role='listbox']").filter(
+                    has=self.page.locator("[role='option']")
+                ).first
+                autocomplete_listbox.wait_for(state="visible", timeout=ACTION_TIMEOUT_MS)
+            except Exception:
+                raise LocationNotFoundError(f"Could not find location suggestions for '{zip_code}'")
+            
+            self._check_cancelled()
             location_input.press("ArrowDown")
             self._check_cancelled()
             random_delay(0.2, 0.4)
@@ -392,7 +413,21 @@ class FBMarketplaceScraper:
             self._check_cancelled()
             random_delay(0.5, 1)
 
+            # Wait for Apply button to become enabled
             apply_button = self.page.locator(LOCATION_APPLY_SELECTOR).first
+            apply_button.wait_for(state="visible", timeout=ACTION_TIMEOUT_MS)
+            
+            # Check if button is enabled (not aria-disabled="true")
+            for attempt in range(20):  # Try up to 20 times (4 seconds total)
+                self._check_cancelled()
+                is_disabled = apply_button.get_attribute("aria-disabled")
+                if is_disabled != "true":
+                    break
+                if attempt < 19:  # Don't delay on last attempt
+                    random_delay(0.2, 0.2)
+            else:
+                raise LocationNotFoundError(f"Location '{zip_code}' could not be selected — Apply button remained disabled")
+            
             apply_button.click(timeout=ACTION_TIMEOUT_MS)
             self._check_cancelled()
 
@@ -405,8 +440,11 @@ class FBMarketplaceScraper:
             raise
         except FacebookNotLoggedInError:
             raise
+        except LocationNotFoundError:
+            raise
         except Exception as e:
             logger.warning("Setting your location failed — %s", e)
+            raise LocationNotFoundError(f"Failed to set location '{zip_code}': {e}") from e
 
     def _set_radius(self, radius: int):
         """Open the radius dropdown and select the given radius value.
@@ -447,9 +485,10 @@ class FBMarketplaceScraper:
         listbox.wait_for(state="visible", timeout=timeout)
         self._check_cancelled()
         
-        # Try miles first, then km (for UK/EU locales)
+        # Match various formats: "5 miles", "5 mi", "5 km", "5 kilometer", "5 kilometers", etc.
+        # Facebook uses "1 kilometer", "2 kilometers" format (American spelling) in some locales
         option = self.page.locator("[role='option']").filter(
-            has_text=re.compile(f"^{radius}\\s*(miles?|mi|km|kilometres?)$", re.IGNORECASE)
+            has_text=re.compile(f"^{radius}\\s*(miles?|mi|km|kilometers?|kilometres?)$", re.IGNORECASE)
         ).first
         option.click(timeout=timeout)
         self._check_cancelled()

@@ -15,6 +15,7 @@ from typing import Optional
 from src.scrapers.fb_marketplace_scraper import (
     search_marketplace as search_fb_marketplace,
     FacebookNotLoggedInError,
+    LocationNotFoundError,
     SearchCancelledError,
     force_close_active_scraper,
 )
@@ -160,6 +161,11 @@ def create_search_stream(request, debug_mode: bool):
             if not cancelled.is_set():
                 logger.warning("🔒 Facebook session expired — notifying client")
                 event_queue.put({"type": "auth_error"})
+        except LocationNotFoundError as e:
+            if not cancelled.is_set():
+                logger.warning(f"⚠️ {e}")
+                event_queue.put({"type": "location_error", "message": str(e)})
+                cancelled.set()
         except Exception as e:
             if not cancelled.is_set():
                 log_error_short(logger, f"Step 2 failed: {e}")
@@ -220,6 +226,11 @@ def create_search_stream(request, debug_mode: bool):
                     if event["type"] == "auth_error":
                         logger.warning("🔒 Sending auth_error to client")
                         yield f"data: {json.dumps({'type': 'auth_error'})}\n\n"
+                        return
+                    
+                    if event["type"] == "location_error":
+                        logger.warning("⚠️ Sending location_error to client")
+                        yield f"data: {json.dumps({'type': 'location_error', 'message': event.get('message', 'Location not found')})}\n\n"
                         return
 
                     if event["type"] == "scrape_done":

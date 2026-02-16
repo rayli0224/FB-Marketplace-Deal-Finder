@@ -33,7 +33,7 @@ logger = setup_colored_logger("ebay_query_generator")
 
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 QUERY_GENERATION_MAX_OUTPUT_TOKENS = 1000
-PRE_FILTER_MAX_OUTPUT_TOKENS = 300
+PRE_FILTER_MAX_OUTPUT_TOKENS = 500
 
 
 def generate_ebay_query_for_listing(

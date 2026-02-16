@@ -32,6 +32,7 @@ type SSEDispatchHandlers = {
   handleFilteredUpdate?: (filteredCount: number) => void;
   handleCompletion: (data: { scannedCount: number; filteredCount?: number; evaluatedCount: number; listings: Listing[]; threshold?: number; averageConfidence?: number | null }) => void;
   handleAuthError: () => void;
+  handleLocationError: (message: string) => void;
   setEvaluatedCount: (n: number) => void;
   onListingResult?: (listing: Listing, evaluatedCount: number) => void;
   onDebugMode?: (params?: DebugSearchParams) => void;
@@ -70,6 +71,8 @@ function dispatchSSEEvent(payloadString: string, handlers: SSEDispatchHandlers):
   };
   if (data.type === "auth_error") {
     handlers.handleAuthError();
+  } else if (data.type === "location_error") {
+    handlers.handleLocationError(data.message || "Location not found");
   } else if (data.type === "phase" && data.phase != null) {
     handlers.handlePhaseUpdate(data.phase);
   } else if (data.type === "filtered" && typeof data.filteredCount === "number") {
@@ -248,6 +251,66 @@ export default function Home() {
   }, []);
 
   /**
+   * Cancels the current search by canceling the stream reader and aborting the fetch request.
+   * Resets state and returns the app to the form view.
+   */
+  const cancelSearch = useCallback(async () => {
+    // Tell the backend to cancel immediately (kills Chrome, stops scraping)
+    // Await so cleanup starts before we allow a new search
+    try {
+      await fetch(`${API_URL}/api/search/cancel`, { method: "POST" });
+    } catch {
+      // Backend may already be down, continue with local cleanup
+    }
+
+    // Cancel the reader first to stop reading from the stream
+    if (readerRef.current) {
+      try {
+        readerRef.current.cancel();
+      } catch {
+        // Reader may already be cancelled or released, ignore
+      }
+      try {
+        readerRef.current.releaseLock();
+      } catch {
+        // Lock may already be released, ignore
+      }
+      readerRef.current = null;
+    }
+    
+    // Then abort the fetch request
+    if (abortControllerRef.current) {
+      try {
+        abortControllerRef.current.abort();
+      } catch {
+        // AbortController may already be aborted, ignore
+      }
+      abortControllerRef.current = null;
+    }
+    
+    // Keep logs from this run and append a cancellation message
+    setDebugLogs((prev) => [
+      ...prev,
+      { level: "WARNING", message: "Search cancelled by user" },
+    ]);
+    
+    isSearchingRef.current = false;
+    setIsSearching(false);
+    setAppState("form");
+    setScannedCount(0);
+    setFilteredCount(0);
+    setEvaluatedCount(0);
+    setPhase("scraping");
+    setError(null);
+  }, []);
+
+  const handleLocationError = useCallback((message: string) => {
+    cancelSearch();
+    setAppState("form");
+    setError(message);
+  }, [cancelSearch]);
+
+  /**
    * Applies the final search result: sets listings, counts, threshold, generates CSV blob,
    * and switches the app to the done state so the results table is shown.
    */
@@ -296,6 +359,7 @@ export default function Home() {
         handleFilteredUpdate,
         handleCompletion,
         handleAuthError,
+        handleLocationError,
         setEvaluatedCount,
         onListingResult,
         onDebugMode: (params) => {
@@ -359,62 +423,8 @@ export default function Home() {
         reader.releaseLock();
       }
     },
-    [handlePhaseUpdate, handleProgressUpdate, handleFilteredUpdate, handleCompletion, handleAuthError, onListingResult, onDebugEbayQuery]
+    [handlePhaseUpdate, handleProgressUpdate, handleFilteredUpdate, handleCompletion, handleAuthError, handleLocationError, onListingResult, onDebugEbayQuery]
   );
-
-  /**
-   * Cancels the current search by canceling the stream reader and aborting the fetch request.
-   * Resets state and returns the app to the form view.
-   */
-  const cancelSearch = useCallback(async () => {
-    // Tell the backend to cancel immediately (kills Chrome, stops scraping)
-    // Await so cleanup starts before we allow a new search
-    try {
-      await fetch(`${API_URL}/api/search/cancel`, { method: "POST" });
-    } catch {
-      // Backend may already be down, continue with local cleanup
-    }
-
-    // Cancel the reader first to stop reading from the stream
-    if (readerRef.current) {
-      try {
-        readerRef.current.cancel();
-      } catch {
-        // Reader may already be cancelled or released, ignore
-      }
-      try {
-        readerRef.current.releaseLock();
-      } catch {
-        // Lock may already be released, ignore
-      }
-      readerRef.current = null;
-    }
-    
-    // Then abort the fetch request
-    if (abortControllerRef.current) {
-      try {
-        abortControllerRef.current.abort();
-      } catch {
-        // AbortController may already be aborted, ignore
-      }
-      abortControllerRef.current = null;
-    }
-    
-    // Keep logs from this run and append a cancellation message
-    setDebugLogs((prev) => [
-      ...prev,
-      { level: "WARNING", message: "Search cancelled by user" },
-    ]);
-    
-    isSearchingRef.current = false;
-    setIsSearching(false);
-    setAppState("form");
-    setScannedCount(0);
-    setFilteredCount(0);
-    setEvaluatedCount(0);
-    setPhase("scraping");
-    setError(null);
-  }, []);
 
   /**
    * Runs the marketplace search: POSTs form data to the stream endpoint, reads the SSE response,
