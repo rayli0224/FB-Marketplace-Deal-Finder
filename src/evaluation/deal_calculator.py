@@ -19,7 +19,7 @@ def calculate_deal_score(fb_price: float, ebay_stats: Optional[PriceStats]) -> O
     """
     if not ebay_stats or ebay_stats.average == 0:
         return None
-    
+
     savings = ebay_stats.average - fb_price
     score = (savings / ebay_stats.average) * 100
     return round(score, 1)
@@ -28,7 +28,6 @@ def calculate_deal_score(fb_price: float, ebay_stats: Optional[PriceStats]) -> O
 def score_listings(
     fb_listings: List[Listing],
     ebay_stats: Optional[PriceStats],
-    threshold: float
 ) -> List[dict]:
     """
     Score all FB listings by comparing prices to eBay market data. Returns all
@@ -36,10 +35,10 @@ def score_listings(
     dealScore is None when eBay stats unavailable or average price is zero.
     """
     scored_listings = []
-    
+
     for listing in fb_listings:
         deal_score = calculate_deal_score(listing.price, ebay_stats)
-        
+
         scored_listings.append({
             "title": listing.title,
             "price": listing.price,
@@ -47,5 +46,5 @@ def score_listings(
             "url": listing.url,
             "dealScore": deal_score,
         })
-    
+
     return scored_listings
