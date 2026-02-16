@@ -14,7 +14,7 @@ import { CookieSetupGuide } from "@/components/auth/CookieSetupGuide";
 import type { Listing } from "@/components/results/SearchResultsTable";
 import { DebugPanel } from "@/components/debug/DebugPanel";
 import { FloatingLogPanel } from "@/components/debug/FloatingLogPanel";
-import type { DebugFacebookListing, DebugEbayQueryEntry } from "@/components/debug/DebugPanel";
+import type { DebugFacebookListing, DebugEbayQueryEntry, DebugLogEntry } from "@/components/debug/DebugPanel";
 import type { DebugSearchParams } from "@/components/debug/DebugSearchParams";
 
 type AppState = "setup" | "form" | "loading" | "done" | "error";
@@ -40,12 +40,14 @@ type SSEDispatchHandlers = {
   handleAuthError: () => void;
   handleLocationError: (message: string) => void;
   setEvaluatedCount: (n: number) => void;
-  onListingResult?: (listing: Listing, evaluatedCount: number) => void;
+  onListingResult?: (listing: Listing, evaluatedCount: number, listingIndex?: number) => void;
   onDebugMode?: (params?: DebugSearchParams) => void;
   onDebugFacebook?: (listings: DebugFacebookListing[]) => void;
   onDebugFacebookListing?: (listing: DebugFacebookListing) => void;
+  onDebugEbayQueryStart?: (entry: { listingIndex: number; fbTitle: string }) => void;
   onDebugEbayQuery?: (entry: DebugEbayQueryEntry) => void;
-  onDebugLog?: (entry: { level: string; message: string }) => void;
+  onDebugEbayQueryFinished?: (entry: { listingIndex: number; failed?: boolean }) => void;
+  onDebugLog?: (entry: DebugLogEntry) => void;
 };
 
 /**
@@ -60,6 +62,7 @@ function dispatchSSEEvent(payloadString: string, handlers: SSEDispatchHandlers):
     filteredCount?: number;
     evaluatedCount?: number;
     listing?: Listing;
+    listingIndex?: number;
     listings?: Listing[] | DebugFacebookListing[];
     threshold?: number;
     averageConfidence?: number | null;
@@ -71,6 +74,7 @@ function dispatchSSEEvent(payloadString: string, handlers: SSEDispatchHandlers):
     extractDescriptions?: boolean;
     fbTitle?: string;
     ebayQuery?: string;
+    failed?: boolean;
     level?: string;
     message?: string;
     url?: string;
@@ -86,7 +90,7 @@ function dispatchSSEEvent(payloadString: string, handlers: SSEDispatchHandlers):
   } else if (data.type === "progress" && typeof data.scannedCount === "number") {
     handlers.handleProgressUpdate(data.scannedCount);
   } else if (data.type === "listing_result" && data.listing != null && typeof data.evaluatedCount === "number") {
-    handlers.onListingResult?.(data.listing, data.evaluatedCount);
+    handlers.onListingResult?.(data.listing, data.evaluatedCount, data.listingIndex);
   } else if (data.type === "listing_processed" && typeof data.evaluatedCount === "number") {
     handlers.setEvaluatedCount(data.evaluatedCount);
   } else if (data.type === "done" && data.listings != null && Array.isArray(data.listings)) {
@@ -114,10 +118,21 @@ function dispatchSSEEvent(payloadString: string, handlers: SSEDispatchHandlers):
     handlers.onDebugFacebook?.(data.listings as DebugFacebookListing[]);
   } else if (data.type === "debug_facebook_listing" && data.listing) {
     handlers.onDebugFacebookListing?.(data.listing as DebugFacebookListing);
+  } else if (data.type === "debug_ebay_query_start" && data.fbTitle != null && typeof data.listingIndex === "number") {
+    handlers.onDebugEbayQueryStart?.({ listingIndex: data.listingIndex, fbTitle: data.fbTitle });
   } else if (data.type === "debug_ebay_query" && data.fbTitle != null && data.ebayQuery != null) {
-    handlers.onDebugEbayQuery?.({ fbTitle: data.fbTitle, ebayQuery: data.ebayQuery });
+    if (typeof data.listingIndex === "number") {
+      handlers.onDebugEbayQuery?.({
+        listingIndex: data.listingIndex,
+        fbTitle: data.fbTitle,
+        ebayQuery: data.ebayQuery,
+        startedAtMs: Date.now(),
+      });
+    }
+  } else if (data.type === "debug_ebay_query_finished" && typeof data.listingIndex === "number") {
+    handlers.onDebugEbayQueryFinished?.({ listingIndex: data.listingIndex, failed: data.failed });
   } else if (data.type === "debug_log" && data.level != null && data.message != null) {
-    handlers.onDebugLog?.({ level: data.level, message: data.message });
+    handlers.onDebugLog?.({ level: data.level, message: data.message, timestampMs: Date.now() });
   } else if (data.type === "inspector_url" && typeof data.url === "string") {
     window.open(data.url, "_blank");
   }
@@ -176,7 +191,7 @@ export default function Home() {
   const [debugSearchParams, setDebugSearchParams] = useState<DebugSearchParams | null>(null);
   const [debugFacebookListings, setDebugFacebookListings] = useState<DebugFacebookListing[]>([]);
   const [debugEbayQueries, setDebugEbayQueries] = useState<DebugEbayQueryEntry[]>([]);
-  const [debugLogs, setDebugLogs] = useState<Array<{ level: string; message: string }>>([]);
+  const [debugLogs, setDebugLogs] = useState<DebugLogEntry[]>([]);
   const [isSearching, setIsSearching] = useState<boolean>(false);
   const isSearchingRef = useRef<boolean>(false);
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -300,9 +315,9 @@ export default function Home() {
     
     // Keep logs from this run and append a cancellation message
     if (addCancelLog) {
-      setDebugLogs((prev: Array<{ level: string; message: string }>) => [
+      setDebugLogs((prev: DebugLogEntry[]) => [
         ...prev,
-        { level: "WARNING", message: "Search cancelled by user" },
+        { level: "WARNING", message: "Search cancelled by user", timestampMs: Date.now() },
       ]);
     }
     
@@ -349,17 +364,84 @@ export default function Home() {
     setAppState("done");
   }, [generateCSV]);
 
+  const onDebugEbayQueryStart = useCallback((entry: { listingIndex: number; fbTitle: string }) => {
+    setDebugEbayQueries((prev: DebugEbayQueryEntry[]) => {
+      const existing = prev.find((item) => item.listingIndex === entry.listingIndex);
+      if (existing) return prev;
+      return [
+        ...prev,
+        {
+          listingIndex: entry.listingIndex,
+          fbTitle: entry.fbTitle,
+          startedAtMs: Date.now(),
+        },
+      ];
+    });
+  }, []);
+
   const onDebugEbayQuery = useCallback((entry: DebugEbayQueryEntry) => {
-    setDebugEbayQueries((prev: DebugEbayQueryEntry[]) => [...prev, entry]);
+    setDebugEbayQueries((prev: DebugEbayQueryEntry[]) => {
+      const existing = prev.find((item) => item.listingIndex === entry.listingIndex);
+      if (!existing) {
+        return [
+          ...prev,
+          {
+            listingIndex: entry.listingIndex,
+            fbTitle: entry.fbTitle,
+            startedAtMs: Date.now(),
+            ebayQuery: entry.ebayQuery,
+            finishedAtMs: Date.now(),
+            failed: false,
+          },
+        ];
+      }
+      return prev.map((item) =>
+        item.listingIndex === entry.listingIndex
+          ? {
+              ...item,
+              ebayQuery: entry.ebayQuery,
+              finishedAtMs: item.finishedAtMs ?? Date.now(),
+              failed: false,
+            }
+          : item
+      );
+    });
+  }, []);
+
+  const onDebugEbayQueryFinished = useCallback((entry: { listingIndex: number; failed?: boolean }) => {
+    setDebugEbayQueries((prev: DebugEbayQueryEntry[]) =>
+      prev.map((item) =>
+        item.listingIndex === entry.listingIndex
+          ? {
+              ...item,
+              finishedAtMs: item.finishedAtMs ?? Date.now(),
+              failed: entry.failed ?? false,
+            }
+          : item
+      )
+    );
   }, []);
 
   /**
    * Handles a single listing result from the backend as it's processed.
    * Appends the listing to the results array for incremental display.
    */
-  const onListingResult = useCallback((listing: Listing, evaluatedCount: number) => {
+  const onListingResult = useCallback((listing: Listing, evaluatedCount: number, listingIndex?: number) => {
     setListings((prev: Listing[]) => [...prev, listing]);
     setEvaluatedCount(evaluatedCount);
+    if (listingIndex != null && listing.noCompReason) {
+      setDebugEbayQueries((prev: DebugEbayQueryEntry[]) =>
+        prev.map((item) =>
+          item.listingIndex === listingIndex
+            ? {
+                ...item,
+                noCompReason: listing.noCompReason,
+                finishedAtMs: item.finishedAtMs ?? Date.now(),
+              }
+            : item
+        )
+      );
+    }
   }, []);
 
   /**
@@ -391,8 +473,10 @@ export default function Home() {
         onDebugFacebook: setDebugFacebookListings,
         onDebugFacebookListing: (listing: DebugFacebookListing) =>
           setDebugFacebookListings((prev: DebugFacebookListing[]) => [...prev, listing]),
+        onDebugEbayQueryStart: onDebugEbayQueryStart,
         onDebugEbayQuery: onDebugEbayQuery,
-        onDebugLog: (entry) => setDebugLogs((prev: Array<{ level: string; message: string }>) => [...prev, entry]),
+        onDebugEbayQueryFinished: onDebugEbayQueryFinished,
+        onDebugLog: (entry) => setDebugLogs((prev: DebugLogEntry[]) => [...prev, entry]),
       };
 
       try {
@@ -445,7 +529,7 @@ export default function Home() {
         reader.releaseLock();
       }
     },
-    [handlePhaseUpdate, handleProgressUpdate, handleFilteredUpdate, handleCompletion, handleAuthError, handleLocationError, onListingResult, onDebugEbayQuery]
+    [handlePhaseUpdate, handleProgressUpdate, handleFilteredUpdate, handleCompletion, handleAuthError, handleLocationError, onListingResult, onDebugEbayQueryStart, onDebugEbayQuery, onDebugEbayQueryFinished]
   );
 
   /**

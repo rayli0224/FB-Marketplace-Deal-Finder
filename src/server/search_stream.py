@@ -8,8 +8,11 @@ SSE generator via a queue, and handles cancellation and cleanup.
 
 import json
 import logging
+import os
 import queue
 import threading
+import time
+import concurrent.futures
 from typing import Optional
 
 from src.scrapers.fb_marketplace_scraper import (
@@ -22,7 +25,7 @@ from src.scrapers.fb_marketplace_scraper import (
 from src.scrapers.ebay_scraper_v2 import (
     DEFAULT_EBAY_ITEMS,
     EbaySoldScraper,
-    force_close_active_ebay_scraper,
+    force_close_all_active_ebay_scrapers,
     register_ebay_scraper,
     unregister_ebay_scraper,
 )
@@ -45,6 +48,38 @@ _EVENT_INSPECTOR_URL = "inspector_url"
 
 # Loggers that receive the queue handler in debug mode.
 _DEBUG_LOG_LOGGER_NAMES = ("server", "fb_scraper", "listing_ebay_comparison", "ebay_query_generator", "ebay_result_filter", "ebay_scraper_v2")
+EVAL_WAIT_TIMEOUT_SEC = 0.2
+
+
+def _read_positive_int_env(name: str, default: int) -> int:
+    """Read a positive integer from env; fallback to default when invalid."""
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        parsed = int(raw)
+    except ValueError:
+        return default
+    return parsed if parsed > 0 else default
+
+
+def _read_non_negative_float_env(name: str, default: float) -> float:
+    """Read a non-negative float from env; fallback to default when invalid."""
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        parsed = float(raw)
+    except ValueError:
+        return default
+    return parsed if parsed >= 0 else default
+
+
+LISTING_EVAL_MAX_WORKERS = _read_positive_int_env("LISTING_EVAL_MAX_WORKERS", 5)
+LISTING_EVAL_WORKER_START_DELAY_SEC = _read_non_negative_float_env(
+    "LISTING_EVAL_WORKER_START_DELAY_SEC",
+    0.35,
+)
 
 
 class QueueLogHandler(logging.Handler):
@@ -56,10 +91,20 @@ class QueueLogHandler(logging.Handler):
     def __init__(self, event_queue: queue.Queue):
         super().__init__()
         self._event_queue = event_queue
+        self._buffer_lock = threading.Lock()
+        self._buffered_thread_labels: dict[int, str] = {}
+        self._buffered_thread_lines: dict[int, list[str]] = {}
 
     def emit(self, record: logging.LogRecord):
         try:
             msg = record.getMessage()
+            if not msg:
+                return
+            thread_id = record.thread
+            with self._buffer_lock:
+                if thread_id in self._buffered_thread_labels:
+                    self._buffered_thread_lines.setdefault(thread_id, []).append(msg)
+                    return
             if msg:
                 self._event_queue.put({
                     "type": "debug_log",
@@ -68,6 +113,54 @@ class QueueLogHandler(logging.Handler):
                 })
         except Exception:
             pass
+
+    def start_thread_buffer(self, thread_id: int, label: str):
+        """
+        Start buffering debug logs for a worker thread.
+
+        Emits a single start line immediately, then holds all intermediate log
+        lines until finish_thread_buffer is called.
+        """
+        with self._buffer_lock:
+            self._buffered_thread_labels[thread_id] = label
+            self._buffered_thread_lines[thread_id] = []
+        self._event_queue.put({
+            "type": "debug_log",
+            "level": "INFO",
+            "message": f"▶️ {label}",
+        })
+
+    def finish_thread_buffer(self, thread_id: int, outcome: str):
+        """
+        Flush buffered logs for a worker thread with a completion outcome.
+
+        Outcome should be one of: "done", "failed", "cancelled".
+        """
+        with self._buffer_lock:
+            label = self._buffered_thread_labels.pop(thread_id, None)
+            lines = self._buffered_thread_lines.pop(thread_id, [])
+
+        if not label:
+            return
+
+        for line in lines:
+            self._event_queue.put({
+                "type": "debug_log",
+                "level": "INFO",
+                "message": line,
+            })
+
+        if outcome == "done":
+            end_message = f"✅ Finished {label}"
+        elif outcome == "cancelled":
+            end_message = f"⚠️ Cancelled {label}"
+        else:
+            end_message = f"⚠️ Finished with issues {label}"
+        self._event_queue.put({
+            "type": "debug_log",
+            "level": "INFO",
+            "message": end_message,
+        })
 
 
 def create_search_stream(request, debug_mode: bool):
@@ -268,76 +361,170 @@ def create_search_stream(request, debug_mode: bool):
                     log_warning(logger, "Step 2: No listings found - login may be required")
                     event_queue.put({"type": "evaluation_done", "scored_listings": scored, "evaluated_count": count})
                     return
-                log_step_sep(logger, f"📊 Step 3: Processing {len(fb_listings)} FB listings individually")
+                worker_count = max(1, LISTING_EVAL_MAX_WORKERS)
+                log_step_sep(logger, f"📊 Step 3: Processing {len(fb_listings)} FB listings ({worker_count} workers)")
 
                 def on_ebay_inspector_url(url: str):
                     if not cancelled.is_set():
                         event_queue.put({"type": _EVENT_INSPECTOR_URL, "url": url})
 
-                ebay_scraper = EbaySoldScraper(
-                    headless=not debug_mode,
-                    cancelled=cancelled,
-                    on_inspector_url=on_ebay_inspector_url if debug_mode else None,
-                )
-                register_ebay_scraper(ebay_scraper)
+                market_price_cache = {}
+                market_price_cache_lock = threading.Lock()
+                scored_by_index = {}
+
+                def evaluate_listing(index: int, listing):
+                    """
+                    Evaluate one FB listing in a worker thread with its own scraper.
+
+                    Uses a shared per-search eBay price cache so repeated eBay queries
+                    can reuse sold-item stats across similar listings.
+                    """
+                    worker_thread_id = threading.get_ident()
+                    listing_label = f"[{index}/{len(fb_listings)}] FB listing: {listing.title}"
+                    if debug_mode:
+                        event_queue.put({
+                            "type": "debug_ebay_query_start",
+                            "listingIndex": index,
+                            "fbTitle": listing.title,
+                        })
+                    if debug_log_handler is not None:
+                        debug_log_handler.start_thread_buffer(worker_thread_id, listing_label)
+
+                    ebay_scraper = EbaySoldScraper(
+                        headless=not debug_mode,
+                        cancelled=cancelled,
+                        on_inspector_url=on_ebay_inspector_url if debug_mode else None,
+                    )
+                    register_ebay_scraper(ebay_scraper)
+                    try:
+                        result = compare_listing_to_ebay(
+                            listing=listing,
+                            original_query=request.query,
+                            threshold=request.threshold,
+                            n_items=DEFAULT_EBAY_ITEMS,
+                            listing_index=index,
+                            total_listings=len(fb_listings),
+                            cancelled=cancelled,
+                            ebay_scraper=ebay_scraper,
+                            market_price_cache=market_price_cache,
+                            market_price_cache_lock=market_price_cache_lock,
+                        )
+                        if debug_log_handler is not None:
+                            debug_log_handler.finish_thread_buffer(worker_thread_id, "done")
+                        return index, listing, result
+                    except SearchCancelledError:
+                        if debug_log_handler is not None:
+                            debug_log_handler.finish_thread_buffer(worker_thread_id, "cancelled")
+                        raise
+                    except Exception:
+                        if debug_log_handler is not None:
+                            debug_log_handler.finish_thread_buffer(worker_thread_id, "failed")
+                        raise
+                    finally:
+                        ebay_scraper.close()
+                        unregister_ebay_scraper()
+
                 try:
-                    for idx, listing in enumerate(fb_listings, 1):
-                        if cancelled.is_set():
-                            break
-                        try:
-                            result = compare_listing_to_ebay(
-                                listing=listing,
-                                original_query=request.query,
-                                threshold=request.threshold,
-                                n_items=DEFAULT_EBAY_ITEMS,
-                                listing_index=idx,
-                                total_listings=len(fb_listings),
-                                cancelled=cancelled,
-                                ebay_scraper=ebay_scraper,
-                            )
-                            count += 1
-                            if debug_mode and result and result.get("ebaySearchQuery"):
-                                event_queue.put({
-                                    "type": "debug_ebay_query",
-                                    "fbTitle": listing.title,
-                                    "ebayQuery": result["ebaySearchQuery"],
-                                })
-                            if result:
-                                scored.append(result)
-                                event_queue.put({
-                                    "type": "listing_result",
-                                    "listing": result,
-                                    "evaluatedCount": count,
-                                })
-                            else:
-                                event_queue.put({
-                                    "type": "listing_processed",
-                                    "evaluatedCount": count,
-                                    "currentListing": listing.title,
-                                })
-                        except Exception as e:
+                    with concurrent.futures.ThreadPoolExecutor(max_workers=worker_count) as executor:
+                        future_to_input = {}
+                        total_listings = len(fb_listings)
+                        for idx, listing in enumerate(fb_listings, 1):
                             if cancelled.is_set():
                                 break
-                            log_warning(logger, f"Error processing listing '{listing.title}': {e}")
-                            count += 1
-                            error_result = {
-                                "title": listing.title,
-                                "price": listing.price,
-                                "currency": listing.currency,
-                                "location": listing.location,
-                                "url": listing.url,
-                                "dealScore": None,
-                                "noCompReason": "Unable to generate eBay comparisons",
-                            }
-                            scored.append(error_result)
-                            event_queue.put({
-                                "type": "listing_result",
-                                "listing": error_result,
-                                "evaluatedCount": count,
-                            })
+                            future = executor.submit(evaluate_listing, idx, listing)
+                            future_to_input[future] = (idx, listing)
+                            if LISTING_EVAL_WORKER_START_DELAY_SEC > 0 and idx < total_listings:
+                                time.sleep(LISTING_EVAL_WORKER_START_DELAY_SEC)
+
+                        pending = set(future_to_input.keys())
+                        while pending:
+                            if cancelled.is_set():
+                                for future in pending:
+                                    future.cancel()
+                                force_close_all_active_ebay_scrapers()
+                                break
+
+                            done, pending = concurrent.futures.wait(
+                                pending,
+                                timeout=EVAL_WAIT_TIMEOUT_SEC,
+                                return_when=concurrent.futures.FIRST_COMPLETED,
+                            )
+
+                            for future in done:
+                                idx, listing = future_to_input[future]
+                                try:
+                                    completed_index, completed_listing, result = future.result()
+                                    count += 1
+                                    if debug_mode and result and result.get("ebaySearchQuery"):
+                                        event_queue.put({
+                                            "type": "debug_ebay_query",
+                                            "listingIndex": completed_index,
+                                            "fbTitle": completed_listing.title,
+                                            "ebayQuery": result["ebaySearchQuery"],
+                                        })
+                                    elif debug_mode:
+                                        event_queue.put({
+                                            "type": "debug_ebay_query_finished",
+                                            "listingIndex": completed_index,
+                                            "failed": False,
+                                        })
+                                    if result:
+                                        scored_by_index[completed_index] = result
+                                        event_queue.put({
+                                            "type": "listing_result",
+                                            "listing": result,
+                                            "listingIndex": completed_index,
+                                            "evaluatedCount": count,
+                                        })
+                                    else:
+                                        event_queue.put({
+                                            "type": "listing_processed",
+                                            "listingIndex": completed_index,
+                                            "evaluatedCount": count,
+                                            "currentListing": completed_listing.title,
+                                        })
+                                except SearchCancelledError:
+                                    if cancelled.is_set():
+                                        continue
+                                    if debug_mode:
+                                        event_queue.put({
+                                            "type": "debug_ebay_query_finished",
+                                            "listingIndex": idx,
+                                            "failed": True,
+                                        })
+                                    cancelled.set()
+                                    for pending_future in pending:
+                                        pending_future.cancel()
+                                    force_close_all_active_ebay_scrapers()
+                                except Exception as e:
+                                    if cancelled.is_set():
+                                        continue
+                                    if debug_mode:
+                                        event_queue.put({
+                                            "type": "debug_ebay_query_finished",
+                                            "listingIndex": idx,
+                                            "failed": True,
+                                        })
+                                    log_warning(logger, f"Error processing listing '{listing.title}': {e}")
+                                    count += 1
+                                    error_result = {
+                                        "title": listing.title,
+                                        "price": listing.price,
+                                        "currency": listing.currency,
+                                        "location": listing.location,
+                                        "url": listing.url,
+                                        "dealScore": None,
+                                        "noCompReason": "Unable to generate eBay comparisons",
+                                    }
+                                    scored_by_index[idx] = error_result
+                                    event_queue.put({
+                                        "type": "listing_result",
+                                        "listing": error_result,
+                                        "listingIndex": idx,
+                                        "evaluatedCount": count,
+                                    })
                 finally:
-                    ebay_scraper.close()
-                    unregister_ebay_scraper()
+                    scored = [scored_by_index[i] for i in sorted(scored_by_index)]
                 event_queue.put({
                     "type": "evaluation_done",
                     "scored_listings": scored,
@@ -350,7 +537,7 @@ def create_search_stream(request, debug_mode: bool):
 
             while True:
                 if cancelled.is_set():
-                    force_close_active_ebay_scraper(eval_thread.ident)
+                    force_close_all_active_ebay_scrapers()
                     return
                 try:
                     event = event_queue.get(timeout=0.5)
@@ -361,6 +548,12 @@ def create_search_stream(request, debug_mode: bool):
                     evaluated_count = event["evaluated_count"]
                     break
                 if event["type"] == "debug_ebay_query":
+                    yield f"data: {json.dumps(event)}\n\n"
+                    continue
+                if event["type"] == "debug_ebay_query_start":
+                    yield f"data: {json.dumps(event)}\n\n"
+                    continue
+                if event["type"] == "debug_ebay_query_finished":
                     yield f"data: {json.dumps(event)}\n\n"
                     continue
                 if event["type"] == "listing_result":
@@ -374,7 +567,7 @@ def create_search_stream(request, debug_mode: bool):
 
             eval_thread.join(timeout=2.0)
             if cancelled.is_set():
-                force_close_active_ebay_scraper(eval_thread.ident)
+                force_close_all_active_ebay_scrapers()
                 return
             total_scanned = len(fb_listings) + filtered_count
             log_step_sep(logger, f"✅ Step 4: Search completed — {total_scanned} scanned, {filtered_count} filtered, {len(scored_listings)} deals found")
@@ -393,7 +586,7 @@ def create_search_stream(request, debug_mode: bool):
             if thread_id is not None:
                 force_close_active_scraper(thread_id)
             try:
-                force_close_active_ebay_scraper(eval_thread.ident)
+                force_close_all_active_ebay_scrapers()
             except NameError:
                 pass
             raise

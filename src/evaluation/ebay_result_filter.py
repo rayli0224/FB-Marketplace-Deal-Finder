@@ -38,6 +38,7 @@ POST_FILTER_BATCH_SIZE = 5
 POST_FILTER_MAX_CONCURRENT_BATCHES = 2
 POST_FILTER_BATCH_START_DELAY_SEC = 0.35
 POST_FILTER_CANCEL_POLL_INTERVAL_SEC = 0.2
+LISTING_TITLE_LOG_PREVIEW_LEN = 60
 
 
 def _format_ebay_batch(items: List[dict]) -> str:
@@ -270,14 +271,22 @@ async def _filter_ebay_results_async(
         if 1 <= idx <= len(ebay_items)
     ]
 
+    listing_title_preview = (listing.title or "").strip()
+    if len(listing_title_preview) > LISTING_TITLE_LOG_PREVIEW_LEN:
+        listing_title_preview = listing_title_preview[:LISTING_TITLE_LOG_PREVIEW_LEN] + ".."
+    listing_prefix = f"[{listing_title_preview}] " if listing_title_preview else ""
+
     reject_count = len(ebay_items) - len(filtered_items)
     if reject_count > 0 or maybe_indices:
-        logger.debug(f"Filter results: {len(accept_indices)} accept, {len(maybe_indices)} maybe, {reject_count} reject")
+        logger.debug(
+            f"{listing_prefix}Filter results: {len(accept_indices)} accept, "
+            f"{len(maybe_indices)} maybe, {reject_count} reject"
+        )
     else:
-        logger.debug("All listings accepted")
+        logger.debug(f"{listing_prefix}All listings accepted")
 
     if reject_count > 0 and decisions:
-        logger.debug("Why items were rejected (first 3):")
+        logger.debug(f"{listing_prefix}Why items were rejected (first 3):")
         rejected = [(idx, d) for idx, d in decisions.items() if d["decision"] == "reject"]
         for idx, d in rejected[:3]:
             logger.debug(f"   {idx}: {d['reason']}")
