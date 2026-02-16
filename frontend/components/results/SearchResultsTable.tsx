@@ -15,6 +15,7 @@ export interface CompItem {
 export interface Listing {
   title: string;
   price: number;
+  currency?: string;  // Currency symbol: $, £, €, etc. Defaults to "$" if not provided
   location: string;
   url: string;
   dealScore: number | null;
@@ -49,6 +50,13 @@ function isBadDeal(dealScore: number | null, threshold: number): boolean {
 }
 
 /**
+ * Formats a price with the given currency symbol.
+ */
+function formatPrice(price: number, currency: string = "$"): string {
+  return `${currency}${price.toFixed(2)}`;
+}
+
+/**
  * Renders the reason why no comparisons could be made (query rejected, no eBay results, etc.).
  */
 function ListingDetailsPanel({ reason }: { reason: string }) {
@@ -66,7 +74,7 @@ function ListingDetailsPanel({ reason }: { reason: string }) {
  * shows compPrices as plain price list.
  */
 function ListingCompsPanel({ listing }: { listing: Listing }) {
-  const { ebaySearchQuery, compPrice, compPrices, compItems } = listing;
+  const { ebaySearchQuery, compPrice, compPrices, compItems, currency = "$" } = listing;
   const prices = compItems?.map((c) => c.price) ?? compPrices ?? [];
   const count = prices.length;
 
@@ -82,7 +90,7 @@ function ListingCompsPanel({ listing }: { listing: Listing }) {
         {compPrice != null && (
           <div>
             <span className="font-bold text-foreground">Comp price (eBay avg): </span>
-            <span className="text-primary font-bold">${compPrice.toFixed(2)}</span>
+            <span className="text-primary font-bold">{formatPrice(compPrice, "$")}</span>
           </div>
         )}
       </div>
@@ -132,7 +140,7 @@ function ListingCompsPanel({ listing }: { listing: Listing }) {
                         {item.title || "eBay listing"}
                       </a>
                       <span className={`font-bold shrink-0 ${priceClass}`}>
-                        ${item.price.toFixed(2)}
+                        {formatPrice(item.price, "$")}
                       </span>
                       {statusLabel && (
                         <span className={`text-xs ${reasonClass} shrink-0`}>{statusLabel}</span>
@@ -157,7 +165,7 @@ function ListingCompsPanel({ listing }: { listing: Listing }) {
                 })
               : compPrices?.map((p, i) => (
                   <li key={i}>
-                    <span className="text-muted-foreground">${p.toFixed(2)}</span>
+                    <span className="text-muted-foreground">{formatPrice(p, "$")}</span>
                   </li>
                 ))}
           </ul>
@@ -286,7 +294,7 @@ export function SearchResultsTable({
                     {listing.title}
                   </td>
                   <td className="px-3 py-2 text-primary font-bold">
-                    ${listing.price.toFixed(2)}
+                    {formatPrice(listing.price, listing.currency)}
                   </td>
                   <td className="px-3 py-2 text-muted-foreground max-w-[150px] truncate" title={listing.location}>
                     {listing.location}

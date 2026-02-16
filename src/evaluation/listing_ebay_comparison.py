@@ -20,6 +20,20 @@ import statistics
 
 logger = setup_colored_logger("listing_ebay_comparison")
 
+# GBP to USD conversion rate: 1 USD = 0.73 GBP, so 1 GBP = 1/0.73 USD
+GBP_TO_USD_RATE = 1 / 0.73
+
+
+def _convert_fb_price_to_usd(price: float, currency: str) -> float:
+    """
+    Convert Facebook Marketplace price to USD for eBay comparison.
+    eBay prices are always in USD, so we convert FB GBP prices to USD.
+    Returns the price unchanged if currency is not GBP.
+    """
+    if currency == "£":
+        return price * GBP_TO_USD_RATE
+    return price
+
 
 def _listing_result(
     listing: Listing,
@@ -41,6 +55,7 @@ def _listing_result(
     out = {
         "title": listing.title,
         "price": listing.price,
+        "currency": listing.currency,
         "location": listing.location,
         "url": listing.url,
         "dealScore": deal_score,
@@ -111,6 +126,11 @@ def _compare_listing_to_ebay_inner(
     log_data_block(logger, "Data", price=listing.price, location=listing.location, url=listing.url)
     if listing.description:
         logger.debug(f"  Description: {listing.description}")
+
+    # Convert FB price to USD for eBay comparison (eBay prices are always in USD)
+    fb_price_usd = _convert_fb_price_to_usd(listing.price, listing.currency)
+    if listing.currency == "£":
+        logger.info(f"Converting GBP to USD: {listing.currency}{listing.price:.2f} → ${fb_price_usd:.2f}")
 
     logger.info("💡 Preparing eBay search")
     with wait_status(logger, "eBay search"):
@@ -225,7 +245,7 @@ def _compare_listing_to_ebay_inner(
                 ebay_stats.item_summaries = all_items_with_filter_flag
 
     logger.info("📊 Comparing price")
-    deal_score = calculate_deal_score(listing.price, ebay_stats)
+    deal_score = calculate_deal_score(fb_price_usd, ebay_stats)
     comp_items = all_items_with_filter_flag if all_items_with_filter_flag is not None else getattr(ebay_stats, "item_summaries", None)
 
     if deal_score is None:
@@ -242,7 +262,10 @@ def _compare_listing_to_ebay_inner(
 
     logger.info(f"📊 {deal_score:.1f}% below typical eBay price")
     if deal_score >= threshold:
-        logger.info(f"✅ Good deal: {deal_score:.1f}% (FB ${listing.price:.2f} vs eBay avg ${ebay_stats.average:.2f})")
+        if listing.currency == "£":
+            logger.info(f"✅ Good deal: {deal_score:.1f}% (FB {listing.currency}{listing.price:.2f} (${fb_price_usd:.2f} USD) vs eBay avg ${ebay_stats.average:.2f})")
+        else:
+            logger.info(f"✅ Good deal: {deal_score:.1f}% (FB {listing.currency}{listing.price:.2f} vs eBay avg ${ebay_stats.average:.2f})")
     else:
         logger.info(f"⚠️ Not a big enough deal (under {threshold}% savings)")
 

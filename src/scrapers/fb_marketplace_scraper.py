@@ -54,10 +54,13 @@ LOCATION_DIALOG_SELECTOR = "[role='dialog']"
 LOCATION_APPLY_SELECTOR = "[aria-label='Apply'][role='button']"
 
 # Price extraction selectors (shared across methods)
+# Supports multiple currencies: $ (USD), £ (GBP), € (EUR)
 PRICE_SELECTORS = [
     "span[class*='price']",
     "div[class*='price']",
     "span:has-text('$')",
+    "span:has-text('£')",
+    "span:has-text('€')",
 ]
 
 # Location fallback values
@@ -106,9 +109,10 @@ class Listing:
     location: str
     url: str
     description: str = ""
+    currency: str = "$"  # Currency symbol: $, £, €, etc.
     
     def __str__(self) -> str:
-        return f"Listing(title='{self.title}', price=${self.price:.2f}, location='{self.location}', url='{self.url}')"
+        return f"Listing(title='{self.title}', price={self.currency}{self.price:.2f}, location='{self.location}', url='{self.url}')"
 
 
 class FBMarketplaceScraper:
@@ -358,14 +362,21 @@ class FBMarketplaceScraper:
         self.page.wait_for_selector(SEARCH_RESULTS_SELECTOR, timeout=ELEMENT_WAIT_TIMEOUT_MS)
         self._check_cancelled()
 
-    def _set_location(self, zip_code: str, radius: int):
+    def _set_location(self, zip_code: Optional[str], radius: int):
         """Open the location dialog, set zip code and radius, then apply the filters.
 
         Opens the location dialog by clicking the location pill, sets the radius dropdown
         first (while the dialog is fresh and fully interactive), then fills the zip code
         input and selects the first autocomplete suggestion. Finally clicks Apply and waits
         for the search results to reload with the new filters applied.
+        
+        If zip_code is None or empty, skips location setting entirely and uses Facebook's
+        default location (based on browser/IP location).
         """
+        if not zip_code:
+            logger.info("No zip code provided — using your current location")
+            return
+            
         try:
             self._check_cancelled()
             location_pill = self.page.locator(LOCATION_PILL_SELECTOR).first
@@ -405,17 +416,16 @@ class FBMarketplaceScraper:
             logger.warning("Setting your location failed — %s", e)
 
     def _set_radius(self, radius: int):
-        """Open the radius dropdown and select the given miles value.
+        """Open the radius dropdown and select the given radius value.
 
         Locates the Radius combobox using get_by_role (which correctly resolves the
         aria-labelledby attribute), scrolls it into view, then simulates a real mouse
         click at the center of its bounding box using raw mouse events (move → down → up).
         This approach reliably triggers React's event handlers. Once the listbox appears,
-        selects the option matching the requested miles value.
+        selects the option matching the requested radius value (tries "miles" first, then "km").
         """
         self._check_cancelled()
         timeout = ACTION_TIMEOUT_MS
-        option_text = f"{radius} miles"
 
         combobox = self.page.get_by_role("combobox", name="Radius")
         combobox.wait_for(state="visible", timeout=timeout)
@@ -443,7 +453,12 @@ class FBMarketplaceScraper:
         listbox = self.page.locator("[role='listbox']").first
         listbox.wait_for(state="visible", timeout=timeout)
         self._check_cancelled()
-        self.page.get_by_role("option", name=option_text).click(timeout=timeout)
+        
+        # Try miles first, then km (for UK/EU locales)
+        option = self.page.locator("[role='option']").filter(
+            has_text=re.compile(f"^{radius}\\s*(miles?|mi|km|kilometres?)$", re.IGNORECASE)
+        ).first
+        option.click(timeout=timeout)
         self._check_cancelled()
 
     def _get_strikethrough_dom_order(self, element) -> dict:
@@ -480,14 +495,15 @@ class FBMarketplaceScraper:
 
     def _extract_with_strikethrough_logic(
         self, element, dom_data: dict
-    ) -> Tuple[Optional[float], str]:
+    ) -> Tuple[Optional[float], str, str]:
         """
-        Extract price and title when strikethrough is present. Uses DOM order:
+        Extract price, currency, and title when strikethrough is present. Uses DOM order:
         sale price = first non-strikethrough price-like text; title = first
-        non-price line with letters.
+        non-price line with letters; currency = detected from price text.
         """
         items = dom_data.get("items", [])
         sale_price: Optional[float] = None
+        currency = "$"
         title = ""
 
         for item in items:
@@ -496,6 +512,7 @@ class FBMarketplaceScraper:
             parsed = parse_price(text)
             if parsed is not None and not is_strike and sale_price is None:
                 sale_price = parsed
+                currency = self._detect_currency(text)
             is_location = bool(text and re.search(r",\s*[A-Z]{2}$", text))
             if (
                 not is_strike
@@ -509,7 +526,7 @@ class FBMarketplaceScraper:
                 if not title:
                     title = text
 
-        return sale_price, title
+        return sale_price, currency, title
 
     def _find_price_element(self, element, target_price: Optional[float] = None):
         """
@@ -531,21 +548,64 @@ class FBMarketplaceScraper:
                 continue
         return None
     
-    def _extract_price(self, element) -> Optional[float]:
+    def _detect_currency(self, price_text: str) -> str:
         """
-        Extract price from a listing element.
+        Detect currency symbol from price text.
         
-        Tries CSS selectors to find price elements (span/div with 'price' in class, or span with '$'),
-        extracts the text, and parses it to float. Returns first valid price found or None.
+        Returns the currency symbol found ($, £, €) or "$" as default.
+        """
+        if "£" in price_text:
+            return "£"
+        elif "€" in price_text:
+            return "€"
+        elif "$" in price_text:
+            return "$"
+        return "$"  # Default to USD
+    
+    def _extract_price_and_currency(self, element) -> Tuple[Optional[float], str]:
+        """
+        Extract price and currency from a listing element.
+        
+        Tries CSS selectors to find price elements (span/div with 'price' in class, or span with currency),
+        extracts the text, and parses it to float. Falls back to parsing the element's full text if
+        selectors fail. Returns tuple of (price, currency_symbol) or (None, "$") if not found.
         """
         price_elem = self._find_price_element(element)
         if price_elem:
             try:
                 price_text = price_elem.inner_text().strip()
-                return parse_price(price_text)
+                currency = self._detect_currency(price_text)
+                price = parse_price(price_text)
+                if price is not None:
+                    return price, currency
             except Exception as e:
                 logger.debug("Could not read the price from this listing — %s", e)
-        return None
+        
+        # Fallback: try to extract price from element's text directly
+        try:
+            all_text = element.inner_text().strip()
+            # Look for price patterns: $123, £123, €123, or just numbers
+            price_match = re.search(r'[\$£€][\d,]+(?:\.\d{2})?|\d+(?:,\d{3})*(?:\.\d{2})?', all_text)
+            if price_match:
+                matched_text = price_match.group()
+                currency = self._detect_currency(matched_text)
+                price = parse_price(matched_text)
+                if price is not None:
+                    return price, currency
+        except Exception:
+            pass
+        
+        return None, "$"
+    
+    def _extract_price(self, element) -> Optional[float]:
+        """
+        Extract price from a listing element (backwards compatibility).
+        
+        Returns only the price value, not the currency. Use _extract_price_and_currency
+        when currency information is needed.
+        """
+        price, _ = self._extract_price_and_currency(element)
+        return price
 
     def _is_incorrect_title(self, text: str) -> bool:
         """Returns True if the text is a known incorrect title (image overlay) to skip."""
@@ -919,24 +979,25 @@ class FBMarketplaceScraper:
                 return None
             
             dom_data = self._get_strikethrough_dom_order(element)
+            currency = "$"
             if dom_data.get("has_strikethrough"):
-                price, title = self._extract_with_strikethrough_logic(element, dom_data)
+                price, currency, title = self._extract_with_strikethrough_logic(element, dom_data)
                 if not price and not title:
-                    price = self._extract_price(element)
+                    price, currency = self._extract_price_and_currency(element)
                     title = self._extract_title(element, price) if price else ""
                 elif not title:
                     title = self._extract_title(element, price) if price else ""
                 elif not price:
-                    price = self._extract_price(element)
+                    price, currency = self._extract_price_and_currency(element)
             else:
-                price = self._extract_price(element)
+                price, currency = self._extract_price_and_currency(element)
                 title = self._extract_title(element, price)
             
             if not is_valid_listing_price(price):
                 return None
             
             # Final validation: only skip if title is EXACTLY a price format (no letters)
-            if title and re.match(r'^[\$0-9.\s]+$', title):
+            if title and re.match(r'^[\$£€0-9.\s]+$', title):
                 title = ""
             
             location = self._extract_location(element)
@@ -959,7 +1020,8 @@ class FBMarketplaceScraper:
                     price=price,
                     location=location or LOCATION_UNKNOWN,
                     url=url,
-                    description=description
+                    description=description,
+                    currency=currency
                 )
             
             return None
@@ -1031,7 +1093,7 @@ class FBMarketplaceScraper:
     def search_marketplace(
         self,
         query: str,
-        zip_code: str,
+        zip_code: Optional[str] = None,
         radius: int = 25,
         max_listings: int = 20,
         on_listing_found=None,
@@ -1048,11 +1110,12 @@ class FBMarketplaceScraper:
         on_inspector_url: optional callback invoked with the DevTools inspector URL when browser is created (headed mode).
         """
         self._on_inspector_url = on_inspector_url
+        location_info = zip_code if zip_code else "current location"
         if step_sep == "main":
             logger.info("FB Marketplace search")
             log_data_block(
                 logger, "",
-                query=query, zip=zip_code, radius=f"{radius}mi", max=max_listings,
+                query=query, location=location_info, radius=f"{radius}mi", max=max_listings,
                 descriptions="on" if extract_descriptions else "off"
             )
         elif step_sep == "sub":
@@ -1061,13 +1124,13 @@ class FBMarketplaceScraper:
             log_data_block(
                 logger, "",
                 indent="  ",
-                query=query, zip=zip_code, radius=f"{radius}mi", max=max_listings,
+                query=query, location=location_info, radius=f"{radius}mi", max=max_listings,
                 descriptions="on" if extract_descriptions else "off"
             )
         else:
             log_data_block(
                 logger, "FB Marketplace search",
-                query=query, zip=zip_code, radius=f"{radius}mi", max=max_listings,
+                query=query, location=location_info, radius=f"{radius}mi", max=max_listings,
                 descriptions="on" if extract_descriptions else "off"
             )
         if not extract_descriptions:
@@ -1165,7 +1228,7 @@ _scraper_lock = threading.Lock()
 
 def search_marketplace(
     query: str,
-    zip_code: str,
+    zip_code: Optional[str] = None,
     radius: int = 25,
     max_listings: int = 20,
     headless: bool = None,
