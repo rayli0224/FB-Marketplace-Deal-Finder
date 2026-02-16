@@ -6,18 +6,18 @@ prices, filters to true matches, and calculates the deal score (percentage savin
 eBay average). Returns the listing with deal score and comparison data.
 """
 
-from typing import Dict, Optional
+from typing import Callable, Dict, Optional
 import asyncio
 import threading
+from _thread import LockType
 
 from src.scrapers.fb_marketplace_scraper import Listing, SearchCancelledError
-from src.scrapers.ebay_scraper_v2 import get_market_price, DEFAULT_EBAY_ITEMS
+from src.scrapers.ebay_scraper_v2 import get_market_price, DEFAULT_EBAY_ITEMS, PriceStats
 from src.evaluation.deal_calculator import calculate_deal_score
 from src.evaluation.ebay_query_generator import generate_ebay_query_for_listing
 from src.evaluation.ebay_result_filter import filter_ebay_results_with_openai
 from src.utils.colored_logger import setup_colored_logger, log_data_block, log_listing_box_sep, log_warning, set_step_indent, clear_step_indent, wait_status
 from src.utils.currency import convert_fb_price_to_usd
-import statistics
 
 logger = setup_colored_logger("listing_ebay_comparison")
 
@@ -69,6 +69,9 @@ def compare_listing_to_ebay(
     total_listings: Optional[int] = None,
     cancelled: Optional[threading.Event] = None,
     ebay_scraper=None,
+    market_price_cache: Optional[dict] = None,
+    market_price_cache_lock: Optional[LockType] = None,
+    on_query_generated: Optional[Callable[[str], None]] = None,
 ) -> Dict:
     """
     Compare a single FB listing to eBay sold prices and compute deal score.
@@ -89,7 +92,15 @@ def compare_listing_to_ebay(
     set_step_indent("  ")
     try:
         return _compare_listing_to_ebay_inner(
-            listing, original_query, threshold, n_items, cancelled, ebay_scraper
+            listing,
+            original_query,
+            threshold,
+            n_items,
+            cancelled,
+            ebay_scraper,
+            market_price_cache,
+            market_price_cache_lock,
+            on_query_generated,
         )
     except SearchCancelledError:
         raise
@@ -108,6 +119,9 @@ def _compare_listing_to_ebay_inner(
     n_items: int,
     cancelled: Optional[threading.Event] = None,
     ebay_scraper=None,
+    market_price_cache: Optional[dict] = None,
+    market_price_cache_lock: Optional[LockType] = None,
+    on_query_generated: Optional[Callable[[str], None]] = None,
 ) -> Dict:
     """Inner comparison logic. Caller handles exceptions and returns fallback result."""
     log_data_block(logger, "Data", price=listing.price, location=listing.location, url=listing.url)
@@ -128,15 +142,34 @@ def _compare_listing_to_ebay_inner(
     enhanced_query, skip_reason = query_result
     if skip_reason is not None:
         return _listing_result(listing, None, no_comp_reason=skip_reason)
+    if on_query_generated is not None:
+        on_query_generated(enhanced_query)
 
     logger.info("💰 Searching eBay for similar items")
     with wait_status(logger, "eBay prices"):
-        ebay_stats = get_market_price(
-            search_term=enhanced_query,
-            n_items=n_items,
-            scraper=ebay_scraper,
-            cancelled=cancelled,
-        )
+        cache_key = (enhanced_query.strip().lower(), n_items)
+        ebay_stats = None
+        cache_used = False
+        if market_price_cache is not None and market_price_cache_lock is not None:
+            with market_price_cache_lock:
+                cached_stats = market_price_cache.get(cache_key)
+            if cached_stats is not None:
+                ebay_stats = _clone_price_stats(cached_stats)
+                cache_used = True
+
+        if cache_used:
+            logger.info("Using saved eBay prices for matching search")
+        else:
+            fetched_stats = get_market_price(
+                search_term=enhanced_query,
+                n_items=n_items,
+                scraper=ebay_scraper,
+                cancelled=cancelled,
+            )
+            ebay_stats = _clone_price_stats(fetched_stats) if fetched_stats is not None else None
+            if market_price_cache is not None and market_price_cache_lock is not None and fetched_stats is not None:
+                with market_price_cache_lock:
+                    market_price_cache[cache_key] = _clone_price_stats(fetched_stats)
 
     if not ebay_stats:
         log_warning(logger, "No eBay results — skipping deal score")
@@ -263,4 +296,24 @@ def _compare_listing_to_ebay_inner(
         comp_price=ebay_stats.average,
         comp_prices=ebay_stats.raw_prices,
         comp_items=comp_items,
+    )
+
+
+def _clone_price_stats(stats: PriceStats) -> PriceStats:
+    """
+    Clone eBay price stats so per-listing filtering can mutate safely.
+
+    The filtering step updates average, sample size, and item summaries. We keep a
+    separate copy per listing to avoid shared-state side effects when cached stats
+    are reused across similar listings.
+    """
+    cloned_items = None
+    if stats.item_summaries is not None:
+        cloned_items = [{**item} for item in stats.item_summaries]
+    return PriceStats(
+        search_term=stats.search_term,
+        sample_size=stats.sample_size,
+        average=stats.average,
+        raw_prices=list(stats.raw_prices),
+        item_summaries=cloned_items,
     )

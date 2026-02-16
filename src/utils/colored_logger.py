@@ -9,7 +9,8 @@ Colored logging formatter and reusable log helpers.
 - log_data_block(logger, label, indent='  ', **kwargs): label then one line per field (indented); use for listing/retrieved blocks.
 - log_listing_box_sep(logger): single dash line to visually contain a list element (wrap each Retrieved or FB listing block).
 - log_error_short(logger, message, max_len=100): error with consistent truncation.
-- wait_status(logger, label, inline=True): context manager that logs "⏳ Waiting for X..."; when inline=True and stdout is a TTY, elapsed time updates in place every 100ms; on exit logs "✅ Done: X (N.NNNs)".
+- wait_status(logger, label, inline=True): context manager that logs
+  "⏳ Waiting for X..." and, on exit, "✅ Done: X (N.NNNs)".
 """
 
 import logging
@@ -272,68 +273,20 @@ def truncate_lines(content: str, n_lines: int) -> str:
     return truncated
 
 
-# Interval in seconds for periodic "still waiting" status updates (non-inline).
-WAIT_STATUS_INTERVAL = 5
-
-# Interval for inline (same-line) updates when inline=True; 0.1s so milliseconds visibly tick.
-WAIT_STATUS_INLINE_INTERVAL = 0.1
-
-
-def _get_handler_lock(logger: logging.Logger):
-    """Return the lock used by our thread-safe handler if this logger uses one, else a new lock."""
-    for h in logger.handlers:
-        if isinstance(h, _ThreadSafeStreamHandler):
-            return _ThreadSafeStreamHandler._lock
-    return threading.Lock()
-
-
-def _is_tty() -> bool:
-    """Return True if stdout is a TTY (and we can use \\r for inline updates)."""
-    try:
-        return hasattr(sys.stdout, "isatty") and sys.stdout.isatty()
-    except (AttributeError, OSError):
-        return False
-
-
 @contextmanager
 def wait_status(logger: logging.Logger, label: str, inline: bool = True):
     """
     Context manager for long-running work (e.g. API requests). Logs "Waiting for {label}..."
-    on entry. If inline=True and stdout is a TTY, elapsed time is updated in place on the same
-    line every 100ms with millisecond precision (e.g. "  … {label} (5.234s)").
-    Otherwise logs a new line every WAIT_STATUS_INTERVAL seconds. On exit logs "Done: {label} (N.NNNs)".
-    Uses a daemon thread so it does not block shutdown. Inline mode uses the same lock as the
-    log handler to avoid corrupting other log lines; if other threads log during the wait, those
-    lines may overwrite the status line or vice versa (best when the blocked work does not log).
+    on entry and logs "Done: {label} (N.NNNs)" on exit.
+
+    We intentionally do not emit periodic elapsed-timer updates because concurrent
+    workers make intermediate timer lines noisy and hard to read.
     """
+    _ = inline  # retained for backward compatibility with existing call sites
     logger.info(f"⏳ Waiting for {label}...")
     start = time.monotonic()
-    stop_event = threading.Event()
-    use_inline = inline and _is_tty()
-    lock = _get_handler_lock(logger)
-    interval = WAIT_STATUS_INLINE_INTERVAL if use_inline else WAIT_STATUS_INTERVAL
-
-    def tick():
-        while not stop_event.wait(timeout=interval):
-            elapsed = time.monotonic() - start
-            if use_inline:
-                with lock:
-                    sys.stdout.write(f"\r  … {label} ({elapsed:.3f}s)    ")
-                    sys.stdout.flush()
-            else:
-                logger.info(f"  … {label} ({elapsed:.3f}s)")
-
-    t = threading.Thread(target=tick, daemon=True)
-    t.start()
     try:
         yield
     finally:
-        stop_event.set()
-        t.join(timeout=interval + 1)
         elapsed = time.monotonic() - start
-        if use_inline:
-            with lock:
-                sys.stdout.write(f"\r✅ Done: {label} ({elapsed:.3f}s)\n")
-                sys.stdout.flush()
-        else:
-            logger.info(f"✅ Done: {label} ({elapsed:.3f}s)")
+        logger.info(f"✅ Done: {label} ({elapsed:.3f}s)")

@@ -1,10 +1,11 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { DebugSearchParams } from "@/components/debug/DebugSearchParams";
 
 const DEBUG_PAIRED_GRID_COLS = "grid-cols-[2.5rem_1fr_1fr]";
 export type DebugFacebookListing = {
+  fbListingId?: string;
   title: string;
   price: number;
   location: string;
@@ -13,9 +14,19 @@ export type DebugFacebookListing = {
   filtered?: boolean;
 };
 
-export type DebugEbayQueryEntry = { fbTitle: string; ebayQuery: string };
+export type DebugEbayQueryEntry = {
+  fbListingId: string;
+  listingIndex: number;
+  fbTitle: string;
+  ebayQuery?: string;
+  noCompReason?: string;
+  startedAtMs: number;
+  queryGeneratedAtMs?: number;
+  finishedAtMs?: number;
+  failed?: boolean;
+};
 
-export type DebugLogEntry = { level: string; message: string };
+export type DebugLogEntry = { level: string; message: string; timestampMs?: number };
 
 export interface DebugPanelProps {
   searchParams: DebugSearchParams | null;
@@ -88,7 +99,7 @@ export function DebugPanel({
 
 /**
  * Renders paired rows so each Facebook listing and its corresponding eBay query
- * share the same row and scroll together, aligned by index.
+ * share the same row and scroll together, aligned by a backend-only listing id.
  */
 function DebugPairedRows({
   facebookListings,
@@ -97,9 +108,26 @@ function DebugPairedRows({
   facebookListings: DebugFacebookListing[];
   ebayQueries: DebugEbayQueryEntry[];
 }) {
-  const rowCount = Math.max(facebookListings.length, ebayQueries.length, 1);
+  const [nowMs, setNowMs] = useState<number>(() => Date.now());
 
-  if (rowCount === 1 && facebookListings.length === 0 && ebayQueries.length === 0) {
+  useEffect(() => {
+    const intervalId = window.setInterval(() => {
+      setNowMs(Date.now());
+    }, 100);
+    return () => window.clearInterval(intervalId);
+  }, []);
+
+  const ebayQueriesByIndex = useMemo(() => {
+    const m = new Map<string, DebugEbayQueryEntry>();
+    for (const entry of ebayQueries) {
+      m.set(entry.fbListingId, entry);
+    }
+    return m;
+  }, [ebayQueries]);
+
+  const rowCount = Math.max(facebookListings.length, 1);
+
+  if (facebookListings.length === 0 && ebayQueries.length === 0) {
     return (
       <div className="p-4 font-mono text-xs text-muted-foreground">
         No debug data yet. Data appears after the scrape and as listings are processed.
@@ -125,8 +153,8 @@ function DebugPairedRows({
             )}
           </div>
           <div className="p-4 min-h-[4rem]">
-            {ebayQueries[i] ? (
-              <EbayQueryCell entry={ebayQueries[i]} />
+            {facebookListings[i]?.fbListingId && ebayQueriesByIndex.get(facebookListings[i].fbListingId!) ? (
+              <EbayQueryCell entry={ebayQueriesByIndex.get(facebookListings[i].fbListingId!)!} nowMs={nowMs} />
             ) : (
               <span className="text-muted-foreground">—</span>
             )}
@@ -184,9 +212,31 @@ function FacebookListingCell({ item }: { item: DebugFacebookListing }) {
 }
 
 /** Renders one eBay query debug entry (FB title and generated eBay query). */
-function EbayQueryCell({ entry }: { entry: DebugEbayQueryEntry }) {
+function formatElapsedMs(elapsedMs: number): string {
+  const clampedMs = Math.max(0, elapsedMs);
+  const totalTenths = Math.floor(clampedMs / 100);
+  const minutes = Math.floor(totalTenths / 600);
+  const seconds = Math.floor((totalTenths % 600) / 10);
+  const tenths = totalTenths % 10;
+  return `${minutes}:${String(seconds).padStart(2, "0")}.${tenths}`;
+}
+
+function EbayQueryCell({ entry, nowMs }: { entry: DebugEbayQueryEntry; nowMs: number }) {
+  const endMs = entry.finishedAtMs ?? nowMs;
+  const elapsed = formatElapsedMs(endMs - entry.startedAtMs);
+  const statusLabel = entry.finishedAtMs
+    ? (entry.failed ? "Done (failed)" : "Done")
+    : entry.queryGeneratedAtMs
+      ? "Matching listings"
+      : "Generating eBay query";
+
   return (
     <div className="space-y-1">
+      <div className="text-muted-foreground">
+        <span>Timer: </span>
+        <span className="text-foreground tabular-nums">{elapsed}</span>
+        <span className="ml-2 text-[10px] uppercase tracking-wide">{statusLabel}</span>
+      </div>
       <div>
         <span className="text-muted-foreground">FB title: </span>
         <span className="font-semibold text-foreground break-words">
@@ -195,10 +245,22 @@ function EbayQueryCell({ entry }: { entry: DebugEbayQueryEntry }) {
       </div>
       <div>
         <span className="text-muted-foreground">eBay query: </span>
-        <span className="text-primary break-words">
-          &quot;{entry.ebayQuery}&quot;
-        </span>
+        {entry.ebayQuery ? (
+          <span className="text-primary break-words">
+            &quot;{entry.ebayQuery}&quot;
+          </span>
+        ) : entry.noCompReason ? (
+          <span className="text-muted-foreground">—</span>
+        ) : (
+          <span className="text-muted-foreground">Waiting for query...</span>
+        )}
       </div>
+      {entry.noCompReason && (
+        <div className="text-muted-foreground">
+          <span className="font-bold text-foreground">Why no comparison: </span>
+          <span>{entry.noCompReason}</span>
+        </div>
+      )}
     </div>
   );
 }

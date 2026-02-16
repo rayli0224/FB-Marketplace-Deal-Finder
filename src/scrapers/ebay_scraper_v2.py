@@ -368,6 +368,19 @@ def force_close_active_ebay_scraper(thread_id: Optional[int] = None):
                 log_warning(logger, f"Could not kill eBay Chrome process: {e}")
 
 
+def force_close_all_active_ebay_scrapers():
+    """Kill Chrome for all active eBay scrapers (used by parallel workers)."""
+    with _ebay_scraper_lock:
+        active_scrapers = list(_active_ebay_scrapers.values())
+
+    for scraper in active_scrapers:
+        if scraper and scraper._chrome_process:
+            try:
+                scraper._chrome_process.kill()
+            except Exception as e:
+                log_warning(logger, f"Could not kill eBay Chrome process: {e}")
+
+
 def get_market_price(
     search_term: str,
     n_items: int = DEFAULT_EBAY_ITEMS,

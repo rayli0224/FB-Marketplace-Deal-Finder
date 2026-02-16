@@ -17,6 +17,7 @@ const VIEWPORT_FALLBACK_HEIGHT = 800;
 const VIEWPORT_FALLBACK_WIDTH = 600;
 const LOG_CONTENT_PADDING = "px-3 py-2";
 const LOG_LINK_CLASS = "underline text-primary hover:text-primary/80";
+const LOG_TIMER_CLASS = "shrink-0 text-[10px] text-muted-foreground/80 tabular-nums mr-2";
 
 /** ANSI SGR codes we care about: 0=reset, 1=bold, 31=red, 33=yellow (matches terminal). */
 const ANSI_CODE_RE = /\u001b\[[0-9;]*m|\[[0-9;]*m/g;
@@ -97,6 +98,16 @@ function logEntryClass(level: string): string {
 /** True if the message is a horizontal separator line (only dash/unicode dash/space). */
 function isSeparatorLine(message: string): boolean {
   return /^[\s\-─]+$/.test(message) && message.length > 2;
+}
+
+/** Format elapsed milliseconds as m:ss.t (e.g. 1:04.3). */
+function formatElapsedSinceStart(elapsedMs: number): string {
+  const clamped = Math.max(0, elapsedMs);
+  const totalTenths = Math.floor(clamped / 100);
+  const minutes = Math.floor(totalTenths / 600);
+  const seconds = Math.floor((totalTenths % 600) / 10);
+  const tenths = totalTenths % 10;
+  return `${minutes}:${String(seconds).padStart(2, "0")}.${tenths}`;
 }
 
 export interface FloatingLogPanelProps {
@@ -227,6 +238,8 @@ export function FloatingLogPanel({ logs, debugEnabled }: FloatingLogPanelProps) 
     e.stopPropagation();
   }, []);
 
+  const firstTimestampMs = logs.find((entry) => typeof entry.timestampMs === "number")?.timestampMs ?? null;
+
   return (
     <div
       className="fixed z-50 flex flex-col rounded-md border border-border bg-background shadow-lg"
@@ -275,12 +288,19 @@ export function FloatingLogPanel({ logs, debugEnabled }: FloatingLogPanelProps) 
                   const lineClass = isSeparator
                     ? "block overflow-hidden whitespace-nowrap"
                     : "break-all";
+                  const elapsedLabel =
+                    firstTimestampMs !== null && typeof entry.timestampMs === "number"
+                      ? formatElapsedSinceStart(entry.timestampMs - firstTimestampMs)
+                      : null;
                   return (
                     <li
                       key={i}
-                      className={`min-w-0 overflow-hidden ${logEntryClass(entry.level)} ${lineClass}`}
+                      className={`min-w-0 overflow-hidden ${logEntryClass(entry.level)} ${lineClass} flex items-start`}
                     >
-                      {parseAnsiToNodes(entry.message)}
+                      <span className={LOG_TIMER_CLASS}>
+                        {elapsedLabel ? elapsedLabel : "--:--.-"}
+                      </span>
+                      <span className="min-w-0 flex-1">{parseAnsiToNodes(entry.message)}</span>
                     </li>
                   );
                 })}
