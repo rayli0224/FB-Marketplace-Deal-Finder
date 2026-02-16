@@ -109,9 +109,10 @@ class Listing:
     location: str
     url: str
     description: str = ""
+    currency: str = "$"  # Currency symbol: $, £, €, etc.
     
     def __str__(self) -> str:
-        return f"Listing(title='{self.title}', price=${self.price:.2f}, location='{self.location}', url='{self.url}')"
+        return f"Listing(title='{self.title}', price={self.currency}{self.price:.2f}, location='{self.location}', url='{self.url}')"
 
 
 class FBMarketplaceScraper:
@@ -494,14 +495,15 @@ class FBMarketplaceScraper:
 
     def _extract_with_strikethrough_logic(
         self, element, dom_data: dict
-    ) -> Tuple[Optional[float], str]:
+    ) -> Tuple[Optional[float], str, str]:
         """
-        Extract price and title when strikethrough is present. Uses DOM order:
+        Extract price, currency, and title when strikethrough is present. Uses DOM order:
         sale price = first non-strikethrough price-like text; title = first
-        non-price line with letters.
+        non-price line with letters; currency = detected from price text.
         """
         items = dom_data.get("items", [])
         sale_price: Optional[float] = None
+        currency = "$"
         title = ""
 
         for item in items:
@@ -510,6 +512,7 @@ class FBMarketplaceScraper:
             parsed = parse_price(text)
             if parsed is not None and not is_strike and sale_price is None:
                 sale_price = parsed
+                currency = self._detect_currency(text)
             is_location = bool(text and re.search(r",\s*[A-Z]{2}$", text))
             if (
                 not is_strike
@@ -523,7 +526,7 @@ class FBMarketplaceScraper:
                 if not title:
                     title = text
 
-        return sale_price, title
+        return sale_price, currency, title
 
     def _find_price_element(self, element, target_price: Optional[float] = None):
         """
@@ -545,19 +548,36 @@ class FBMarketplaceScraper:
                 continue
         return None
     
-    def _extract_price(self, element) -> Optional[float]:
+    def _detect_currency(self, price_text: str) -> str:
         """
-        Extract price from a listing element.
+        Detect currency symbol from price text.
+        
+        Returns the currency symbol found ($, £, €) or "$" as default.
+        """
+        if "£" in price_text:
+            return "£"
+        elif "€" in price_text:
+            return "€"
+        elif "$" in price_text:
+            return "$"
+        return "$"  # Default to USD
+    
+    def _extract_price_and_currency(self, element) -> Tuple[Optional[float], str]:
+        """
+        Extract price and currency from a listing element.
         
         Tries CSS selectors to find price elements (span/div with 'price' in class, or span with currency),
         extracts the text, and parses it to float. Falls back to parsing the element's full text if
-        selectors fail. Returns first valid price found or None.
+        selectors fail. Returns tuple of (price, currency_symbol) or (None, "$") if not found.
         """
         price_elem = self._find_price_element(element)
         if price_elem:
             try:
                 price_text = price_elem.inner_text().strip()
-                return parse_price(price_text)
+                currency = self._detect_currency(price_text)
+                price = parse_price(price_text)
+                if price is not None:
+                    return price, currency
             except Exception as e:
                 logger.debug("Could not read the price from this listing — %s", e)
         
@@ -567,11 +587,25 @@ class FBMarketplaceScraper:
             # Look for price patterns: $123, £123, €123, or just numbers
             price_match = re.search(r'[\$£€][\d,]+(?:\.\d{2})?|\d+(?:,\d{3})*(?:\.\d{2})?', all_text)
             if price_match:
-                return parse_price(price_match.group())
+                matched_text = price_match.group()
+                currency = self._detect_currency(matched_text)
+                price = parse_price(matched_text)
+                if price is not None:
+                    return price, currency
         except Exception:
             pass
         
-        return None
+        return None, "$"
+    
+    def _extract_price(self, element) -> Optional[float]:
+        """
+        Extract price from a listing element (backwards compatibility).
+        
+        Returns only the price value, not the currency. Use _extract_price_and_currency
+        when currency information is needed.
+        """
+        price, _ = self._extract_price_and_currency(element)
+        return price
 
     def _is_incorrect_title(self, text: str) -> bool:
         """Returns True if the text is a known incorrect title (image overlay) to skip."""
@@ -945,24 +979,25 @@ class FBMarketplaceScraper:
                 return None
             
             dom_data = self._get_strikethrough_dom_order(element)
+            currency = "$"
             if dom_data.get("has_strikethrough"):
-                price, title = self._extract_with_strikethrough_logic(element, dom_data)
+                price, currency, title = self._extract_with_strikethrough_logic(element, dom_data)
                 if not price and not title:
-                    price = self._extract_price(element)
+                    price, currency = self._extract_price_and_currency(element)
                     title = self._extract_title(element, price) if price else ""
                 elif not title:
                     title = self._extract_title(element, price) if price else ""
                 elif not price:
-                    price = self._extract_price(element)
+                    price, currency = self._extract_price_and_currency(element)
             else:
-                price = self._extract_price(element)
+                price, currency = self._extract_price_and_currency(element)
                 title = self._extract_title(element, price)
             
             if not is_valid_listing_price(price):
                 return None
             
             # Final validation: only skip if title is EXACTLY a price format (no letters)
-            if title and re.match(r'^[\$0-9.\s]+$', title):
+            if title and re.match(r'^[\$£€0-9.\s]+$', title):
                 title = ""
             
             location = self._extract_location(element)
@@ -985,7 +1020,8 @@ class FBMarketplaceScraper:
                     price=price,
                     location=location or LOCATION_UNKNOWN,
                     url=url,
-                    description=description
+                    description=description,
+                    currency=currency
                 )
             
             return None
