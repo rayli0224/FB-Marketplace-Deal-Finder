@@ -5,6 +5,7 @@ import type { DebugSearchParams } from "@/components/debug/DebugSearchParams";
 
 const DEBUG_PAIRED_GRID_COLS = "grid-cols-[2.5rem_1fr_1fr]";
 export type DebugFacebookListing = {
+  fbListingId?: string;
   title: string;
   price: number;
   location: string;
@@ -14,6 +15,7 @@ export type DebugFacebookListing = {
 };
 
 export type DebugEbayQueryEntry = {
+  fbListingId: string;
   listingIndex: number;
   fbTitle: string;
   ebayQuery?: string;
@@ -96,7 +98,7 @@ export function DebugPanel({
 
 /**
  * Renders paired rows so each Facebook listing and its corresponding eBay query
- * share the same row and scroll together, aligned by index.
+ * share the same row and scroll together, aligned by a backend-only listing id.
  */
 function DebugPairedRows({
   facebookListings,
@@ -115,17 +117,16 @@ function DebugPairedRows({
   }, []);
 
   const ebayQueriesByIndex = useMemo(() => {
-    const m = new Map<number, DebugEbayQueryEntry>();
+    const m = new Map<string, DebugEbayQueryEntry>();
     for (const entry of ebayQueries) {
-      m.set(entry.listingIndex, entry);
+      m.set(entry.fbListingId, entry);
     }
     return m;
   }, [ebayQueries]);
 
-  const highestEbayIndex = ebayQueries.reduce((max, entry) => Math.max(max, entry.listingIndex), 0);
-  const rowCount = Math.max(facebookListings.length, highestEbayIndex, 1);
+  const rowCount = Math.max(facebookListings.length, 1);
 
-  if (rowCount === 1 && facebookListings.length === 0 && ebayQueries.length === 0) {
+  if (facebookListings.length === 0 && ebayQueries.length === 0) {
     return (
       <div className="p-4 font-mono text-xs text-muted-foreground">
         No debug data yet. Data appears after the scrape and as listings are processed.
@@ -151,8 +152,8 @@ function DebugPairedRows({
             )}
           </div>
           <div className="p-4 min-h-[4rem]">
-            {ebayQueriesByIndex.get(i + 1) ? (
-              <EbayQueryCell entry={ebayQueriesByIndex.get(i + 1)!} nowMs={nowMs} />
+            {facebookListings[i]?.fbListingId && ebayQueriesByIndex.get(facebookListings[i].fbListingId!) ? (
+              <EbayQueryCell entry={ebayQueriesByIndex.get(facebookListings[i].fbListingId!)!} nowMs={nowMs} />
             ) : (
               <span className="text-muted-foreground">—</span>
             )}

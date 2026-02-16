@@ -175,7 +175,7 @@ def create_search_stream(request, debug_mode: bool):
     kill_lingering_chrome()
 
     event_queue = queue.Queue()
-    fb_listings = []
+    fb_evaluable_listings = []
     cancelled = threading.Event()
 
     mark_search_starting()
@@ -191,10 +191,18 @@ def create_search_stream(request, debug_mode: bool):
     log_step_sep(logger, f"Search request — query='{request.query}', location={location_info_req}, radius={request.radius}mi")
 
     filtered_count_holder = [0]
+    fb_listing_id_counter = 0
 
-    def build_debug_listing_dict(listing, filtered: bool = False) -> dict:
+    def _next_fb_listing_id() -> str:
+        """Return a stable backend-only listing id for this search run."""
+        nonlocal fb_listing_id_counter
+        fb_listing_id_counter += 1
+        return f"fb-{fb_listing_id_counter}"
+
+    def build_debug_listing_dict(listing, fb_listing_id: str, filtered: bool = False) -> dict:
         """Build the dict payload for a debug_facebook_listing SSE event."""
         entry = {
+            "fbListingId": fb_listing_id,
             "title": listing.title,
             "price": listing.price,
             "location": listing.location,
@@ -208,17 +216,33 @@ def create_search_stream(request, debug_mode: bool):
     def on_listing_found(listing, count):
         if cancelled.is_set():
             return
-        fb_listings.append(listing)
+        fb_listing_id = _next_fb_listing_id()
+        fb_evaluable_listings.append((fb_listing_id, listing))
         event_queue.put({"type": "progress", "scannedCount": count})
         if debug_mode:
-            event_queue.put({"type": "debug_facebook_listing", "listing": build_debug_listing_dict(listing)})
+            event_queue.put(
+                {
+                    "type": "debug_facebook_listing",
+                    "listing": build_debug_listing_dict(listing, fb_listing_id),
+                }
+            )
 
     def on_listing_filtered(listing):
         if cancelled.is_set():
             return
+        fb_listing_id = _next_fb_listing_id()
         filtered_count_holder[0] += 1
         if debug_mode:
-            event_queue.put({"type": "debug_facebook_listing", "listing": build_debug_listing_dict(listing, filtered=True)})
+            event_queue.put(
+                {
+                    "type": "debug_facebook_listing",
+                    "listing": build_debug_listing_dict(
+                        listing,
+                        fb_listing_id,
+                        filtered=True,
+                    ),
+                }
+            )
 
     def listing_passes_filter(listing) -> bool:
         """Return True if the listing should be kept (not suspicious)."""
@@ -348,7 +372,10 @@ def create_search_stream(request, debug_mode: bool):
             yield from drain_log_queue()
 
             filtered_count = filtered_count_holder[0]
-            logger.info(f"📋 Found {len(fb_listings)} listings" + (f" ({filtered_count} filtered out)" if filtered_count > 0 else ""))
+            logger.info(
+                f"📋 Found {len(fb_evaluable_listings)} listings"
+                + (f" ({filtered_count} filtered out)" if filtered_count > 0 else "")
+            )
             if filtered_count > 0:
                 yield f"data: {json.dumps({'type': 'filtered', 'filteredCount': filtered_count})}\n\n"
             yield from drain_log_queue()
@@ -357,12 +384,15 @@ def create_search_stream(request, debug_mode: bool):
             def evaluation_worker():
                 scored = []
                 count = 0
-                if not fb_listings:
+                if not fb_evaluable_listings:
                     log_warning(logger, "Step 2: No listings found - login may be required")
                     event_queue.put({"type": "evaluation_done", "scored_listings": scored, "evaluated_count": count})
                     return
                 worker_count = max(1, LISTING_EVAL_MAX_WORKERS)
-                log_step_sep(logger, f"📊 Step 3: Processing {len(fb_listings)} FB listings ({worker_count} workers)")
+                log_step_sep(
+                    logger,
+                    f"📊 Step 3: Processing {len(fb_evaluable_listings)} FB listings ({worker_count} workers)",
+                )
 
                 def on_ebay_inspector_url(url: str):
                     if not cancelled.is_set():
@@ -372,7 +402,7 @@ def create_search_stream(request, debug_mode: bool):
                 market_price_cache_lock = threading.Lock()
                 scored_by_index = {}
 
-                def evaluate_listing(index: int, listing):
+                def evaluate_listing(index: int, fb_listing_id: str, listing):
                     """
                     Evaluate one FB listing in a worker thread with its own scraper.
 
@@ -380,11 +410,12 @@ def create_search_stream(request, debug_mode: bool):
                     can reuse sold-item stats across similar listings.
                     """
                     worker_thread_id = threading.get_ident()
-                    listing_label = f"[{index}/{len(fb_listings)}] FB listing: {listing.title}"
+                    listing_label = f"[{index}/{len(fb_evaluable_listings)}] FB listing: {listing.title}"
                     if debug_mode:
                         event_queue.put({
                             "type": "debug_ebay_query_start",
                             "listingIndex": index,
+                            "fbListingId": fb_listing_id,
                             "fbTitle": listing.title,
                         })
                     if debug_log_handler is not None:
@@ -403,7 +434,7 @@ def create_search_stream(request, debug_mode: bool):
                             threshold=request.threshold,
                             n_items=DEFAULT_EBAY_ITEMS,
                             listing_index=index,
-                            total_listings=len(fb_listings),
+                            total_listings=len(fb_evaluable_listings),
                             cancelled=cancelled,
                             ebay_scraper=ebay_scraper,
                             market_price_cache=market_price_cache,
@@ -411,7 +442,7 @@ def create_search_stream(request, debug_mode: bool):
                         )
                         if debug_log_handler is not None:
                             debug_log_handler.finish_thread_buffer(worker_thread_id, "done")
-                        return index, listing, result
+                        return index, fb_listing_id, listing, result
                     except SearchCancelledError:
                         if debug_log_handler is not None:
                             debug_log_handler.finish_thread_buffer(worker_thread_id, "cancelled")
@@ -427,12 +458,12 @@ def create_search_stream(request, debug_mode: bool):
                 try:
                     with concurrent.futures.ThreadPoolExecutor(max_workers=worker_count) as executor:
                         future_to_input = {}
-                        total_listings = len(fb_listings)
-                        for idx, listing in enumerate(fb_listings, 1):
+                        total_listings = len(fb_evaluable_listings)
+                        for idx, (fb_listing_id, listing) in enumerate(fb_evaluable_listings, 1):
                             if cancelled.is_set():
                                 break
-                            future = executor.submit(evaluate_listing, idx, listing)
-                            future_to_input[future] = (idx, listing)
+                            future = executor.submit(evaluate_listing, idx, fb_listing_id, listing)
+                            future_to_input[future] = (idx, fb_listing_id, listing)
                             if LISTING_EVAL_WORKER_START_DELAY_SEC > 0 and idx < total_listings:
                                 time.sleep(LISTING_EVAL_WORKER_START_DELAY_SEC)
 
@@ -451,14 +482,15 @@ def create_search_stream(request, debug_mode: bool):
                             )
 
                             for future in done:
-                                idx, listing = future_to_input[future]
+                                idx, fb_listing_id, listing = future_to_input[future]
                                 try:
-                                    completed_index, completed_listing, result = future.result()
+                                    completed_index, completed_fb_listing_id, completed_listing, result = future.result()
                                     count += 1
                                     if debug_mode and result and result.get("ebaySearchQuery"):
                                         event_queue.put({
                                             "type": "debug_ebay_query",
                                             "listingIndex": completed_index,
+                                            "fbListingId": completed_fb_listing_id,
                                             "fbTitle": completed_listing.title,
                                             "ebayQuery": result["ebaySearchQuery"],
                                         })
@@ -466,6 +498,7 @@ def create_search_stream(request, debug_mode: bool):
                                         event_queue.put({
                                             "type": "debug_ebay_query_finished",
                                             "listingIndex": completed_index,
+                                            "fbListingId": completed_fb_listing_id,
                                             "failed": False,
                                         })
                                     if result:
@@ -474,12 +507,14 @@ def create_search_stream(request, debug_mode: bool):
                                             "type": "listing_result",
                                             "listing": result,
                                             "listingIndex": completed_index,
+                                            "fbListingId": completed_fb_listing_id,
                                             "evaluatedCount": count,
                                         })
                                     else:
                                         event_queue.put({
                                             "type": "listing_processed",
                                             "listingIndex": completed_index,
+                                            "fbListingId": completed_fb_listing_id,
                                             "evaluatedCount": count,
                                             "currentListing": completed_listing.title,
                                         })
@@ -490,6 +525,7 @@ def create_search_stream(request, debug_mode: bool):
                                         event_queue.put({
                                             "type": "debug_ebay_query_finished",
                                             "listingIndex": idx,
+                                            "fbListingId": fb_listing_id,
                                             "failed": True,
                                         })
                                     cancelled.set()
@@ -503,6 +539,7 @@ def create_search_stream(request, debug_mode: bool):
                                         event_queue.put({
                                             "type": "debug_ebay_query_finished",
                                             "listingIndex": idx,
+                                            "fbListingId": fb_listing_id,
                                             "failed": True,
                                         })
                                     log_warning(logger, f"Error processing listing '{listing.title}': {e}")
@@ -521,6 +558,7 @@ def create_search_stream(request, debug_mode: bool):
                                         "type": "listing_result",
                                         "listing": error_result,
                                         "listingIndex": idx,
+                                        "fbListingId": fb_listing_id,
                                         "evaluatedCount": count,
                                     })
                 finally:
@@ -569,7 +607,7 @@ def create_search_stream(request, debug_mode: bool):
             if cancelled.is_set():
                 force_close_all_active_ebay_scrapers()
                 return
-            total_scanned = len(fb_listings) + filtered_count
+            total_scanned = len(fb_evaluable_listings) + filtered_count
             log_step_sep(logger, f"✅ Step 4: Search completed — {total_scanned} scanned, {filtered_count} filtered, {len(scored_listings)} deals found")
             yield from drain_log_queue()
             done_event = {
