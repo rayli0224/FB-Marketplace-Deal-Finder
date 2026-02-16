@@ -1099,11 +1099,12 @@ class FBMarketplaceScraper:
         """
         Extract up to max_listings from the current Marketplace results page.
 
-        Scrolls to load content, locates listing DOM elements, then iterates until
-        max_listings valid listings are extracted or elements run out. Skips
-        elements that fail extraction (e.g. odd price formats) and continues.
-        If listing_filter is provided, only listings that pass the filter are kept.
-        Checks for cancellation at each iteration and exits early if requested.
+        Parses currently visible cards first, then scrolls only when more listings are
+        needed. Continues until max_listings valid listings are extracted or no more
+        useful progress can be made. Skips elements that fail extraction (e.g. odd
+        price formats) and continues. If listing_filter is provided, only listings
+        that pass the filter are kept. Checks for cancellation at each iteration and
+        exits early if requested.
         """
         listings = []
         try:
@@ -1172,8 +1173,7 @@ class FBMarketplaceScraper:
                     scrolls_used += 1
                 else:
                     # New cards appeared without extra scrolling; keep parsing first.
-                    previous_element_count = current_element_count
-                    continue
+                    pass
 
                 previous_element_count = current_element_count
             
