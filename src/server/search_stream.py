@@ -400,6 +400,16 @@ def create_search_stream(request, debug_mode: bool):
                     )
                     register_ebay_scraper(ebay_scraper)
                     try:
+                        def on_query_generated(ebay_query: str):
+                            if debug_mode and not cancelled.is_set():
+                                event_queue.put({
+                                    "type": "debug_ebay_query_generated",
+                                    "listingIndex": index,
+                                    "fbListingId": fb_listing_id,
+                                    "fbTitle": listing.title,
+                                    "ebayQuery": ebay_query,
+                                })
+
                         result = compare_listing_to_ebay(
                             listing=listing,
                             original_query=request.query,
@@ -411,6 +421,7 @@ def create_search_stream(request, debug_mode: bool):
                             ebay_scraper=ebay_scraper,
                             market_price_cache=market_price_cache,
                             market_price_cache_lock=market_price_cache_lock,
+                            on_query_generated=on_query_generated,
                         )
                         if debug_log_handler is not None:
                             debug_log_handler.finish_thread_buffer(worker_thread_id, "done")
@@ -458,15 +469,7 @@ def create_search_stream(request, debug_mode: bool):
                                 try:
                                     completed_index, completed_fb_listing_id, completed_listing, result = future.result()
                                     count += 1
-                                    if debug_mode and result and result.get("ebaySearchQuery"):
-                                        event_queue.put({
-                                            "type": "debug_ebay_query",
-                                            "listingIndex": completed_index,
-                                            "fbListingId": completed_fb_listing_id,
-                                            "fbTitle": completed_listing.title,
-                                            "ebayQuery": result["ebaySearchQuery"],
-                                        })
-                                    elif debug_mode:
+                                    if debug_mode:
                                         event_queue.put({
                                             "type": "debug_ebay_query_finished",
                                             "listingIndex": completed_index,
@@ -558,6 +561,9 @@ def create_search_stream(request, debug_mode: bool):
                     evaluated_count = event["evaluated_count"]
                     break
                 if event["type"] == "debug_ebay_query":
+                    yield f"data: {json.dumps(event)}\n\n"
+                    continue
+                if event["type"] == "debug_ebay_query_generated":
                     yield f"data: {json.dumps(event)}\n\n"
                     continue
                 if event["type"] == "debug_ebay_query_start":

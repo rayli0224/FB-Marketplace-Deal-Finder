@@ -6,7 +6,7 @@ prices, filters to true matches, and calculates the deal score (percentage savin
 eBay average). Returns the listing with deal score and comparison data.
 """
 
-from typing import Dict, Optional
+from typing import Callable, Dict, Optional
 import asyncio
 import threading
 from _thread import LockType
@@ -71,6 +71,7 @@ def compare_listing_to_ebay(
     ebay_scraper=None,
     market_price_cache: Optional[dict] = None,
     market_price_cache_lock: Optional[LockType] = None,
+    on_query_generated: Optional[Callable[[str], None]] = None,
 ) -> Dict:
     """
     Compare a single FB listing to eBay sold prices and compute deal score.
@@ -99,6 +100,7 @@ def compare_listing_to_ebay(
             ebay_scraper,
             market_price_cache,
             market_price_cache_lock,
+            on_query_generated,
         )
     except SearchCancelledError:
         raise
@@ -119,6 +121,7 @@ def _compare_listing_to_ebay_inner(
     ebay_scraper=None,
     market_price_cache: Optional[dict] = None,
     market_price_cache_lock: Optional[LockType] = None,
+    on_query_generated: Optional[Callable[[str], None]] = None,
 ) -> Dict:
     """Inner comparison logic. Caller handles exceptions and returns fallback result."""
     log_data_block(logger, "Data", price=listing.price, location=listing.location, url=listing.url)
@@ -139,6 +142,8 @@ def _compare_listing_to_ebay_inner(
     enhanced_query, skip_reason = query_result
     if skip_reason is not None:
         return _listing_result(listing, None, no_comp_reason=skip_reason)
+    if on_query_generated is not None:
+        on_query_generated(enhanced_query)
 
     logger.info("💰 Searching eBay for similar items")
     with wait_status(logger, "eBay prices"):

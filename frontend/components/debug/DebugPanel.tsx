@@ -21,6 +21,7 @@ export type DebugEbayQueryEntry = {
   ebayQuery?: string;
   noCompReason?: string;
   startedAtMs: number;
+  queryGeneratedAtMs?: number;
   finishedAtMs?: number;
   failed?: boolean;
 };
@@ -224,10 +225,10 @@ function EbayQueryCell({ entry, nowMs }: { entry: DebugEbayQueryEntry; nowMs: nu
   const endMs = entry.finishedAtMs ?? nowMs;
   const elapsed = formatElapsedMs(endMs - entry.startedAtMs);
   const statusLabel = entry.finishedAtMs
-    ? entry.failed
-      ? "Done (failed)"
-      : "Done"
-    : "Running";
+    ? (entry.failed ? "Done (failed)" : "Done")
+    : entry.queryGeneratedAtMs
+      ? "Matching listings"
+      : "Generating eBay query";
 
   return (
     <div className="space-y-1">

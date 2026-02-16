@@ -45,7 +45,7 @@ type SSEDispatchHandlers = {
   onDebugFacebook?: (listings: DebugFacebookListing[]) => void;
   onDebugFacebookListing?: (listing: DebugFacebookListing) => void;
   onDebugEbayQueryStart?: (entry: { fbListingId: string; listingIndex: number; fbTitle: string }) => void;
-  onDebugEbayQuery?: (entry: DebugEbayQueryEntry) => void;
+  onDebugEbayQueryGenerated?: (entry: DebugEbayQueryEntry) => void;
   onDebugEbayQueryFinished?: (entry: { fbListingId: string; listingIndex: number; failed?: boolean }) => void;
   onDebugLog?: (entry: DebugLogEntry) => void;
 };
@@ -130,9 +130,13 @@ function dispatchSSEEvent(payloadString: string, handlers: SSEDispatchHandlers):
       listingIndex: data.listingIndex,
       fbTitle: data.fbTitle,
     });
-  } else if (data.type === "debug_ebay_query" && data.fbTitle != null && data.ebayQuery != null) {
+  } else if (
+    (data.type === "debug_ebay_query_generated" || data.type === "debug_ebay_query")
+    && data.fbTitle != null
+    && data.ebayQuery != null
+  ) {
     if (typeof data.listingIndex === "number" && typeof data.fbListingId === "string") {
-      handlers.onDebugEbayQuery?.({
+      handlers.onDebugEbayQueryGenerated?.({
         fbListingId: data.fbListingId,
         listingIndex: data.listingIndex,
         fbTitle: data.fbTitle,
@@ -399,7 +403,7 @@ export default function Home() {
     });
   }, []);
 
-  const onDebugEbayQuery = useCallback((entry: DebugEbayQueryEntry) => {
+  const onDebugEbayQueryGenerated = useCallback((entry: DebugEbayQueryEntry) => {
     setDebugEbayQueries((prev: DebugEbayQueryEntry[]) => {
       const existing = prev.find((item) => item.fbListingId === entry.fbListingId);
       if (!existing) {
@@ -411,7 +415,7 @@ export default function Home() {
             fbTitle: entry.fbTitle,
             startedAtMs: Date.now(),
             ebayQuery: entry.ebayQuery,
-            finishedAtMs: Date.now(),
+            queryGeneratedAtMs: Date.now(),
             failed: false,
           },
         ];
@@ -421,7 +425,7 @@ export default function Home() {
           ? {
               ...item,
               ebayQuery: entry.ebayQuery,
-              finishedAtMs: item.finishedAtMs ?? Date.now(),
+              queryGeneratedAtMs: item.queryGeneratedAtMs ?? Date.now(),
               failed: false,
             }
           : item
@@ -495,7 +499,7 @@ export default function Home() {
         onDebugFacebookListing: (listing: DebugFacebookListing) =>
           setDebugFacebookListings((prev: DebugFacebookListing[]) => [...prev, listing]),
         onDebugEbayQueryStart: onDebugEbayQueryStart,
-        onDebugEbayQuery: onDebugEbayQuery,
+        onDebugEbayQueryGenerated: onDebugEbayQueryGenerated,
         onDebugEbayQueryFinished: onDebugEbayQueryFinished,
         onDebugLog: (entry) => setDebugLogs((prev: DebugLogEntry[]) => [...prev, entry]),
       };
@@ -550,7 +554,7 @@ export default function Home() {
         reader.releaseLock();
       }
     },
-    [handlePhaseUpdate, handleProgressUpdate, handleFilteredUpdate, handleCompletion, handleAuthError, handleLocationError, onListingResult, onDebugEbayQueryStart, onDebugEbayQuery, onDebugEbayQueryFinished]
+    [handlePhaseUpdate, handleProgressUpdate, handleFilteredUpdate, handleCompletion, handleAuthError, handleLocationError, onListingResult, onDebugEbayQueryStart, onDebugEbayQueryGenerated, onDebugEbayQueryFinished]
   );
 
   /**
