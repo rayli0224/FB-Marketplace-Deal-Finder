@@ -8,8 +8,7 @@ Colored logging formatter and reusable log helpers.
 - log_data_line(logger, label, **kwargs): one-line key=value data.
 - log_data_block(logger, label, indent='  ', **kwargs): label then one line per field (indented); use for listing/retrieved blocks.
 - log_listing_box_sep(logger): single dash line to visually contain a list element (wrap each Retrieved or FB listing block).
-- log_warning(logger, message): warning with ⚠️ prefix (non-blocking, recoverable).
-- log_error_short(logger, message, max_len=100): error with ❌ prefix and truncation (blocking, full failures).
+- log_error_short(logger, message, max_len=100): error with consistent truncation.
 - wait_status(logger, label, inline=True): context manager that logs "⏳ Waiting for X..."; when inline=True and stdout is a TTY, elapsed time updates in place every 100ms; on exit logs "✅ Done: X (N.NNNs)".
 """
 
@@ -125,6 +124,22 @@ def setup_colored_logger(module_name: str, level: int = None) -> logging.Logger:
     return logger
 
 
+def set_all_loggers_level(level: int):
+    """
+    Update the level of all loggers that were created with setup_colored_logger.
+    
+    This is useful when DEBUG mode is detected after module import time (e.g. when
+    the DEBUG env var is set by a shell script that runs uvicorn). Call this at
+    application startup to ensure all loggers respect the current DEBUG setting.
+    """
+    logger_names = ("api", "fb_scraper", "listing_processor", "openai_helpers", "ebay_scraper")
+    for name in logger_names:
+        logger = logging.getLogger(name)
+        logger.setLevel(level)
+        for handler in logger.handlers:
+            handler.setLevel(level)
+
+
 # Length of the separator line used to break between steps (full-width line of dashes).
 SEP_LINE_LEN = 76
 
@@ -223,17 +238,16 @@ def log_data_block(logger: logging.Logger, label: str, indent: str = "  ", **kwa
 
 def log_warning(logger: logging.Logger, message: str) -> None:
     """
-    Log message at WARNING level with ⚠️ prefix. Use for non-blocking, recoverable
-    issues (auth, no listings, below threshold, cancellation).
+    Log message at WARNING level. Uses the logger's warning method which will be
+    colored yellow by the ColoredFormatter when stdout is a TTY.
     """
-    logger.warning(f"⚠️ {message}")
+    logger.warning(message)
 
 
 def log_error_short(logger: logging.Logger, message: str, max_len: int = DEFAULT_ERROR_MAX_LEN) -> None:
     """
-    Log message at ERROR level with ❌ prefix. The message is truncated so the
-    full output (prefix + message) is at most max_len characters. Use for blocking
-    or full failures (package missing, request failed, unrecoverable).
+    Log message at ERROR level with a short prefix. The message is truncated so the
+    full output (prefix + message) is at most max_len characters, keeping error output bounded.
     """
     prefix = "❌ "
     msg = str(message)[: max_len - len(prefix)]
