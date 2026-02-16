@@ -93,7 +93,8 @@ def create_search_stream(request, debug_mode: bool):
         for name in _DEBUG_LOG_LOGGER_NAMES:
             logging.getLogger(name).addHandler(debug_log_handler)
 
-    log_step_sep(logger, f"Search request — query='{request.query}', zip={request.zipCode}, radius={request.radius}mi")
+    location_info_req = request.zipCode if request.zipCode else "current location"
+    log_step_sep(logger, f"Search request — query='{request.query}', location={location_info_req}, radius={request.radius}mi")
 
     filtered_count_holder = [0]
 
@@ -181,7 +182,8 @@ def create_search_stream(request, debug_mode: bool):
 
         thread_id: Optional[int] = None
         try:
-            log_step_sep(logger, f"🔍 Step 1: Starting search — query='{request.query}', zip={request.zipCode}, radius={request.radius}mi")
+            location_info_stream = request.zipCode if request.zipCode else "current location"
+            log_step_sep(logger, f"🔍 Step 1: Starting search — query='{request.query}', location={location_info_stream}, radius={request.radius}mi")
             log_step_sep(logger, "📜 Step 2: Scraping Facebook Marketplace")
             yield f"data: {json.dumps({'type': 'phase', 'phase': 'scraping'})}\n\n"
             if debug_mode:
