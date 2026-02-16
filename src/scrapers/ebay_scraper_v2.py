@@ -50,6 +50,7 @@ LISTING_CARD_SELECTOR = "div.su-card-container"
 TITLE_SELECTOR = ".s-card__title"
 PRICE_SELECTOR = ".s-card__price"
 LINK_SELECTOR = "a[href*='/itm/']"
+EXCLUDED_EXACT_LISTING_TITLES = {"Shop on eBay"}
 
 
 @dataclass
@@ -266,8 +267,11 @@ class EbaySoldScraper:
             except Exception:
                 continue
             price = parse_price(price_text)
-            if price is not None and price > 0 and title:
-                items.append({"title": title.strip(), "price": price, "url": href})
+            normalized_title = title.strip()
+            if normalized_title in EXCLUDED_EXACT_LISTING_TITLES:
+                continue
+            if price is not None and price > 0 and normalized_title:
+                items.append({"title": normalized_title, "price": price, "url": href})
         return items
 
     def get_sold_listing_stats(
