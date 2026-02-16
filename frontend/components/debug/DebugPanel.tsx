@@ -9,6 +9,7 @@ export type DebugFacebookListing = {
   location: string;
   url: string;
   description: string;
+  filtered?: boolean;
 };
 
 export type DebugEbayQueryEntry = { fbTitle: string; ebayQuery: string };
@@ -132,7 +133,10 @@ function DebugPairedRows({
 /** Renders one Facebook listing's debug fields (title, price, location, url, description). */
 function FacebookListingCell({ item }: { item: DebugFacebookListing }) {
   return (
-    <div className="space-y-1">
+    <div className={`space-y-1${item.filtered ? " opacity-50" : ""}`}>
+      {item.filtered && (
+        <div className="text-xs font-bold text-yellow-500">⚠️ FILTERED — suspicious price</div>
+      )}
       <div>
         <span className="text-muted-foreground">Title: </span>
         <span className="font-semibold text-foreground break-words">

@@ -27,6 +27,7 @@ export interface Listing {
 export interface SearchResultsTableProps {
   listings: Listing[];
   scannedCount: number;
+  suspiciousFilteredCount?: number;
   threshold: number;
   onDownloadCSV: () => void;
   onReset: () => void;
@@ -148,6 +149,7 @@ function ListingCompsPanel({ listing }: { listing: Listing }) {
 export function SearchResultsTable({
   listings,
   scannedCount,
+  suspiciousFilteredCount = 0,
   threshold,
   onDownloadCSV,
   onReset,
@@ -174,7 +176,7 @@ export function SearchResultsTable({
           <p className="font-mono text-xs text-muted-foreground">
             {isLoading 
               ? `${filteredCount} treasure${filteredCount !== 1 ? "s" : ""} found so far...`
-              : `Showing ${filteredCount} of ${listings.length} treasures from ${scannedCount} scanned`
+              : `Showing ${filteredCount} of ${listings.length} treasures from ${scannedCount} scanned${suspiciousFilteredCount > 0 ? ` (${suspiciousFilteredCount} filtered: free, $1, or odd high prices)` : ""}`
             }
           </p>
         </div>
