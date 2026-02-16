@@ -29,15 +29,17 @@ from src.evaluation.openai_client import (
     extract_response_output_text,
     strip_markdown_code_fences,
 )
+from src.utils.search_runtime_config import (
+    POST_FILTER_BATCH_SIZE,
+    POST_FILTER_MAX_CONCURRENT_BATCHES,
+    POST_FILTER_BATCH_START_DELAY_SEC,
+    POST_FILTER_CANCEL_POLL_INTERVAL_SEC,
+)
 
 logger = setup_colored_logger("ebay_result_filter")
 
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 BATCH_FILTER_MAX_OUTPUT_TOKENS = 3000
-POST_FILTER_BATCH_SIZE = 5
-POST_FILTER_MAX_CONCURRENT_BATCHES = 2
-POST_FILTER_BATCH_START_DELAY_SEC = 0.35
-POST_FILTER_CANCEL_POLL_INTERVAL_SEC = 0.2
 LISTING_TITLE_LOG_PREVIEW_LEN = 60
 
 

@@ -8,7 +8,6 @@ SSE generator via a queue, and handles cancellation and cleanup.
 
 import json
 import logging
-import os
 import queue
 import threading
 import time
@@ -32,6 +31,11 @@ from src.scrapers.ebay_scraper_v2 import (
 from src.evaluation.listing_ebay_comparison import compare_listing_to_ebay
 from src.evaluation.fb_listing_filter import is_suspicious_price
 from src.utils.colored_logger import setup_colored_logger, log_step_sep, log_error_short, log_warning
+from src.utils.search_runtime_config import (
+    LISTING_EVAL_MAX_WORKERS,
+    LISTING_EVAL_WORKER_START_DELAY_SEC,
+    EVAL_WAIT_TIMEOUT_SEC,
+)
 
 from src.server.search_state import (
     cancel_and_wait_for_previous_search,
@@ -48,38 +52,6 @@ _EVENT_INSPECTOR_URL = "inspector_url"
 
 # Loggers that receive the queue handler in debug mode.
 _DEBUG_LOG_LOGGER_NAMES = ("server", "fb_scraper", "listing_ebay_comparison", "ebay_query_generator", "ebay_result_filter", "ebay_scraper_v2")
-EVAL_WAIT_TIMEOUT_SEC = 0.2
-
-
-def _read_positive_int_env(name: str, default: int) -> int:
-    """Read a positive integer from env; fallback to default when invalid."""
-    raw = os.environ.get(name)
-    if raw is None:
-        return default
-    try:
-        parsed = int(raw)
-    except ValueError:
-        return default
-    return parsed if parsed > 0 else default
-
-
-def _read_non_negative_float_env(name: str, default: float) -> float:
-    """Read a non-negative float from env; fallback to default when invalid."""
-    raw = os.environ.get(name)
-    if raw is None:
-        return default
-    try:
-        parsed = float(raw)
-    except ValueError:
-        return default
-    return parsed if parsed >= 0 else default
-
-
-LISTING_EVAL_MAX_WORKERS = _read_positive_int_env("LISTING_EVAL_MAX_WORKERS", 5)
-LISTING_EVAL_WORKER_START_DELAY_SEC = _read_non_negative_float_env(
-    "LISTING_EVAL_WORKER_START_DELAY_SEC",
-    0.35,
-)
 
 
 class QueueLogHandler(logging.Handler):
