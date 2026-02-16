@@ -3,6 +3,7 @@
 import { useState } from "react";
 import type { DebugSearchParams } from "@/components/debug/DebugSearchParams";
 
+const DEBUG_PAIRED_GRID_COLS = "grid-cols-[2.5rem_1fr_1fr]";
 export type DebugFacebookListing = {
   title: string;
   price: number;
@@ -62,7 +63,10 @@ export function DebugPanel({
               </div>
             </div>
           )}
-          <div className="grid grid-cols-2 divide-x divide-border">
+          <div className={`grid ${DEBUG_PAIRED_GRID_COLS} divide-x divide-border`}>
+            <div className="px-2 py-2 border-b border-border bg-muted/50 font-mono text-xs font-semibold text-foreground text-center">
+              #
+            </div>
             <div className="px-4 py-2 border-b border-border bg-muted/50 font-mono text-xs font-semibold text-foreground">
               Facebook query details
             </div>
@@ -108,8 +112,11 @@ function DebugPairedRows({
       {Array.from({ length: rowCount }, (_, i) => (
         <div
           key={i}
-          className="grid grid-cols-2 divide-x divide-border border-b border-border items-start"
+          className={`grid ${DEBUG_PAIRED_GRID_COLS} divide-x divide-border border-b border-border items-start`}
         >
+          <div className="p-2 min-h-[4rem] flex items-start justify-center font-mono text-xs text-muted-foreground">
+            {i + 1}
+          </div>
           <div className="p-4 min-h-[4rem]">
             {facebookListings[i] ? (
               <FacebookListingCell item={facebookListings[i]} />

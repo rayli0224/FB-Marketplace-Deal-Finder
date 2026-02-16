@@ -3,6 +3,7 @@
 import { Fragment, useState } from "react";
 import { FullSizeToggle } from "@/components/ui/FullSizeToggle";
 
+const RESULTS_TABLE_COLUMN_COUNT = 7;
 export interface CompItem {
   title: string;
   price: number;
@@ -230,6 +231,7 @@ export function SearchResultsTable({
           <table className="w-full border-collapse font-mono text-sm">
             <thead className="sticky top-0 bg-secondary">
               <tr className="border-b border-border text-left">
+                <th className="px-2 py-2 text-xs text-muted-foreground w-10">#</th>
                 <th className="px-3 py-2 text-xs text-muted-foreground">TITLE</th>
                 <th className="px-3 py-2 text-xs text-muted-foreground">PRICE</th>
                 <th className="px-3 py-2 text-xs text-muted-foreground">LOCATION</th>
@@ -256,6 +258,9 @@ export function SearchResultsTable({
                 <tr
                   className={`border-b border-border/50 transition-colors ${rowBgClass}`}
                 >
+                  <td className="px-2 py-2 text-muted-foreground text-xs">
+                    {index + 1}
+                  </td>
                   <td className="px-3 py-2 max-w-[300px] truncate" title={listing.title}>
                     {listing.title}
                   </td>
@@ -311,14 +316,14 @@ export function SearchResultsTable({
                 </tr>
                 {isExpanded && hasComps && (
                   <tr className="border-b border-border/50 bg-secondary/80">
-                    <td colSpan={7} className="px-4 py-3">
+                    <td colSpan={RESULTS_TABLE_COLUMN_COUNT} className="px-4 py-3">
                       <ListingCompsPanel listing={listing} />
                     </td>
                   </tr>
                 )}
                 {isExpanded && hasDetails && (
                   <tr className="border-b border-border/50 bg-secondary/80">
-                    <td colSpan={7} className="px-4 py-3">
+                    <td colSpan={RESULTS_TABLE_COLUMN_COUNT} className="px-4 py-3">
                       <ListingDetailsPanel reason={listing.noCompReason!} />
                     </td>
                   </tr>
