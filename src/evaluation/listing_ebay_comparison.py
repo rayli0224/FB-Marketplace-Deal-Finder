@@ -1,10 +1,9 @@
 """
-Listing processor for evaluating individual Facebook Marketplace listings.
+Compares a Facebook Marketplace listing to eBay sold prices and computes deal score.
 
-Processes a single FB listing by generating an optimized eBay search query,
-fetching comparable prices from eBay, and calculating a deal score. Returns the
-listing with deal score (or None when eBay data or calculation fails). All
-listings are returned regardless of threshold or eBay data availability.
+Takes a single FB listing, generates an eBay search query, fetches comparable sold
+prices, filters to true matches, and calculates the deal score (percentage savings vs
+eBay average). Returns the listing with deal score and comparison data.
 """
 
 from typing import Dict, Optional
@@ -13,12 +12,13 @@ import threading
 
 from src.scrapers.fb_marketplace_scraper import Listing, SearchCancelledError
 from src.scrapers.ebay_scraper_v2 import get_market_price, DEFAULT_EBAY_ITEMS
-from src.api.deal_calculator import calculate_deal_score
-from src.utils.openai_helpers import generate_ebay_query_for_listing, filter_ebay_results_with_openai
+from src.evaluation.deal_calculator import calculate_deal_score
+from src.evaluation.ebay_query_generator import generate_ebay_query_for_listing
+from src.evaluation.ebay_result_filter import filter_ebay_results_with_openai
 from src.utils.colored_logger import setup_colored_logger, log_data_block, log_listing_box_sep, log_warning, set_step_indent, clear_step_indent, wait_status
 import statistics
 
-logger = setup_colored_logger("listing_processor")
+logger = setup_colored_logger("listing_ebay_comparison")
 
 
 def _listing_result(
@@ -31,7 +31,7 @@ def _listing_result(
     no_comp_reason: Optional[str] = None,
 ) -> Dict:
     """
-    Build the result dict for a processed listing.
+    Build the result dict for a compared listing.
 
     Always includes title, price, location, url, and dealScore. Adds
     ebaySearchQuery, compPrice, compPrices, and compItems only when the
@@ -58,7 +58,7 @@ def _listing_result(
     return out
 
 
-def process_single_listing(
+def compare_listing_to_ebay(
     listing: Listing,
     original_query: str,
     threshold: float = 20.0,
@@ -69,8 +69,10 @@ def process_single_listing(
     ebay_scraper=None,
 ) -> Dict:
     """
-    Process a single FB listing: generate eBay query via OpenAI, fetch comparable
-    prices, and calculate deal score (percentage savings vs eBay average).
+    Compare a single FB listing to eBay sold prices and compute deal score.
+
+    Generates an eBay search query from the listing, fetches comparable sold prices,
+    filters to true matches, and calculates percentage savings vs eBay average.
     Returns listing dict with dealScore. When eBay stats are missing or calculation
     fails, dealScore is None so the UI shows "--".
     """
@@ -84,20 +86,20 @@ def process_single_listing(
     logger.info(f"{progress}FB listing: {listing.title}")
     set_step_indent("  ")
     try:
-        return _process_listing_inner(
+        return _compare_listing_to_ebay_inner(
             listing, original_query, threshold, n_items, cancelled, ebay_scraper
         )
     except SearchCancelledError:
         raise
     except Exception as e:
-        log_warning(logger, f"Error processing listing: {e}")
+        log_warning(logger, f"Error comparing listing to eBay: {e}")
         return _listing_result(listing, None, no_comp_reason="Unable to generate eBay comparisons")
     finally:
         clear_step_indent()
         log_listing_box_sep(logger)
 
 
-def _process_listing_inner(
+def _compare_listing_to_ebay_inner(
     listing: Listing,
     original_query: str,
     threshold: float,
@@ -105,7 +107,7 @@ def _process_listing_inner(
     cancelled: Optional[threading.Event] = None,
     ebay_scraper=None,
 ) -> Dict:
-    """Inner processing logic. Caller handles exceptions and returns fallback result."""
+    """Inner comparison logic. Caller handles exceptions and returns fallback result."""
     log_data_block(logger, "Data", price=listing.price, location=listing.location, url=listing.url)
     if listing.description:
         logger.debug(f"  Description: {listing.description}")
@@ -164,18 +166,15 @@ def _process_listing_inner(
 
             if len(filtered_items) != len(ebay_items):
                 filtered_prices = [item["price"] for item in filtered_items]
-                if len(filtered_prices) >= 3:
+                if len(filtered_prices) > 0:
                     ebay_stats.raw_prices = sorted(filtered_prices)
                     ebay_stats.average = statistics.mean(filtered_prices)
                     ebay_stats.sample_size = len(filtered_prices)
                     ebay_stats.item_summaries = all_items_with_filter_flag
-                    logger.info(f"📋 {ebay_stats.sample_size} matches (avg ${ebay_stats.average:.2f})")
-                elif len(filtered_prices) > 0:
-                    ebay_stats.raw_prices = sorted(filtered_prices)
-                    ebay_stats.average = statistics.mean(filtered_prices)
-                    ebay_stats.sample_size = len(filtered_prices)
-                    ebay_stats.item_summaries = all_items_with_filter_flag
-                    log_warning(logger, f"Only {ebay_stats.sample_size} matches (need at least 3 to compare)")
+                    if len(filtered_prices) >= 3:
+                        logger.info(f"📋 {ebay_stats.sample_size} matches (avg ${ebay_stats.average:.2f})")
+                    else:
+                        log_warning(logger, f"Only {ebay_stats.sample_size} matches (need at least 3 to compare)")
                 else:
                     log_warning(logger, "No matching listings — can't compare price")
                     ebay_stats.average = 0

@@ -5,6 +5,25 @@ Contains prompt templates used for generating eBay search queries and filtering
 eBay results to match Facebook Marketplace listings.
 """
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from src.scrapers.fb_marketplace_scraper import Listing
+
+
+def format_fb_listing_for_prompt(listing: "Listing") -> str:
+    """
+    Format a FB listing as text for prompts.
+    Includes title, price, location (if available), and description (if available).
+    """
+    listing_text = f"Facebook Marketplace listing:\n- Title: {listing.title}\n- Price: ${listing.price:.2f}"
+    if listing.location:
+        listing_text += f"\n- Location: {listing.location}"
+    if listing.description:
+        listing_text += f"\n- Description: {listing.description}"
+    return listing_text
+
+
 # System message for query generation
 QUERY_GENERATION_SYSTEM_MESSAGE = "You are an expert at creating precise search queries for online marketplaces. Always respond with valid JSON only."
 
@@ -233,4 +252,3 @@ Rules:
 - Include exact distinguishing details in parentheses when applicable.
 - No extra text. No markdown. Only valid JSON.
 """
-
