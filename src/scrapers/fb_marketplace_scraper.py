@@ -9,6 +9,7 @@ which is stored and loaded from the path in FB_COOKIES_FILE. The scraper expects
 that file to contain a JSON array of cookie objects (e.g. name, value, domain, path).
 """
 
+import math
 import re
 import os
 import json
@@ -74,6 +75,7 @@ DESCRIPTION_MAX_LINES = 50
 DESCRIPTION_MIN_LENGTH = 10
 DESCRIPTION_SIBLING_CHECK_COUNT = 3
 SCROLL_ATTEMPTS = 3
+LISTINGS_PER_SCROLL_BATCH_ESTIMATE = 12
 
 # Incorrect titles: small image overlays (e.g. "Partner Listing", "Just listed") that appear
 # above the real title; we skip these and use the next text element as the title.
@@ -986,12 +988,11 @@ class FBMarketplaceScraper:
         return description
     
     def _scroll_page_to_load_content(self):
-        """Scroll the page to load more listing content."""
-        for _ in range(SCROLL_ATTEMPTS):
-            self._check_cancelled()
-            self.page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-            random_delay(1, 2)
-            self._check_cancelled()
+        """Scroll once to ask Facebook to load another batch of listings."""
+        self._check_cancelled()
+        self.page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+        random_delay(1, 2)
+        self._check_cancelled()
     
     def _find_listing_elements(self) -> List:
         """
@@ -1098,34 +1099,52 @@ class FBMarketplaceScraper:
         """
         Extract up to max_listings from the current Marketplace results page.
 
-        Scrolls to load content, locates listing DOM elements, then iterates until
-        max_listings valid listings are extracted or elements run out. Skips
-        elements that fail extraction (e.g. odd price formats) and continues.
-        If listing_filter is provided, only listings that pass the filter are kept.
-        Checks for cancellation at each iteration and exits early if requested.
+        Parses currently visible cards first, then scrolls only when more listings are
+        needed. Continues until max_listings valid listings are extracted or no more
+        useful progress can be made. Skips elements that fail extraction (e.g. odd
+        price formats) and continues. If listing_filter is provided, only listings
+        that pass the filter are kept. Checks for cancellation at each iteration and
+        exits early if requested.
         """
         listings = []
         try:
             self._check_cancelled()
-            
-            self._scroll_page_to_load_content()
-            
-            self._check_cancelled()
-            
-            listing_elements = self._find_listing_elements()
-            for element in listing_elements:
-                if len(listings) >= max_listings:
-                    break
+
+            max_scroll_attempts = max(
+                SCROLL_ATTEMPTS,
+                max(0, math.ceil(max_listings / LISTINGS_PER_SCROLL_BATCH_ESTIMATE) - 1),
+            )
+            seen_urls = set()
+            scrolls_used = 0
+            previous_element_count = 0
+
+            while len(listings) < max_listings:
                 self._check_cancelled()
-                
-                listing = self._extract_listing_from_element(element, extract_descriptions=extract_descriptions)
-                if listing:
+                listing_elements = self._find_listing_elements()
+                current_element_count = len(listing_elements)
+
+                new_listing_added = False
+                for element in listing_elements:
+                    if len(listings) >= max_listings:
+                        break
+                    self._check_cancelled()
+
+                    listing = self._extract_listing_from_element(
+                        element,
+                        extract_descriptions=extract_descriptions,
+                    )
+                    if not listing:
+                        continue
+                    if listing.url in seen_urls:
+                        continue
+                    seen_urls.add(listing.url)
+
                     # Apply filter if provided
                     if listing_filter and not listing_filter(listing):
                         if on_listing_filtered:
                             on_listing_filtered(listing)
                         continue
-                    
+
                     idx = len(listings) + 1
                     label = f"[{idx}/{max_listings}] Retrieved:"
                     log_listing_box_sep(logger)
@@ -1137,8 +1156,26 @@ class FBMarketplaceScraper:
                         logger.debug(f"  Description: {listing.description}")
                     log_listing_box_sep(logger)
                     listings.append(listing)
+                    new_listing_added = True
                     if on_listing_found:
                         on_listing_found(listing, len(listings))
+
+                if len(listings) >= max_listings:
+                    break
+
+                if scrolls_used >= max_scroll_attempts:
+                    break
+
+                # Scroll only when we still need more listings and did not make useful progress.
+                # This keeps scrolling aligned with the user's requested listing count.
+                if current_element_count <= previous_element_count or not new_listing_added:
+                    self._scroll_page_to_load_content()
+                    scrolls_used += 1
+                else:
+                    # New cards appeared without extra scrolling; keep parsing first.
+                    pass
+
+                previous_element_count = current_element_count
             
         except SearchCancelledError:
             raise
