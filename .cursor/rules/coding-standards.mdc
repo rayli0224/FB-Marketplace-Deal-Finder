@@ -70,6 +70,11 @@ alwaysApply: true
 
 - User-visible text must be **non-technical** (no jargon in instructions or errors). Preserve the app's chosen tone and theme in the UI; see any project-specific rule for copy and voice.
 
+## Breaking Changes and Compatibility
+
+- **Do not preserve backwards compatibility.** When changing an API, signature, or behavior, update every call site instead of adding compatibility shims, deprecated overloads, or fallback paths.
+- Fix all affected usages in the same change. Do not leave callers on old behavior "for now."
+
 ## General Principles
 
 - **Clarity over cleverness**: Write code that's easy to understand

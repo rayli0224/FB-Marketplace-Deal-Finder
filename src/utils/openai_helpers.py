@@ -20,7 +20,7 @@ except ImportError:
     RateLimitError = Exception  # type: ignore[misc, assignment]
 
 from src.scrapers.fb_marketplace_scraper import Listing, SearchCancelledError
-from src.utils.colored_logger import setup_colored_logger, log_error_short, truncate_lines
+from src.utils.colored_logger import setup_colored_logger, log_error_short, log_warning, truncate_lines
 from src.utils.prompts import (
     QUERY_GENERATION_SYSTEM_MESSAGE,
     RESULT_FILTERING_SYSTEM_MESSAGE,
@@ -171,17 +171,17 @@ async def _create_async_response(
 def generate_ebay_query_for_listing(
     listing: Listing,
     original_query: str
-) -> Optional[Tuple[Optional[str], Optional[dict], Optional[str]]]:
+) -> Optional[Tuple[Optional[str], Optional[str]]]:
     """
-    Generate an optimized eBay search query and optional Browse API parameters for a FB listing.
-    Returns (enhanced_query, browse_api_parameters, skip_reason) or None on generic failure.
-    On success: (query, params, None). On model rejection: (None, None, reason). On other failure: None.
+    Generate an optimized eBay search query for a FB listing.
+    Returns (enhanced_query, skip_reason) or None on generic failure.
+    On success: (query, None). On model rejection: (None, reason). On other failure: None.
     """
     if not OpenAI:
-        logger.error("Search suggestions unavailable (required package not installed).")
+        logger.error("❌ Search suggestions unavailable (required package not installed).")
         return None
     if not OPENAI_API_KEY:
-        logger.warning("Search suggestions not available (missing configuration).")
+        log_warning(logger, "Search suggestions not available (missing configuration).")
         return None
     
     client = OpenAI(api_key=OPENAI_API_KEY)
@@ -199,7 +199,7 @@ def generate_ebay_query_for_listing(
     pre_result = _try_parse_json_dict(pre_raw)
     if isinstance(pre_result, dict) and pre_result.get("rejected"):
         logger.debug(f"\nPre-filter for FB listing rejected:\n\t{pre_result.get('reason', 'insufficient information')}")
-        return None, None, pre_result.get("reason", "insufficient information")
+        return (None, pre_result.get("reason", "insufficient information"))
     if isinstance(pre_result, dict):
         logger.debug(f"\nPre-filter for FB listing accepted:\n\t{pre_result.get('reason', '')}")
     
@@ -226,14 +226,8 @@ def generate_ebay_query_for_listing(
             return None
 
         enhanced_query = result.get("enhanced_query", original_query)
-        browse_api_parameters = result.get("browse_api_parameters")
-        if not isinstance(browse_api_parameters, dict):
-            browse_api_parameters = None
-        else:
-            # Remove `filter: conditionIds:{{1000|3000}}` from the browse_api_parameters for now
-            browse_api_parameters = {k: v for k, v in browse_api_parameters.items() if k != "filter"}
         logger.debug(f"Search: '{enhanced_query}'")
-        return (enhanced_query, browse_api_parameters, None)
+        return (enhanced_query, None)
     except Exception as e:
         log_error_short(logger, f"Search suggestion request failed: {e}")
         return None
@@ -455,5 +449,5 @@ def filter_ebay_results_with_openai(
     except SearchCancelledError:
         raise
     except Exception as e:
-        logger.warning(f"Match check failed: {e} — using all listings")
+        log_warning(logger, f"Match check failed: {e} — using all listings")
         return None

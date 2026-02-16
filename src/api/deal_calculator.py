@@ -8,7 +8,7 @@ allowing the frontend to filter and color-code based on threshold.
 
 from typing import List, Optional
 from src.scrapers.fb_marketplace_scraper import Listing
-from src.scrapers.ebay_scraper import PriceStats
+from src.scrapers.ebay_scraper_v2 import PriceStats
 
 
 def calculate_deal_score(fb_price: float, ebay_stats: Optional[PriceStats]) -> Optional[float]:

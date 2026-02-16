@@ -8,7 +8,8 @@ Colored logging formatter and reusable log helpers.
 - log_data_line(logger, label, **kwargs): one-line key=value data.
 - log_data_block(logger, label, indent='  ', **kwargs): label then one line per field (indented); use for listing/retrieved blocks.
 - log_listing_box_sep(logger): single dash line to visually contain a list element (wrap each Retrieved or FB listing block).
-- log_error_short(logger, message, max_len=100): error with consistent truncation.
+- log_warning(logger, message): warning with ⚠️ prefix (non-blocking, recoverable).
+- log_error_short(logger, message, max_len=100): error with ❌ prefix and truncation (blocking, full failures).
 - wait_status(logger, label, inline=True): context manager that logs "⏳ Waiting for X..."; when inline=True and stdout is a TTY, elapsed time updates in place every 100ms; on exit logs "✅ Done: X (N.NNNs)".
 """
 
@@ -220,10 +221,19 @@ def log_data_block(logger: logging.Logger, label: str, indent: str = "  ", **kwa
             logger.info(f"{indent}{k}={_format_data_value(k, v)}")
 
 
+def log_warning(logger: logging.Logger, message: str) -> None:
+    """
+    Log message at WARNING level with ⚠️ prefix. Use for non-blocking, recoverable
+    issues (auth, no listings, below threshold, cancellation).
+    """
+    logger.warning(f"⚠️ {message}")
+
+
 def log_error_short(logger: logging.Logger, message: str, max_len: int = DEFAULT_ERROR_MAX_LEN) -> None:
     """
-    Log message at ERROR level with a short prefix. The message is truncated so the
-    full output (prefix + message) is at most max_len characters, keeping error output bounded.
+    Log message at ERROR level with ❌ prefix. The message is truncated so the
+    full output (prefix + message) is at most max_len characters. Use for blocking
+    or full failures (package missing, request failed, unrecoverable).
     """
     prefix = "❌ "
     msg = str(message)[: max_len - len(prefix)]

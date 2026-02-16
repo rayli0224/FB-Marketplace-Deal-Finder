@@ -68,17 +68,13 @@ Output:
 
 def get_query_generation_prompt(fb_listing_text: str) -> str:
     return f"""
-You are an expert at generating highly effective eBay Browse API search queries for product comparison.
+You are an expert at generating highly effective eBay search queries for product comparison.
 
 {fb_listing_text}
 
 Your task:
 1. Extract the **core product attributes** that matter for comparison: brand, model, product type, generation, storage/capacity if relevant.
-2. Generate an **effective eBay search query** suitable for the Browse API.
-3. **ALWAYS provide Browse API parameters** to improve search quality. Include:
-   - `filter`: Use ONLY "conditionIds:{{1000}}" for New or "conditionIds:{{3000}}" for Used (no other condition IDs allowed). If the listing is ambiguous, include both "conditionIds:{{1000|3000}}"
-   - `marketplace`: Use "EBAY_US" unless location indicates otherwise
-   - `sort`: Use "bestMatch" for most searches
+2. Generate an **effective eBay search query** that will find comparable sold listings.
 
 Guidelines:
 
@@ -86,12 +82,12 @@ Guidelines:
 - Include **brand, model, and product type**.
 - Include **generation / year / variant** only if it strongly differentiates the product.
 - **Exclude** color, cosmetic descriptors, minor accessories, bundle/lot details.
-- Avoid condition terms (used, new, broken) in the query—they can be applied as a filter.
+- Avoid condition terms (used, new, broken) in the query.
 - Queries should be **short**, ideally 1-5 core terms.
 
 ### Examples
 - Title: "My Stupidity is Your Gain! Sherwin Williams Paint 2 gals"  
-  Description: "2 gals of Sun Bleached Ochre Super Paint and Primer in one. One gal was opened to try on the wall as pictured. The other gal has not been opened. I paid $76.99 a gallon. You get 2 gallons for less than the price of one because I made a mistake in color!"  
+  Description: "2 gals of Sun Bleached Ochre Super Paint and Primer in one..."  
   → eBay Query: "Sherwin Williams Super Paint and Primer 2 gallon"
 
 - Title: "MacBook Pro 2019 16 inch i9 32GB RAM cracked corner"  
@@ -110,21 +106,10 @@ Guidelines:
   Description: "Worn twice, great condition."  
   → eBay Query: "Air Jordan 1 Retro High OG"
 
-
-### Browse API Parameter Guidelines
-- **Filter:** ONLY use `conditionIds:{{1000}}` for New or `conditionIds:{{3000}}` for Used. No other condition IDs allowed. If the listing is ambiguous, include both "conditionIds:{{1000|3000}}"
-- **Marketplace:** Always include. Use "EBAY_US" unless location indicates otherwise.
-- **Sort:** Always include. Use "bestMatch" for most searches.
-
 ### Output Format
 Return ONLY a JSON object:
 {{
-  "enhanced_query": "optimized eBay search query",
-  "browse_api_parameters": {{
-      "filter": "conditionIds:{{1000|3000}}",
-      "marketplace": "EBAY_US",
-      "sort": "bestMatch"
-  }}
+  "enhanced_query": "optimized eBay search query"
 }}
 """
 

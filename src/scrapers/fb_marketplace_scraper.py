@@ -2,6 +2,7 @@
 Facebook Marketplace Scraper
 
 Scrapes Facebook Marketplace listings using Playwright for better anti-detection.
+Uses its own Chrome process (separate from the eBay scraper — different ports).
 Supports searching by query, zip code, and radius.
 
 Authentication is handled by the app: users provide login data via the in-app setup,
@@ -21,7 +22,7 @@ from dataclasses import dataclass
 from typing import Optional, List, Callable, Tuple
 from playwright.sync_api import sync_playwright, Browser, Page, BrowserContext, TimeoutError as PlaywrightTimeoutError
 from src.scrapers.utils import random_delay, parse_price, is_valid_listing_price
-from src.utils.colored_logger import setup_colored_logger, log_data_block, log_listing_box_sep, set_step_indent, clear_step_indent, wait_status
+from src.utils.colored_logger import setup_colored_logger, log_data_block, log_listing_box_sep, log_warning, set_step_indent, clear_step_indent, wait_status
 from src.utils.debug_chrome_proxy import start_debug_proxy
 
 logger = setup_colored_logger("fb_scraper")
@@ -259,7 +260,12 @@ class FBMarketplaceScraper:
             "--disable-blink-features=AutomationControlled",
             "--disable-dev-shm-usage",
             "--no-sandbox",
+            "--no-first-run",
             "--window-size=1920,1080",
+            "--disable-gpu",
+            "--disable-logging",
+            "--log-level=3",
+            "--user-data-dir=/tmp/chrome-fb",
         ]
 
         self._check_cancelled()
@@ -269,7 +275,7 @@ class FBMarketplaceScraper:
         # directly on cancellation without going through Playwright's sync API.
         launch_args = [chrome_path]
         if self.headless:
-            launch_args.append("--headless")
+            launch_args.append("--headless=new")
         launch_args.extend([
             f"--remote-debugging-port={CHROME_DEBUG_PORT}",
             "--remote-allow-origins=*",
@@ -277,13 +283,31 @@ class FBMarketplaceScraper:
             "about:blank",
         ])
 
-        self._chrome_process = subprocess.Popen(launch_args)
-        self._wait_for_chrome_debug_port()
+        self._chrome_process = subprocess.Popen(
+            launch_args,
+            stderr=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,
+        )
+        try:
+            self._wait_for_chrome_debug_port()
+        except RuntimeError as e:
+            if self._chrome_process.poll() is not None:
+                stderr = self._chrome_process.stderr
+                extra = ""
+                if stderr:
+                    try:
+                        err_text = stderr.read().decode("utf-8", errors="replace").strip()
+                        if err_text:
+                            extra = f" — Chrome output: {err_text[:500]}"
+                    except Exception:
+                        pass
+                raise RuntimeError(str(e) + extra) from e
+            raise
 
         self._check_cancelled()
 
         if not self.headless:
-            start_debug_proxy()
+            start_debug_proxy(proxy_port=PROXY_DEBUG_PORT, chrome_port=CHROME_DEBUG_PORT)
 
         self.browser = self.playwright.chromium.connect_over_cdp(
             f"http://localhost:{CHROME_DEBUG_PORT}"
@@ -402,7 +426,7 @@ class FBMarketplaceScraper:
         except FacebookNotLoggedInError:
             raise
         except Exception as e:
-            logger.warning("Setting your location failed — %s", e)
+            log_warning(logger, f"Setting your location failed — {e}")
 
     def _set_radius(self, radius: int):
         """Open the radius dropdown and select the given miles value.
@@ -426,7 +450,7 @@ class FBMarketplaceScraper:
 
         box = combobox.bounding_box(timeout=timeout)
         if not box:
-            logger.warning("Could not find the radius control on the page")
+            log_warning(logger, "Could not find the radius control on the page")
             return
 
         cx = box["x"] + box["width"] / 2
@@ -898,7 +922,7 @@ class FBMarketplaceScraper:
             except Exception:
                 continue
         
-        logger.warning("We could not find any listing cards on the page. Facebook may have changed their layout.")
+        log_warning(logger, "We could not find any listing cards on the page. Facebook may have changed their layout.")
         return []
     
     def _extract_listing_from_element(self, element, extract_descriptions: bool = False) -> Optional[Listing]:
@@ -1015,7 +1039,7 @@ class FBMarketplaceScraper:
         except SearchCancelledError:
             raise
         except Exception as e:
-            logger.warning("Reading the list of listings from the page failed — %s", e)
+            log_warning(logger, f"Reading the list of listings from the page failed — {e}")
         
         return listings
     
@@ -1224,5 +1248,5 @@ def force_close_active_scraper(thread_id: Optional[int] = None):
             try:
                 scraper._chrome_process.kill()
             except Exception as e:
-                logger.warning(f"Could not kill Chrome process: {e}")
+                log_warning(logger, f"Could not kill Chrome process: {e}")
 
