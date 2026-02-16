@@ -48,14 +48,13 @@ export function MarketplaceSearchForm({ register, errors, isValid, handleSubmit,
         label="PORT_CODE"
         id="zipCode"
         type="text"
-        placeholder="e.g. 10001"
+        placeholder="e.g. 10001 (optional)"
         register={register}
         pattern="[0-9]{5}"
-        required
         digitsOnly
         inputMode="numeric"
         error={errors.zipCode?.message}
-        tooltip="5-digit ZIP code for your search area."
+        tooltip="5-digit ZIP code for your search area. Leave empty to use your current location."
       />
 
       <div className="grid grid-cols-3 gap-4">

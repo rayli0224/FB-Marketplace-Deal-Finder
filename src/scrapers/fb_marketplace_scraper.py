@@ -54,10 +54,13 @@ LOCATION_DIALOG_SELECTOR = "[role='dialog']"
 LOCATION_APPLY_SELECTOR = "[aria-label='Apply'][role='button']"
 
 # Price extraction selectors (shared across methods)
+# Supports multiple currencies: $ (USD), £ (GBP), € (EUR)
 PRICE_SELECTORS = [
     "span[class*='price']",
     "div[class*='price']",
     "span:has-text('$')",
+    "span:has-text('£')",
+    "span:has-text('€')",
 ]
 
 # Location fallback values
@@ -358,14 +361,21 @@ class FBMarketplaceScraper:
         self.page.wait_for_selector(SEARCH_RESULTS_SELECTOR, timeout=ELEMENT_WAIT_TIMEOUT_MS)
         self._check_cancelled()
 
-    def _set_location(self, zip_code: str, radius: int):
+    def _set_location(self, zip_code: Optional[str], radius: int):
         """Open the location dialog, set zip code and radius, then apply the filters.
 
         Opens the location dialog by clicking the location pill, sets the radius dropdown
         first (while the dialog is fresh and fully interactive), then fills the zip code
         input and selects the first autocomplete suggestion. Finally clicks Apply and waits
         for the search results to reload with the new filters applied.
+        
+        If zip_code is None or empty, skips location setting entirely and uses Facebook's
+        default location (based on browser/IP location).
         """
+        if not zip_code:
+            logger.info("No zip code provided — using your current location")
+            return
+            
         try:
             self._check_cancelled()
             location_pill = self.page.locator(LOCATION_PILL_SELECTOR).first
@@ -405,17 +415,16 @@ class FBMarketplaceScraper:
             logger.warning("Setting your location failed — %s", e)
 
     def _set_radius(self, radius: int):
-        """Open the radius dropdown and select the given miles value.
+        """Open the radius dropdown and select the given radius value.
 
         Locates the Radius combobox using get_by_role (which correctly resolves the
         aria-labelledby attribute), scrolls it into view, then simulates a real mouse
         click at the center of its bounding box using raw mouse events (move → down → up).
         This approach reliably triggers React's event handlers. Once the listbox appears,
-        selects the option matching the requested miles value.
+        selects the option matching the requested radius value (tries "miles" first, then "km").
         """
         self._check_cancelled()
         timeout = ACTION_TIMEOUT_MS
-        option_text = f"{radius} miles"
 
         combobox = self.page.get_by_role("combobox", name="Radius")
         combobox.wait_for(state="visible", timeout=timeout)
@@ -443,7 +452,12 @@ class FBMarketplaceScraper:
         listbox = self.page.locator("[role='listbox']").first
         listbox.wait_for(state="visible", timeout=timeout)
         self._check_cancelled()
-        self.page.get_by_role("option", name=option_text).click(timeout=timeout)
+        
+        # Try miles first, then km (for UK/EU locales)
+        option = self.page.locator("[role='option']").filter(
+            has_text=re.compile(f"^{radius}\\s*(miles?|mi|km|kilometres?)$", re.IGNORECASE)
+        ).first
+        option.click(timeout=timeout)
         self._check_cancelled()
 
     def _get_strikethrough_dom_order(self, element) -> dict:
@@ -535,8 +549,9 @@ class FBMarketplaceScraper:
         """
         Extract price from a listing element.
         
-        Tries CSS selectors to find price elements (span/div with 'price' in class, or span with '$'),
-        extracts the text, and parses it to float. Returns first valid price found or None.
+        Tries CSS selectors to find price elements (span/div with 'price' in class, or span with currency),
+        extracts the text, and parses it to float. Falls back to parsing the element's full text if
+        selectors fail. Returns first valid price found or None.
         """
         price_elem = self._find_price_element(element)
         if price_elem:
@@ -545,6 +560,17 @@ class FBMarketplaceScraper:
                 return parse_price(price_text)
             except Exception as e:
                 logger.debug("Could not read the price from this listing — %s", e)
+        
+        # Fallback: try to extract price from element's text directly
+        try:
+            all_text = element.inner_text().strip()
+            # Look for price patterns: $123, £123, €123, or just numbers
+            price_match = re.search(r'[\$£€][\d,]+(?:\.\d{2})?|\d+(?:,\d{3})*(?:\.\d{2})?', all_text)
+            if price_match:
+                return parse_price(price_match.group())
+        except Exception:
+            pass
+        
         return None
 
     def _is_incorrect_title(self, text: str) -> bool:
@@ -1031,7 +1057,7 @@ class FBMarketplaceScraper:
     def search_marketplace(
         self,
         query: str,
-        zip_code: str,
+        zip_code: Optional[str] = None,
         radius: int = 25,
         max_listings: int = 20,
         on_listing_found=None,
@@ -1048,11 +1074,12 @@ class FBMarketplaceScraper:
         on_inspector_url: optional callback invoked with the DevTools inspector URL when browser is created (headed mode).
         """
         self._on_inspector_url = on_inspector_url
+        location_info = zip_code if zip_code else "current location"
         if step_sep == "main":
             logger.info("FB Marketplace search")
             log_data_block(
                 logger, "",
-                query=query, zip=zip_code, radius=f"{radius}mi", max=max_listings,
+                query=query, location=location_info, radius=f"{radius}mi", max=max_listings,
                 descriptions="on" if extract_descriptions else "off"
             )
         elif step_sep == "sub":
@@ -1061,13 +1088,13 @@ class FBMarketplaceScraper:
             log_data_block(
                 logger, "",
                 indent="  ",
-                query=query, zip=zip_code, radius=f"{radius}mi", max=max_listings,
+                query=query, location=location_info, radius=f"{radius}mi", max=max_listings,
                 descriptions="on" if extract_descriptions else "off"
             )
         else:
             log_data_block(
                 logger, "FB Marketplace search",
-                query=query, zip=zip_code, radius=f"{radius}mi", max=max_listings,
+                query=query, location=location_info, radius=f"{radius}mi", max=max_listings,
                 descriptions="on" if extract_descriptions else "off"
             )
         if not extract_descriptions:
@@ -1165,7 +1192,7 @@ _scraper_lock = threading.Lock()
 
 def search_marketplace(
     query: str,
-    zip_code: str,
+    zip_code: Optional[str] = None,
     radius: int = 25,
     max_listings: int = 20,
     headless: bool = None,
