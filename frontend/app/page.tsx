@@ -475,7 +475,9 @@ export default function Home() {
    * are parsed. This avoids "Unterminated string" when the large "done" payload is split across
    * TCP chunks. Uses stream: true for decode so multi-byte UTF-8 spanning chunks is handled.
    * Event types: "phase", "progress", "listing_processed", "done", and when backend runs with
-   * --debug: "debug_mode", "debug_facebook", "debug_ebay_query". Handles cancellation gracefully.
+   * --debug: "debug_mode", "debug_facebook", "debug_ebay_query_start",
+   * "debug_ebay_query_generated", and "debug_ebay_query_finished". Handles cancellation
+   * gracefully.
    */
   const parseSSEStream = useCallback(
     async (reader: ReadableStreamDefaultReader<Uint8Array>) => {

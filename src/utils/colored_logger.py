@@ -9,7 +9,8 @@ Colored logging formatter and reusable log helpers.
 - log_data_block(logger, label, indent='  ', **kwargs): label then one line per field (indented); use for listing/retrieved blocks.
 - log_listing_box_sep(logger): single dash line to visually contain a list element (wrap each Retrieved or FB listing block).
 - log_error_short(logger, message, max_len=100): error with consistent truncation.
-- wait_status(logger, label, inline=True): context manager that logs "⏳ Waiting for X..."; when inline=True and stdout is a TTY, elapsed time updates in place every 100ms; on exit logs "✅ Done: X (N.NNNs)".
+- wait_status(logger, label, inline=True): context manager that logs
+  "⏳ Waiting for X..." and, on exit, "✅ Done: X (N.NNNs)".
 """
 
 import logging

@@ -560,9 +560,6 @@ def create_search_stream(request, debug_mode: bool):
                     scored_listings = event["scored_listings"]
                     evaluated_count = event["evaluated_count"]
                     break
-                if event["type"] == "debug_ebay_query":
-                    yield f"data: {json.dumps(event)}\n\n"
-                    continue
                 if event["type"] == "debug_ebay_query_generated":
                     yield f"data: {json.dumps(event)}\n\n"
                     continue
