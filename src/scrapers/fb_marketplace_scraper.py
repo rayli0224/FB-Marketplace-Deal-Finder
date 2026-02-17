@@ -349,7 +349,6 @@ class FBMarketplaceScraper:
         """
         login_form = self.page.locator("form[action*='login']").first
         if login_form.is_visible(timeout=500):
-            logger.warning("🔒 Found a Facebook login prompt — trying to continue")
             continue_button = self.page.get_by_text(
                 re.compile(r"^Continue as", re.IGNORECASE)
             ).first
@@ -362,7 +361,6 @@ class FBMarketplaceScraper:
                 self.page.wait_for_load_state("domcontentloaded", timeout=CONTINUE_AS_WAIT_TIMEOUT_MS)
                 logger.info("✅ Facebook login confirmation accepted")
             except Exception as e:
-                logger.warning("🔒 Could not continue past the Facebook login prompt")
                 logger.debug("Continue-as click failure details: %s", e)
 
         self._check_cancelled()
