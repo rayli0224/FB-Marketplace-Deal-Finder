@@ -8,6 +8,7 @@ Stays open and is reused for multiple eBay searches per run. Sold listings deter
 
 import json
 import os
+import queue
 import statistics
 import subprocess
 import threading
@@ -27,8 +28,9 @@ from src.utils.debug_chrome_proxy import start_debug_proxy
 logger = setup_colored_logger("ebay_scraper_v2")
 
 # Chrome ports for eBay (different from FB: 9222/9223) so both can run.
+# Pool assigns each worker its own chrome port (9225, 9226, ...) and proxy port (9230, 9231, ...).
 EBAY_CHROME_DEBUG_PORT = 9225
-EBAY_PROXY_DEBUG_PORT = 9224
+EBAY_PROXY_DEBUG_PORT = 9230
 _INSPECTOR_URL_TEMPLATE = "http://localhost:{port}/devtools/inspector.html?ws=localhost:{port}/devtools/page/{page_id}"
 
 # eBay sold search: LH_Sold=1 filters to sold items only.
@@ -74,6 +76,8 @@ class EbaySoldScraper:
         headless: bool = None,
         cancelled: Optional[threading.Event] = None,
         on_inspector_url: Optional[Callable[[str], None]] = None,
+        chrome_port: int = EBAY_CHROME_DEBUG_PORT,
+        proxy_port: int = EBAY_PROXY_DEBUG_PORT,
     ):
         if headless is None:
             self.headless = os.environ.get("DISPLAY") is None
@@ -82,6 +86,8 @@ class EbaySoldScraper:
         
         self.cancelled = cancelled
         self._on_inspector_url = on_inspector_url
+        self._chrome_port = chrome_port
+        self._proxy_port = proxy_port
         self._is_closed = False
         self._chrome_process: Optional[subprocess.Popen] = None
         self.playwright = None
@@ -106,21 +112,21 @@ class EbaySoldScraper:
                 )
             try:
                 with urllib.request.urlopen(
-                    f"http://localhost:{EBAY_CHROME_DEBUG_PORT}/json/version", timeout=2
+                    f"http://localhost:{self._chrome_port}/json/version", timeout=2
                 ):
                     return
             except Exception:
                 time.sleep(poll_interval)
         raise RuntimeError(
-            f"Chrome debug port ({EBAY_CHROME_DEBUG_PORT}) did not respond within {timeout}s"
+            f"Chrome debug port ({self._chrome_port}) did not respond within {timeout}s"
         )
 
     def _log_devtools_url(self):
         """Log the DevTools inspector URL when browser is created in headed mode."""
-        fallback_url = f"http://localhost:{EBAY_PROXY_DEBUG_PORT}"
+        fallback_url = f"http://localhost:{self._proxy_port}"
         try:
             with urllib.request.urlopen(
-                f"http://localhost:{EBAY_CHROME_DEBUG_PORT}/json"
+                f"http://localhost:{self._chrome_port}/json"
             ) as resp:
                 pages = json.loads(resp.read())
             page = next((p for p in pages if p.get("url", "") != "about:blank"), None)
@@ -129,7 +135,7 @@ class EbaySoldScraper:
             if page:
                 page_id = page.get("id", "")
                 url = _INSPECTOR_URL_TEMPLATE.format(
-                    port=EBAY_PROXY_DEBUG_PORT, page_id=page_id
+                    port=self._proxy_port, page_id=page_id
                 )
                 logger.info(f"🌐 eBay browser inspect: {url}")
                 if self._on_inspector_url:
@@ -161,7 +167,7 @@ class EbaySoldScraper:
             "--disable-gpu",
             "--disable-logging",
             "--log-level=3",
-            "--user-data-dir=/tmp/chrome-ebay",
+            f"--user-data-dir=/tmp/chrome-ebay-{self._chrome_port}",
         ]
         self._check_cancelled()
         chrome_path = self.playwright.chromium.executable_path
@@ -169,7 +175,7 @@ class EbaySoldScraper:
         if self.headless:
             launch_args.append("--headless=new")
         launch_args.extend([
-            f"--remote-debugging-port={EBAY_CHROME_DEBUG_PORT}",
+            f"--remote-debugging-port={self._chrome_port}",
             "--remote-allow-origins=*",
             *chrome_args,
             "about:blank",
@@ -198,12 +204,12 @@ class EbaySoldScraper:
 
         if not self.headless:
             start_debug_proxy(
-                proxy_port=EBAY_PROXY_DEBUG_PORT,
-                chrome_port=EBAY_CHROME_DEBUG_PORT,
+                proxy_port=self._proxy_port,
+                chrome_port=self._chrome_port,
             )
 
         self.browser = self.playwright.chromium.connect_over_cdp(
-            f"http://localhost:{EBAY_CHROME_DEBUG_PORT}"
+            f"http://localhost:{self._chrome_port}"
         )
         self._check_cancelled()
         self.context = self.browser.new_context(
@@ -339,46 +345,88 @@ class EbaySoldScraper:
             self.playwright = None
 
 
-_active_ebay_scrapers: dict[int, EbaySoldScraper] = {}
-_ebay_scraper_lock = threading.Lock()
+class EbayScraperPool:
+    """
+    Thread-safe pool of EbaySoldScraper instances for parallel eBay lookups.
 
+    Creates a fixed number of Chrome browsers (one per pool slot), each on its own
+    debug port. Workers call acquire() to get an idle browser and release() to return
+    it. Browsers are created lazily on first acquire so startup cost is spread across
+    the first N tasks. close_all() tears down every Chrome in the pool.
+    """
 
-def register_ebay_scraper(scraper: EbaySoldScraper) -> None:
-    """Register scraper for the current thread (enables force_close on cancellation)."""
-    with _ebay_scraper_lock:
-        _active_ebay_scrapers[threading.get_ident()] = scraper
+    def __init__(
+        self,
+        size: int,
+        headless: bool = None,
+        cancelled: Optional[threading.Event] = None,
+        on_inspector_url: Optional[Callable[[str], None]] = None,
+    ):
+        self._headless = headless
+        self._cancelled = cancelled
+        self._on_inspector_url = on_inspector_url
+        self._pool: queue.Queue[Optional[EbaySoldScraper]] = queue.Queue(maxsize=size)
+        self._scrapers: list[EbaySoldScraper] = []
+        self._lock = threading.Lock()
+        self._next_port_offset = 0
+        self._closed = False
+        for _ in range(size):
+            self._pool.put(None)
 
+    def acquire(self) -> EbaySoldScraper:
+        """
+        Block until a scraper is available, then return it.
 
-def unregister_ebay_scraper() -> None:
-    """Unregister scraper for the current thread."""
-    with _ebay_scraper_lock:
-        _active_ebay_scrapers.pop(threading.get_ident(), None)
+        On first use of each slot the scraper is created with a unique Chrome
+        debug port. Subsequent acquires of that slot reuse the same browser.
+        """
+        slot = self._pool.get()
+        if slot is not None:
+            return slot
+        with self._lock:
+            offset = self._next_port_offset
+            self._next_port_offset += 1
+        scraper = EbaySoldScraper(
+            headless=self._headless,
+            cancelled=self._cancelled,
+            on_inspector_url=self._on_inspector_url,
+            chrome_port=EBAY_CHROME_DEBUG_PORT + offset,
+            proxy_port=EBAY_PROXY_DEBUG_PORT + offset,
+        )
+        with self._lock:
+            self._scrapers.append(scraper)
+        return scraper
 
+    def release(self, scraper: EbaySoldScraper) -> None:
+        """Return a scraper to the pool so the next waiting worker can use it."""
+        if not self._closed:
+            self._pool.put(scraper)
 
-def force_close_active_ebay_scraper(thread_id: Optional[int] = None):
-    """Kill Chrome for an active eBay scraper (e.g. on cancellation)."""
-    if thread_id is None:
-        thread_id = threading.get_ident()
-    with _ebay_scraper_lock:
-        scraper = _active_ebay_scrapers.get(thread_id)
-        if scraper and scraper._chrome_process:
+    def force_close_all(self) -> None:
+        """Kill every Chrome process in the pool immediately (for cancellation)."""
+        self._closed = True
+        with self._lock:
+            scrapers = list(self._scrapers)
+        for scraper in scrapers:
+            if scraper._chrome_process:
+                try:
+                    scraper._chrome_process.kill()
+                except Exception as e:
+                    log_warning(logger, f"Could not kill eBay Chrome process: {e}")
+
+    def close_all(self) -> None:
+        """Gracefully close every scraper in the pool and release resources."""
+        self._closed = True
+        with self._lock:
+            scrapers = list(self._scrapers)
+            self._scrapers.clear()
+        for scraper in scrapers:
+            scraper.close()
+        while not self._pool.empty():
             try:
-                scraper._chrome_process.kill()
-            except Exception as e:
-                log_warning(logger, f"Could not kill eBay Chrome process: {e}")
-
-
-def force_close_all_active_ebay_scrapers():
-    """Kill Chrome for all active eBay scrapers (used by parallel workers)."""
-    with _ebay_scraper_lock:
-        active_scrapers = list(_active_ebay_scrapers.values())
-
-    for scraper in active_scrapers:
-        if scraper and scraper._chrome_process:
-            try:
-                scraper._chrome_process.kill()
-            except Exception as e:
-                log_warning(logger, f"Could not kill eBay Chrome process: {e}")
+                self._pool.get_nowait()
+            except queue.Empty:
+                break
 
 
 def get_market_price(
