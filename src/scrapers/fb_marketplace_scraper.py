@@ -22,7 +22,7 @@ from dataclasses import dataclass
 from typing import Optional, List, Callable, Tuple
 from playwright.sync_api import sync_playwright, Browser, Page, BrowserContext, TimeoutError as PlaywrightTimeoutError
 from src.scrapers.utils import random_delay, parse_price, is_valid_listing_price
-from src.utils.colored_logger import setup_colored_logger, log_data_block, log_listing_box_sep, set_step_indent, clear_step_indent
+from src.utils.colored_logger import setup_colored_logger, log_data_block, log_listing_box_sep, set_step_indent, clear_step_indent, wait_status
 from src.utils.debug_chrome_proxy import start_debug_proxy
 
 logger = setup_colored_logger("fb_scraper")
@@ -1220,24 +1220,31 @@ class FBMarketplaceScraper:
                 descriptions="on" if extract_descriptions else "off"
             )
         else:
-            pass
-        try:
-            self._check_cancelled()
-            if not self.browser:
-                self._create_browser()
-            self._check_cancelled()
-            self._goto_search_results(query)
-            self._check_cancelled()
-            self._set_location(zip_code, radius)
-            self._check_cancelled()
-            listings = self._extract_listings(
-                max_listings=max_listings,
-                on_listing_found=on_listing_found,
-                on_listing_filtered=on_listing_filtered,
-                listing_filter=listing_filter,
-                extract_descriptions=extract_descriptions,
+            log_data_block(
+                logger, "FB Marketplace search",
+                query=query, location=location_info, radius=f"{radius}mi", max=max_listings,
+                descriptions="on" if extract_descriptions else "off"
             )
-            return listings
+        if not extract_descriptions:
+            logger.info("ℹ️ Descriptions toggled off — not fetching listing descriptions")
+        try:
+            with wait_status(logger, "Facebook Marketplace search"):
+                self._check_cancelled()
+                if not self.browser:
+                    self._create_browser()
+                self._check_cancelled()
+                self._goto_search_results(query)
+                self._check_cancelled()
+                self._set_location(zip_code, radius)
+                self._check_cancelled()
+                listings = self._extract_listings(
+                    max_listings=max_listings,
+                    on_listing_found=on_listing_found,
+                    on_listing_filtered=on_listing_filtered,
+                    listing_filter=listing_filter,
+                    extract_descriptions=extract_descriptions,
+                )
+                return listings
         except SearchCancelledError:
             return []
         except Exception:

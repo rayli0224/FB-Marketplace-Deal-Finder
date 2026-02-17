@@ -15,13 +15,16 @@ from src.scrapers.fb_marketplace_scraper import (
     force_close_active_scraper,
     CHROME_DEBUG_PORT as FB_CHROME_DEBUG_PORT,
 )
-from src.scrapers.ebay_scraper_v2 import (
-    force_close_active_ebay_scraper,
-    EBAY_CHROME_DEBUG_PORT,
-)
+from src.scrapers.ebay_scraper_v2 import EBAY_CHROME_DEBUG_PORT
+from src.utils.search_runtime_config import LISTING_EVAL_MAX_WORKERS
 
-_CHROME_DEBUG_PORTS = [FB_CHROME_DEBUG_PORT, EBAY_CHROME_DEBUG_PORT]
-_CHROME_USER_DATA_DIRS = ["/tmp/chrome-fb", "/tmp/chrome-ebay"]
+_EBAY_CHROME_PORTS = [
+    EBAY_CHROME_DEBUG_PORT + i for i in range(LISTING_EVAL_MAX_WORKERS)
+]
+_CHROME_DEBUG_PORTS = [FB_CHROME_DEBUG_PORT] + _EBAY_CHROME_PORTS
+_CHROME_USER_DATA_DIRS = ["/tmp/chrome-fb"] + [
+    f"/tmp/chrome-ebay-{port}" for port in _EBAY_CHROME_PORTS
+]
 _PREVIOUS_SEARCH_CLEANUP_TIMEOUT = 10.0
 
 # Active search state for immediate cancellation from a separate HTTP request.
@@ -29,7 +32,6 @@ _PREVIOUS_SEARCH_CLEANUP_TIMEOUT = 10.0
 _active_search: dict = {
     "cancelled": None,
     "thread_id": None,
-    "eval_thread_id": None,
     "complete": threading.Event(),
 }
 _active_search["complete"].set()
@@ -37,22 +39,20 @@ _active_search_lock = threading.Lock()
 
 
 def _signal_cancellation():
-    """Read the active search state and kill Chrome for both scraper threads.
+    """Read the active search state and kill Chrome for the FB scraper thread.
 
+    eBay pool cleanup is handled by the event generator via ebay_pool_ref.
     Returns the complete event so callers can optionally wait on it.
     """
     with _active_search_lock:
         cancelled = _active_search.get("cancelled")
         thread_id = _active_search.get("thread_id")
-        eval_thread_id = _active_search.get("eval_thread_id")
         complete = _active_search["complete"]
 
     if cancelled is not None:
         cancelled.set()
     if thread_id is not None:
         force_close_active_scraper(thread_id)
-    if eval_thread_id is not None:
-        force_close_active_ebay_scraper(eval_thread_id)
 
     return complete
 
@@ -74,20 +74,12 @@ def cancel_active_search():
     _signal_cancellation()
 
 
-def set_active_search(*, cancelled, thread_id=None, eval_thread_id=None):
-    """Register the current search's cancellation event and thread IDs."""
+def set_active_search(*, cancelled, thread_id=None):
+    """Register the current search's cancellation event and thread ID."""
     with _active_search_lock:
         _active_search["cancelled"] = cancelled
         if thread_id is not None:
             _active_search["thread_id"] = thread_id
-        if eval_thread_id is not None:
-            _active_search["eval_thread_id"] = eval_thread_id
-
-
-def set_eval_thread_id(eval_thread_id):
-    """Register the evaluation thread ID for cancellation."""
-    with _active_search_lock:
-        _active_search["eval_thread_id"] = eval_thread_id
 
 
 def mark_search_starting():
@@ -101,7 +93,6 @@ def mark_search_complete():
     with _active_search_lock:
         _active_search["cancelled"] = None
         _active_search["thread_id"] = None
-        _active_search["eval_thread_id"] = None
         _active_search["complete"].set()
 
 

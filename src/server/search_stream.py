@@ -23,10 +23,7 @@ from src.scrapers.fb_marketplace_scraper import (
 )
 from src.scrapers.ebay_scraper_v2 import (
     DEFAULT_EBAY_ITEMS,
-    EbaySoldScraper,
-    force_close_all_active_ebay_scrapers,
-    register_ebay_scraper,
-    unregister_ebay_scraper,
+    EbayScraperPool,
 )
 from src.evaluation.listing_ebay_comparison import compare_listing_to_ebay
 from src.evaluation.fb_listing_filter import is_suspicious_price
@@ -41,7 +38,6 @@ from src.server.search_state import (
     cancel_and_wait_for_previous_search,
     kill_lingering_chrome,
     set_active_search,
-    set_eval_thread_id,
     mark_search_starting,
     mark_search_complete,
 )
@@ -219,7 +215,7 @@ def create_search_stream(request, debug_mode: bool):
 
     def on_inspector_url(url: str):
         if not cancelled.is_set():
-            event_queue.put({"type": _EVENT_INSPECTOR_URL, "url": url})
+            event_queue.put({"type": _EVENT_INSPECTOR_URL, "url": url, "source": "fb"})
 
     def scrape_worker():
         auth_failed = False
@@ -273,6 +269,13 @@ def create_search_stream(request, debug_mode: bool):
                     yield f"data: {json.dumps(ev)}\n\n"
 
         thread_id: Optional[int] = None
+        ebay_pool_ref: list[Optional[EbayScraperPool]] = [None]
+
+        def _force_close_ebay_pool() -> None:
+            pool = ebay_pool_ref[0]
+            if pool:
+                pool.force_close_all()
+
         try:
             location_info_stream = request.zipCode
             log_step_sep(logger, f"🔍 Step 1: Starting search — query='{request.query}', location={location_info_stream}, radius={request.radius}mi")
@@ -365,18 +368,27 @@ def create_search_stream(request, debug_mode: bool):
 
                 def on_ebay_inspector_url(url: str):
                     if not cancelled.is_set():
-                        event_queue.put({"type": _EVENT_INSPECTOR_URL, "url": url})
+                        event_queue.put({"type": _EVENT_INSPECTOR_URL, "url": url, "source": "ebay"})
 
                 market_price_cache = {}
                 market_price_cache_lock = threading.Lock()
                 scored_by_index = {}
 
+                ebay_pool = EbayScraperPool(
+                    size=worker_count,
+                    headless=not debug_mode,
+                    cancelled=cancelled,
+                    on_inspector_url=on_ebay_inspector_url if debug_mode else None,
+                )
+                ebay_pool_ref[0] = ebay_pool
+
                 def evaluate_listing(index: int, fb_listing_id: str, listing):
                     """
-                    Evaluate one FB listing in a worker thread with its own scraper.
+                    Evaluate one FB listing using a pooled eBay browser.
 
-                    Uses a shared per-search eBay price cache so repeated eBay queries
-                    can reuse sold-item stats across similar listings.
+                    Acquires an idle browser from the pool, runs the comparison, then
+                    releases it back for the next task. Uses a shared per-search eBay
+                    price cache so repeated queries reuse sold-item stats.
                     """
                     worker_thread_id = threading.get_ident()
                     listing_label = f"[{index}/{len(fb_evaluable_listings)}] FB listing: {listing.title}"
@@ -390,12 +402,7 @@ def create_search_stream(request, debug_mode: bool):
                     if debug_log_handler is not None:
                         debug_log_handler.start_thread_buffer(worker_thread_id, listing_label)
 
-                    ebay_scraper = EbaySoldScraper(
-                        headless=not debug_mode,
-                        cancelled=cancelled,
-                        on_inspector_url=on_ebay_inspector_url if debug_mode else None,
-                    )
-                    register_ebay_scraper(ebay_scraper)
+                    ebay_scraper = ebay_pool.acquire()
                     try:
                         def on_query_generated(ebay_query: str):
                             if debug_mode and not cancelled.is_set():
@@ -432,8 +439,7 @@ def create_search_stream(request, debug_mode: bool):
                             debug_log_handler.finish_thread_buffer(worker_thread_id, "failed")
                         raise
                     finally:
-                        ebay_scraper.close()
-                        unregister_ebay_scraper()
+                        ebay_pool.release(ebay_scraper)
 
                 try:
                     with concurrent.futures.ThreadPoolExecutor(max_workers=worker_count) as executor:
@@ -452,7 +458,7 @@ def create_search_stream(request, debug_mode: bool):
                             if cancelled.is_set():
                                 for future in pending:
                                     future.cancel()
-                                force_close_all_active_ebay_scrapers()
+                                _force_close_ebay_pool()
                                 break
 
                             done, pending = concurrent.futures.wait(
@@ -503,7 +509,7 @@ def create_search_stream(request, debug_mode: bool):
                                     cancelled.set()
                                     for pending_future in pending:
                                         pending_future.cancel()
-                                    force_close_all_active_ebay_scrapers()
+                                    _force_close_ebay_pool()
                                 except Exception as e:
                                     if cancelled.is_set():
                                         continue
@@ -534,6 +540,7 @@ def create_search_stream(request, debug_mode: bool):
                                         "evaluatedCount": count,
                                     })
                 finally:
+                    ebay_pool.close_all()
                     scored = [scored_by_index[i] for i in sorted(scored_by_index)]
                 event_queue.put({
                     "type": "evaluation_done",
@@ -543,11 +550,10 @@ def create_search_stream(request, debug_mode: bool):
 
             eval_thread = threading.Thread(target=evaluation_worker)
             eval_thread.start()
-            set_eval_thread_id(eval_thread.ident)
 
             while True:
                 if cancelled.is_set():
-                    force_close_all_active_ebay_scrapers()
+                    _force_close_ebay_pool()
                     return
                 try:
                     event = event_queue.get(timeout=0.5)
@@ -577,7 +583,7 @@ def create_search_stream(request, debug_mode: bool):
 
             eval_thread.join(timeout=2.0)
             if cancelled.is_set():
-                force_close_all_active_ebay_scrapers()
+                _force_close_ebay_pool()
                 return
             total_scanned = len(fb_evaluable_listings) + filtered_count
             log_step_sep(logger, f"✅ Step 4: Search completed — {total_scanned} scanned, {filtered_count} filtered, {len(scored_listings)} deals found")
@@ -595,10 +601,7 @@ def create_search_stream(request, debug_mode: bool):
             cancelled.set()
             if thread_id is not None:
                 force_close_active_scraper(thread_id)
-            try:
-                force_close_all_active_ebay_scrapers()
-            except NameError:
-                pass
+            _force_close_ebay_pool()
             raise
         except Exception as e:
             log_error_short(logger, f"Error in event generator: {e}")
