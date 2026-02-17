@@ -12,7 +12,7 @@ services:
       - "3000:3000"
       - "8000:8000"
       - "9222:9222"  # FB Chromium remote debugging (debug mode)
-      - "9224:9224"  # eBay Chromium remote debugging (debug mode)
+      - "9230-9234:9230-9234"  # eBay worker browsers (debug mode, 5 workers)
     env_file:
       - .env
     environment:

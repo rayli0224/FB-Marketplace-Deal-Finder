@@ -48,6 +48,7 @@ type SSEDispatchHandlers = {
   onDebugEbayQueryGenerated?: (entry: DebugEbayQueryEntry) => void;
   onDebugEbayQueryFinished?: (entry: { fbListingId: string; listingIndex: number; failed?: boolean }) => void;
   onDebugLog?: (entry: DebugLogEntry) => void;
+  onInspectorUrl?: (url: string, source?: string) => void;
 };
 
 /**
@@ -79,6 +80,7 @@ function dispatchSSEEvent(payloadString: string, handlers: SSEDispatchHandlers):
     level?: string;
     message?: string;
     url?: string;
+    source?: string;
   };
   if (data.type === "auth_error") {
     handlers.handleAuthError();
@@ -157,7 +159,7 @@ function dispatchSSEEvent(payloadString: string, handlers: SSEDispatchHandlers):
   } else if (data.type === "debug_log" && data.level != null && data.message != null) {
     handlers.onDebugLog?.({ level: data.level, message: data.message, timestampMs: Date.now() });
   } else if (data.type === "inspector_url" && typeof data.url === "string") {
-    window.open(data.url, "_blank");
+    handlers.onInspectorUrl?.(data.url, data.source as string | undefined);
   }
 }
 
@@ -219,6 +221,7 @@ export default function Home() {
   const isSearchingRef = useRef<boolean>(false);
   const abortControllerRef = useRef<AbortController | null>(null);
   const readerRef = useRef<ReadableStreamDefaultReader<Uint8Array> | null>(null);
+  const fbInspectorOpenedRef = useRef(false);
 
   /**
    * Generates a CSV blob from listings data with pirate-themed column headers.
@@ -504,6 +507,15 @@ export default function Home() {
         onDebugEbayQueryGenerated: onDebugEbayQueryGenerated,
         onDebugEbayQueryFinished: onDebugEbayQueryFinished,
         onDebugLog: (entry) => setDebugLogs((prev: DebugLogEntry[]) => [...prev, entry]),
+        onInspectorUrl: (url: string, source?: string) => {
+          if (source === "fb" && fbInspectorOpenedRef.current) {
+            return;
+          }
+          window.open(url, "_blank");
+          if (source === "fb") {
+            fbInspectorOpenedRef.current = true;
+          }
+        },
       };
 
       try {
@@ -571,7 +583,8 @@ export default function Home() {
 
     isSearchingRef.current = true;
     setIsSearching(true);
-    
+    fbInspectorOpenedRef.current = false;
+
     // Create new AbortController for this search
     abortControllerRef.current = new AbortController();
     const abortSignal = abortControllerRef.current.signal;
