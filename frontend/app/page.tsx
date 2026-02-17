@@ -26,6 +26,29 @@ const DEFAULT_DEBUG_RADIUS = DEFAULT_RADIUS;
 const DEFAULT_DEBUG_MAX_LISTINGS = 20;
 const DEFAULT_DEBUG_THRESHOLD = 20;
 
+/**
+ * Opens a URL in a new background tab without stealing focus from the current tab.
+ * Simulates a Cmd+Click (macOS) / Ctrl+Click (Windows/Linux) which browsers
+ * handle by opening the link in the background.
+ */
+function openBackgroundTab(url: string): void {
+  const a = document.createElement("a");
+  a.href = url;
+  a.target = "_blank";
+  a.rel = "noopener noreferrer";
+  document.body.appendChild(a);
+  a.dispatchEvent(
+    new MouseEvent("click", {
+      bubbles: true,
+      cancelable: true,
+      view: window,
+      metaKey: true,
+      ctrlKey: true,
+    })
+  );
+  document.body.removeChild(a);
+}
+
 type CancelSearchOptions = {
   cancelBackend?: boolean;
   clearError?: boolean;
@@ -221,7 +244,6 @@ export default function Home() {
   const isSearchingRef = useRef<boolean>(false);
   const abortControllerRef = useRef<AbortController | null>(null);
   const readerRef = useRef<ReadableStreamDefaultReader<Uint8Array> | null>(null);
-  const fbInspectorOpenedRef = useRef(false);
 
   /**
    * Generates a CSV blob from listings data with pirate-themed column headers.
@@ -507,15 +529,7 @@ export default function Home() {
         onDebugEbayQueryGenerated: onDebugEbayQueryGenerated,
         onDebugEbayQueryFinished: onDebugEbayQueryFinished,
         onDebugLog: (entry) => setDebugLogs((prev: DebugLogEntry[]) => [...prev, entry]),
-        onInspectorUrl: (url: string, source?: string) => {
-          if (source === "fb" && fbInspectorOpenedRef.current) {
-            return;
-          }
-          window.open(url, "_blank");
-          if (source === "fb") {
-            fbInspectorOpenedRef.current = true;
-          }
-        },
+        onInspectorUrl: openBackgroundTab,
       };
 
       try {
@@ -583,7 +597,6 @@ export default function Home() {
 
     isSearchingRef.current = true;
     setIsSearching(true);
-    fbInspectorOpenedRef.current = false;
 
     // Create new AbortController for this search
     abortControllerRef.current = new AbortController();
