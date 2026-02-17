@@ -22,7 +22,7 @@ from dataclasses import dataclass
 from typing import Optional, List, Callable, Tuple
 from playwright.sync_api import sync_playwright, Browser, Page, BrowserContext, TimeoutError as PlaywrightTimeoutError
 from src.scrapers.utils import random_delay, parse_price, is_valid_listing_price
-from src.utils.colored_logger import setup_colored_logger, log_data_block, log_listing_box_sep, set_step_indent, clear_step_indent, wait_status
+from src.utils.colored_logger import setup_colored_logger, log_data_block, log_listing_box_sep, set_step_indent, clear_step_indent
 from src.utils.debug_chrome_proxy import start_debug_proxy
 
 logger = setup_colored_logger("fb_scraper")
@@ -228,12 +228,10 @@ class FBMarketplaceScraper:
             f"Chrome debug port ({CHROME_DEBUG_PORT}) did not respond within {timeout}s"
         )
 
-    def _log_devtools_url(self, on_inspector_url: Optional[Callable[[str], None]] = None):
-        """Log the DevTools inspector URL and optionally invoke a callback with it.
+    def _notify_inspector_url(self, on_inspector_url: Optional[Callable[[str], None]] = None):
+        """Query Chrome's debug endpoint for the inspector URL and invoke callback if provided.
 
-        Queries Chrome's debug endpoint for the list of open pages, picks the first
-        one, and builds the inspector URL. Logs it and calls on_inspector_url if
-        provided (e.g. so the frontend can open it in the user's browser).
+        The frontend uses the URL to open the browser in a new tab.
         """
         fallback_url = f"http://localhost:{PROXY_DEBUG_PORT}"
         try:
@@ -245,13 +243,13 @@ class FBMarketplaceScraper:
             if page:
                 page_id = page.get("id", "")
                 url = _INSPECTOR_URL_TEMPLATE.format(port=PROXY_DEBUG_PORT, page_id=page_id)
-                logger.info(f"🌐 Inspect browser: {url}")
                 if on_inspector_url:
                     on_inspector_url(url)
-            else:
-                logger.info(f"🌐 Browser live view: {fallback_url}")
+            elif on_inspector_url:
+                on_inspector_url(fallback_url)
         except Exception:
-            logger.info(f"🌐 Browser live view: {fallback_url}")
+            if on_inspector_url:
+                on_inspector_url(fallback_url)
 
     def _create_browser(self):
         """Create a Playwright browser with stealth settings and load cookies.
@@ -337,7 +335,7 @@ class FBMarketplaceScraper:
         
         if not self.headless:
             on_inspector_url = getattr(self, "_on_inspector_url", None)
-            self._log_devtools_url(on_inspector_url=on_inspector_url)
+            self._notify_inspector_url(on_inspector_url=on_inspector_url)
     
     def _check_logged_in(self):
         """
@@ -1222,37 +1220,23 @@ class FBMarketplaceScraper:
                 descriptions="on" if extract_descriptions else "off"
             )
         else:
-            log_data_block(
-                logger, "FB Marketplace search",
-                query=query, location=location_info, radius=f"{radius}mi", max=max_listings,
-                descriptions="on" if extract_descriptions else "off"
-            )
-        if not extract_descriptions:
-            logger.info("ℹ️ Descriptions toggled off — not fetching listing descriptions")
+            pass
         try:
-            with wait_status(logger, "Facebook Marketplace search"):
-                self._check_cancelled()
-                
-                if not self.browser:
-                    self._create_browser()
-                
-                self._check_cancelled()
-                
-                self._goto_search_results(query)
-                
-                self._check_cancelled()
-                
-                self._set_location(zip_code, radius)
-                
-                self._check_cancelled()
-                
-                listings = self._extract_listings(
-                    max_listings=max_listings,
-                    on_listing_found=on_listing_found,
-                    on_listing_filtered=on_listing_filtered,
-                    listing_filter=listing_filter,
-                    extract_descriptions=extract_descriptions,
-                )
+            self._check_cancelled()
+            if not self.browser:
+                self._create_browser()
+            self._check_cancelled()
+            self._goto_search_results(query)
+            self._check_cancelled()
+            self._set_location(zip_code, radius)
+            self._check_cancelled()
+            listings = self._extract_listings(
+                max_listings=max_listings,
+                on_listing_found=on_listing_found,
+                on_listing_filtered=on_listing_filtered,
+                listing_filter=listing_filter,
+                extract_descriptions=extract_descriptions,
+            )
             return listings
         except SearchCancelledError:
             return []

@@ -40,7 +40,6 @@ logger = setup_colored_logger("ebay_result_filter")
 
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 BATCH_FILTER_MAX_OUTPUT_TOKENS = 3000
-LISTING_TITLE_LOG_PREVIEW_LEN = 60
 
 
 def _format_ebay_batch(items: List[dict]) -> str:
@@ -272,26 +271,6 @@ async def _filter_ebay_results_async(
         for idx in all_kept_indices
         if 1 <= idx <= len(ebay_items)
     ]
-
-    listing_title_preview = (listing.title or "").strip()
-    if len(listing_title_preview) > LISTING_TITLE_LOG_PREVIEW_LEN:
-        listing_title_preview = listing_title_preview[:LISTING_TITLE_LOG_PREVIEW_LEN] + ".."
-    listing_prefix = f"[{listing_title_preview}] " if listing_title_preview else ""
-
-    reject_count = len(ebay_items) - len(filtered_items)
-    if reject_count > 0 or maybe_indices:
-        logger.debug(
-            f"{listing_prefix}Filter results: {len(accept_indices)} accept, "
-            f"{len(maybe_indices)} maybe, {reject_count} reject"
-        )
-    else:
-        logger.debug(f"{listing_prefix}All listings accepted")
-
-    if reject_count > 0 and decisions:
-        logger.debug(f"{listing_prefix}Why items were rejected (first 3):")
-        rejected = [(idx, d) for idx, d in decisions.items() if d["decision"] == "reject"]
-        for idx, d in rejected[:3]:
-            logger.debug(f"   {idx}: {d['reason']}")
 
     return (accept_indices, maybe_indices, filtered_items, decisions)
 

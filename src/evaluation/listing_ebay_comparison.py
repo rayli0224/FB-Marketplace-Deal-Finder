@@ -16,7 +16,7 @@ from src.scrapers.ebay_scraper_v2 import get_market_price, DEFAULT_EBAY_ITEMS, P
 from src.evaluation.deal_calculator import calculate_deal_score
 from src.evaluation.ebay_query_generator import generate_ebay_query_for_listing
 from src.evaluation.ebay_result_filter import filter_ebay_results_with_openai
-from src.utils.colored_logger import setup_colored_logger, log_data_block, log_listing_box_sep, log_warning, set_step_indent, clear_step_indent, wait_status
+from src.utils.colored_logger import setup_colored_logger, log_warning
 from src.utils.currency import convert_fb_price_to_usd
 
 logger = setup_colored_logger("listing_ebay_comparison")
@@ -81,15 +81,6 @@ def compare_listing_to_ebay(
     Returns listing dict with dealScore. When eBay stats are missing or calculation
     fails, dealScore is None so the UI shows "--".
     """
-    if listing_index is not None and total_listings is not None:
-        progress = f"[{listing_index}/{total_listings}] "
-    elif listing_index is not None:
-        progress = f"[{listing_index}/n] "
-    else:
-        progress = ""
-    log_listing_box_sep(logger)
-    logger.info(f"{progress}FB listing: {listing.title}")
-    set_step_indent("  ")
     try:
         return _compare_listing_to_ebay_inner(
             listing,
@@ -107,9 +98,6 @@ def compare_listing_to_ebay(
     except Exception as e:
         log_warning(logger, f"Error comparing listing to eBay: {e}")
         return _listing_result(listing, None, no_comp_reason="Unable to generate eBay comparisons")
-    finally:
-        clear_step_indent()
-        log_listing_box_sep(logger)
 
 
 def _compare_listing_to_ebay_inner(
@@ -124,18 +112,9 @@ def _compare_listing_to_ebay_inner(
     on_query_generated: Optional[Callable[[str], None]] = None,
 ) -> Dict:
     """Inner comparison logic. Caller handles exceptions and returns fallback result."""
-    log_data_block(logger, "Data", price=listing.price, location=listing.location, url=listing.url)
-    if listing.description:
-        logger.debug(f"  Description: {listing.description}")
-
-    # Convert FB price to USD for eBay comparison (eBay prices are always in USD)
     fb_price_usd = convert_fb_price_to_usd(listing.price, listing.currency)
-    if listing.currency == "£":
-        logger.info(f"Converting GBP to USD: {listing.currency}{listing.price:.2f} → ${fb_price_usd:.2f}")
 
-    logger.info("💡 Preparing eBay search")
-    with wait_status(logger, "eBay search"):
-        query_result = generate_ebay_query_for_listing(listing, original_query)
+    query_result = generate_ebay_query_for_listing(listing, original_query)
     if query_result is None:
         log_warning(logger, "Could not prepare search — skipping deal score")
         return _listing_result(listing, None, no_comp_reason="Could not prepare search")
@@ -145,45 +124,38 @@ def _compare_listing_to_ebay_inner(
     if on_query_generated is not None:
         on_query_generated(enhanced_query)
 
-    logger.info("💰 Searching eBay for similar items")
-    with wait_status(logger, "eBay prices"):
-        cache_key = (enhanced_query.strip().lower(), n_items)
-        ebay_stats = None
-        cache_used = False
-        if market_price_cache is not None and market_price_cache_lock is not None:
-            with market_price_cache_lock:
-                cached_stats = market_price_cache.get(cache_key)
-            if cached_stats is not None:
-                ebay_stats = _clone_price_stats(cached_stats)
-                cache_used = True
+    cache_key = (enhanced_query.strip().lower(), n_items)
+    ebay_stats = None
+    cache_used = False
+    if market_price_cache is not None and market_price_cache_lock is not None:
+        with market_price_cache_lock:
+            cached_stats = market_price_cache.get(cache_key)
+        if cached_stats is not None:
+            ebay_stats = _clone_price_stats(cached_stats)
+            cache_used = True
 
-        if cache_used:
-            logger.info("Using saved eBay prices for matching search")
-        else:
-            fetched_stats = get_market_price(
+    if not cache_used:
+        fetched_stats = get_market_price(
                 search_term=enhanced_query,
                 n_items=n_items,
                 scraper=ebay_scraper,
                 cancelled=cancelled,
             )
-            ebay_stats = _clone_price_stats(fetched_stats) if fetched_stats is not None else None
-            if market_price_cache is not None and market_price_cache_lock is not None and fetched_stats is not None:
-                with market_price_cache_lock:
-                    market_price_cache[cache_key] = _clone_price_stats(fetched_stats)
+        ebay_stats = _clone_price_stats(fetched_stats) if fetched_stats is not None else None
+        if market_price_cache is not None and market_price_cache_lock is not None and fetched_stats is not None:
+            with market_price_cache_lock:
+                market_price_cache[cache_key] = _clone_price_stats(fetched_stats)
 
     if not ebay_stats:
         log_warning(logger, "No eBay results — skipping deal score")
         return _listing_result(listing, None, no_comp_reason="No similar items found on eBay")
     if ebay_stats.sample_size < 3:
         log_warning(logger, f"Only {ebay_stats.sample_size} similar listing(s) — small sample")
-    logger.info(f"📋 {ebay_stats.sample_size} similar listings on eBay (avg ${ebay_stats.average:.2f})")
 
-    logger.info("🔍 Keeping only true matches")
     ebay_items = getattr(ebay_stats, "item_summaries", None)
     all_items_with_filter_flag = None
     if ebay_items:
-        with wait_status(logger, "matching listings"):
-            filter_result = filter_ebay_results_with_openai(listing, ebay_items, cancelled=cancelled)
+        filter_result = filter_ebay_results_with_openai(listing, ebay_items, cancelled=cancelled)
         if filter_result is not None and asyncio.iscoroutine(filter_result):
             log_warning(logger, "Filter returned coroutine instead of result — using all listings")
             filter_result = None
@@ -232,7 +204,6 @@ def _compare_listing_to_ebay_inner(
                     ebay_stats.average = weighted_sum / total_weight
                     ebay_stats.sample_size = len(filtered_items)
                     ebay_stats.item_summaries = all_items_with_filter_flag
-                    logger.info(f"📋 {len(accept_indices)} accept + {len(maybe_indices)} maybe (weighted avg ${ebay_stats.average:.2f})")
                 elif total_weight > 0:
                     ebay_stats.raw_prices = sorted(filtered_prices)
                     ebay_stats.average = weighted_sum / total_weight
@@ -253,10 +224,8 @@ def _compare_listing_to_ebay_inner(
                         no_comp_reason="No comparable eBay listings matched this item",
                     )
             else:
-                logger.debug("All items deemed comparable")
                 ebay_stats.item_summaries = all_items_with_filter_flag
         else:
-            logger.debug("Filtering unavailable (OpenAI not configured) - using original results")
             if ebay_items:
                 all_items_with_filter_flag = [
                     {**item, "filtered": False, "filterStatus": "accept"}
@@ -264,7 +233,6 @@ def _compare_listing_to_ebay_inner(
                 ]
                 ebay_stats.item_summaries = all_items_with_filter_flag
 
-    logger.info("📊 Comparing price")
     deal_score = calculate_deal_score(fb_price_usd, ebay_stats)
     comp_items = all_items_with_filter_flag if all_items_with_filter_flag is not None else getattr(ebay_stats, "item_summaries", None)
 
@@ -279,15 +247,6 @@ def _compare_listing_to_ebay_inner(
             comp_items=comp_items,
             no_comp_reason="Not enough comparable listings to calculate price",
         )
-
-    logger.info(f"📊 {deal_score:.1f}% below typical eBay price")
-    if deal_score >= threshold:
-        if listing.currency == "£":
-            logger.info(f"✅ Good deal: {deal_score:.1f}% (FB {listing.currency}{listing.price:.2f} (${fb_price_usd:.2f} USD) vs eBay avg ${ebay_stats.average:.2f})")
-        else:
-            logger.info(f"✅ Good deal: {deal_score:.1f}% (FB {listing.currency}{listing.price:.2f} vs eBay avg ${ebay_stats.average:.2f})")
-    else:
-        logger.info(f"⚠️ Not a big enough deal (under {threshold}% savings)")
 
     return _listing_result(
         listing,

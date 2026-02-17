@@ -115,8 +115,11 @@ class EbaySoldScraper:
             f"Chrome debug port ({EBAY_CHROME_DEBUG_PORT}) did not respond within {timeout}s"
         )
 
-    def _log_devtools_url(self):
-        """Log the DevTools inspector URL when browser is created in headed mode."""
+    def _notify_inspector_url(self):
+        """Query Chrome's debug endpoint for the inspector URL and invoke callback if provided.
+
+        The frontend uses the URL to open the browser in a new tab.
+        """
         fallback_url = f"http://localhost:{EBAY_PROXY_DEBUG_PORT}"
         try:
             with urllib.request.urlopen(
@@ -131,15 +134,13 @@ class EbaySoldScraper:
                 url = _INSPECTOR_URL_TEMPLATE.format(
                     port=EBAY_PROXY_DEBUG_PORT, page_id=page_id
                 )
-                logger.info(f"🌐 eBay browser inspect: {url}")
                 if self._on_inspector_url:
                     self._on_inspector_url(url)
-            else:
-                logger.info(f"🌐 eBay browser live view: {fallback_url}")
-                if self._on_inspector_url:
-                    self._on_inspector_url(fallback_url)
+            elif self._on_inspector_url:
+                self._on_inspector_url(fallback_url)
         except Exception:
-            logger.info(f"🌐 eBay browser live view: {fallback_url}")
+            if self._on_inspector_url:
+                self._on_inspector_url(fallback_url)
 
     def _create_browser(self):
         """Create Playwright browser via subprocess, CDP connect, debug proxy in headed mode.
@@ -219,7 +220,7 @@ class EbaySoldScraper:
         self.page = self.context.new_page()
         self._check_cancelled()
         if not self.headless:
-            self._log_devtools_url()
+            self._notify_inspector_url()
 
     def search_sold_listings(
         self, search_term: str, max_items: int = 50
