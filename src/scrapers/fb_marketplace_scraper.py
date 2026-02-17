@@ -228,12 +228,10 @@ class FBMarketplaceScraper:
             f"Chrome debug port ({CHROME_DEBUG_PORT}) did not respond within {timeout}s"
         )
 
-    def _log_devtools_url(self, on_inspector_url: Optional[Callable[[str], None]] = None):
-        """Log the DevTools inspector URL and optionally invoke a callback with it.
+    def _notify_inspector_url(self, on_inspector_url: Optional[Callable[[str], None]] = None):
+        """Query Chrome's debug endpoint for the inspector URL and invoke callback if provided.
 
-        Queries Chrome's debug endpoint for the list of open pages, picks the first
-        one, and builds the inspector URL. Logs it and calls on_inspector_url if
-        provided (e.g. so the frontend can open it in the user's browser).
+        The frontend uses the URL to open the browser in a new tab.
         """
         fallback_url = f"http://localhost:{PROXY_DEBUG_PORT}"
         try:
@@ -245,13 +243,13 @@ class FBMarketplaceScraper:
             if page:
                 page_id = page.get("id", "")
                 url = _INSPECTOR_URL_TEMPLATE.format(port=PROXY_DEBUG_PORT, page_id=page_id)
-                logger.info(f"🌐 Inspect browser: {url}")
                 if on_inspector_url:
                     on_inspector_url(url)
-            else:
-                logger.info(f"🌐 Browser live view: {fallback_url}")
+            elif on_inspector_url:
+                on_inspector_url(fallback_url)
         except Exception:
-            logger.info(f"🌐 Browser live view: {fallback_url}")
+            if on_inspector_url:
+                on_inspector_url(fallback_url)
 
     def _create_browser(self):
         """Create a Playwright browser with stealth settings and load cookies.
@@ -337,7 +335,7 @@ class FBMarketplaceScraper:
         
         if not self.headless:
             on_inspector_url = getattr(self, "_on_inspector_url", None)
-            self._log_devtools_url(on_inspector_url=on_inspector_url)
+            self._notify_inspector_url(on_inspector_url=on_inspector_url)
     
     def _check_logged_in(self):
         """
@@ -351,7 +349,6 @@ class FBMarketplaceScraper:
         """
         login_form = self.page.locator("form[action*='login']").first
         if login_form.is_visible(timeout=500):
-            logger.warning("🔒 Found a Facebook login prompt — trying to continue")
             continue_button = self.page.get_by_text(
                 re.compile(r"^Continue as", re.IGNORECASE)
             ).first
@@ -364,7 +361,6 @@ class FBMarketplaceScraper:
                 self.page.wait_for_load_state("domcontentloaded", timeout=CONTINUE_AS_WAIT_TIMEOUT_MS)
                 logger.info("✅ Facebook login confirmation accepted")
             except Exception as e:
-                logger.warning("🔒 Could not continue past the Facebook login prompt")
                 logger.debug("Continue-as click failure details: %s", e)
 
         self._check_cancelled()
@@ -1232,20 +1228,13 @@ class FBMarketplaceScraper:
         try:
             with wait_status(logger, "Facebook Marketplace search"):
                 self._check_cancelled()
-                
                 if not self.browser:
                     self._create_browser()
-                
                 self._check_cancelled()
-                
                 self._goto_search_results(query)
-                
                 self._check_cancelled()
-                
                 self._set_location(zip_code, radius)
-                
                 self._check_cancelled()
-                
                 listings = self._extract_listings(
                     max_listings=max_listings,
                     on_listing_found=on_listing_found,
@@ -1253,7 +1242,7 @@ class FBMarketplaceScraper:
                     listing_filter=listing_filter,
                     extract_descriptions=extract_descriptions,
                 )
-            return listings
+                return listings
         except SearchCancelledError:
             return []
         except Exception:

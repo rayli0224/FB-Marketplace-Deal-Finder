@@ -287,12 +287,6 @@ async def _filter_ebay_results_async(
     else:
         logger.debug(f"{listing_prefix}All listings accepted")
 
-    if reject_count > 0 and decisions:
-        logger.debug(f"{listing_prefix}Why items were rejected (first 3):")
-        rejected = [(idx, d) for idx, d in decisions.items() if d["decision"] == "reject"]
-        for idx, d in rejected[:3]:
-            logger.debug(f"   {idx}: {d['reason']}")
-
     return (accept_indices, maybe_indices, filtered_items, decisions)
 
 

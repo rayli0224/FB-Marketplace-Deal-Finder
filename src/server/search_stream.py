@@ -155,9 +155,6 @@ def create_search_stream(request, debug_mode: bool):
         for name in _DEBUG_LOG_LOGGER_NAMES:
             logging.getLogger(name).addHandler(debug_log_handler)
 
-    location_info_req = request.zipCode
-    log_step_sep(logger, f"Search request — query='{request.query}', location={location_info_req}, radius={request.radius}mi")
-
     filtered_count_holder = [0]
     fb_listing_id_counter = 0
 
