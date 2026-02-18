@@ -385,6 +385,13 @@ def create_search_stream(request, debug_mode: bool):
                     """
                     worker_thread_id = threading.get_ident()
                     listing_label = f"[{index}/{len(fb_evaluable_listings)}] FB listing: {listing.title}"
+                    event_queue.put({
+                        "type": "current_item",
+                        "listingIndex": index,
+                        "fbListingId": fb_listing_id,
+                        "fbTitle": listing.title,
+                        "totalListings": len(fb_evaluable_listings),
+                    })
                     if debug_mode:
                         event_queue.put({
                             "type": "debug_ebay_query_start",

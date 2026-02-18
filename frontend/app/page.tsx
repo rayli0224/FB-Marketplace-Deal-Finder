@@ -12,7 +12,6 @@ import { SearchErrorState } from "@/components/results/SearchErrorState";
 import { SearchResultsTable } from "@/components/results/SearchResultsTable";
 import { CookieSetupGuide } from "@/components/auth/CookieSetupGuide";
 import type { Listing } from "@/components/results/SearchResultsTable";
-import { DebugPanel } from "@/components/debug/DebugPanel";
 import { FloatingLogPanel } from "@/components/debug/FloatingLogPanel";
 import type { DebugFacebookListing, DebugEbayQueryEntry, DebugLogEntry } from "@/components/debug/DebugPanel";
 import type { DebugSearchParams } from "@/components/debug/DebugSearchParams";
@@ -62,6 +61,7 @@ type SSEDispatchHandlers = {
   handleAuthError: () => void;
   handleLocationError: (message: string) => void;
   setEvaluatedCount: (n: number) => void;
+  onCurrentItem?: (entry: { listingIndex: number; fbTitle: string; totalListings: number }) => void;
   onListingResult?: (listing: Listing, evaluatedCount: number, fbListingId?: string) => void;
   onFilteredFacebookListing?: (listing: DebugFacebookListing) => void;
   onDebugMode?: (params?: DebugSearchParams) => void;
@@ -99,6 +99,7 @@ function dispatchSSEEvent(payloadString: string, handlers: SSEDispatchHandlers):
     maxListings?: number;
     extractDescriptions?: boolean;
     fbTitle?: string;
+    totalListings?: number;
     ebayQuery?: string;
     failed?: boolean;
     level?: string;
@@ -116,6 +117,17 @@ function dispatchSSEEvent(payloadString: string, handlers: SSEDispatchHandlers):
     handlers.onFilteredFacebookListing?.(data.listing as DebugFacebookListing);
   } else if (data.type === "progress" && typeof data.scannedCount === "number") {
     handlers.handleProgressUpdate(data.scannedCount);
+  } else if (
+    data.type === "current_item"
+    && typeof data.listingIndex === "number"
+    && typeof data.fbTitle === "string"
+    && typeof data.totalListings === "number"
+  ) {
+    handlers.onCurrentItem?.({
+      listingIndex: data.listingIndex,
+      fbTitle: data.fbTitle,
+      totalListings: data.totalListings,
+    });
   } else if (data.type === "listing_result" && data.listing != null && typeof data.evaluatedCount === "number") {
     handlers.onListingResult?.(data.listing, data.evaluatedCount, data.fbListingId);
   } else if (data.type === "listing_processed" && typeof data.evaluatedCount === "number") {
@@ -232,12 +244,12 @@ export default function Home() {
   const [filteredCount, setFilteredCount] = useState(0);
   const [evaluatedCount, setEvaluatedCount] = useState(0);
   const [maxListings, setMaxListings] = useState<number>(20);
+  const [currentItem, setCurrentItem] = useState<{ listingIndex: number; fbTitle: string; totalListings: number } | null>(null);
   const [csvBlob, setCsvBlob] = useState<Blob | null>(null);
   const [listings, setListings] = useState<Listing[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [phase, setPhase] = useState<SearchPhase>("scraping");
   const [threshold, setThreshold] = useState<number>(0);
-  const [debugEnabled, setDebugEnabled] = useState(false);
   const [debugSearchParams, setDebugSearchParams] = useState<DebugSearchParams | null>(null);
   const [debugFacebookListings, setDebugFacebookListings] = useState<DebugFacebookListing[]>([]);
   const [filteredOutListings, setFilteredOutListings] = useState<DebugFacebookListing[]>([]);
@@ -300,6 +312,13 @@ export default function Home() {
   }, []);
 
   /**
+   * Updates the currently processing item from an SSE current_item event.
+   */
+  const handleCurrentItem = useCallback((entry: { listingIndex: number; fbTitle: string; totalListings: number }) => {
+    setCurrentItem(entry);
+  }, []);
+
+  /**
    * Handles an auth_error event from the backend, indicating the Facebook session has expired.
    * Resets the search state and sends the user back to the cookie setup guide so they can
    * re-connect their Facebook account.
@@ -312,6 +331,8 @@ export default function Home() {
     setFilteredOutListings([]);
     setEvaluatedCount(0);
     setPhase("scraping");
+    setCurrentItem(null);
+    setDebugLogs([]);
     setError("Your Facebook session has expired. Please re-connect your account to keep searching.");
     setAppState("setup");
   }, []);
@@ -358,13 +379,6 @@ export default function Home() {
       abortControllerRef.current = null;
     }
     
-    // Keep logs from this run and append a cancellation message
-    if (addCancelLog) {
-      setDebugLogs((prev: DebugLogEntry[]) => [
-        ...prev,
-        { level: "WARNING", message: "Search cancelled by user", timestampMs: Date.now() },
-      ]);
-    }
     
     isSearchingRef.current = false;
     setIsSearching(false);
@@ -374,6 +388,8 @@ export default function Home() {
     setFilteredOutListings([]);
     setEvaluatedCount(0);
     setPhase("scraping");
+    setCurrentItem(null);
+    setDebugLogs([]);
     if (clearError) {
       setError(null);
     }
@@ -387,6 +403,7 @@ export default function Home() {
     setFilteredCount(0);
     setEvaluatedCount(0);
     setPhase("scraping");
+    setCurrentItem(null);
     setAppState("form");
     setError(message);
     // The backend already reported a terminal location error, so only cancel local stream.
@@ -519,10 +536,10 @@ export default function Home() {
         handleAuthError,
         handleLocationError,
         setEvaluatedCount,
+        onCurrentItem: handleCurrentItem,
         onListingResult,
         onFilteredFacebookListing,
         onDebugMode: (params) => {
-          setDebugEnabled(true);
           if (params) setDebugSearchParams(params);
         },
         onDebugFacebook: setDebugFacebookListings,
@@ -585,7 +602,7 @@ export default function Home() {
         reader.releaseLock();
       }
     },
-    [handlePhaseUpdate, handleProgressUpdate, handleCompletion, handleAuthError, handleLocationError, onListingResult, onFilteredFacebookListing, onDebugEbayQueryStart, onDebugEbayQueryGenerated, onDebugEbayQueryFinished]
+    [handlePhaseUpdate, handleProgressUpdate, handleCompletion, handleAuthError, handleLocationError, handleCurrentItem, onListingResult, onFilteredFacebookListing, onDebugEbayQueryStart, onDebugEbayQueryGenerated, onDebugEbayQueryFinished]
   );
 
   /**
@@ -683,6 +700,7 @@ export default function Home() {
     setListings([]);
     setError(null);
     setPhase("scraping");
+    setCurrentItem(null);
     setThreshold(Number(data.threshold) || 0);
     setDebugSearchParams(null);
     setDebugFacebookListings([]);
@@ -709,7 +727,7 @@ export default function Home() {
     setCsvBlob(null);
     setListings([]);
     setError(null);
-    setDebugEnabled(false);
+    setCurrentItem(null);
     setDebugSearchParams(null);
     setDebugFacebookListings([]);
     setDebugEbayQueries([]);
@@ -775,6 +793,7 @@ export default function Home() {
                   scannedCount={scannedCount}
                   evaluatedCount={evaluatedCount}
                   maxListings={maxListings}
+                  currentItem={currentItem}
                   onCancel={cancelSearch}
                 />
                 {phase === "evaluating" && (listings.length > 0 || filteredOutListings.length > 0) && (
@@ -786,6 +805,10 @@ export default function Home() {
                     onDownloadCSV={downloadCSV}
                     onReset={handleReset}
                     isLoading={true}
+                    currentItem={currentItem}
+                    searchParams={debugSearchParams}
+                    facebookListings={debugFacebookListings}
+                    ebayQueries={debugEbayQueries}
                   />
                 )}
               </div>
@@ -799,6 +822,9 @@ export default function Home() {
                 filteredOutListings={filteredOutListings}
                 onDownloadCSV={downloadCSV}
                 onReset={handleReset}
+                searchParams={debugSearchParams}
+                facebookListings={debugFacebookListings}
+                ebayQueries={debugEbayQueries}
               />
             )}
 
@@ -808,15 +834,7 @@ export default function Home() {
           </div>
         </div>
 
-        {debugEnabled && (appState === "loading" || appState === "done") && (
-          <DebugPanel
-            searchParams={debugSearchParams}
-            facebookListings={debugFacebookListings}
-            ebayQueries={debugEbayQueries}
-          />
-        )}
-
-        <FloatingLogPanel logs={debugLogs} debugEnabled={debugEnabled} />
+        <FloatingLogPanel logs={debugLogs} debugEnabled={debugSearchParams !== null} />
 
         <AppFooter />
       </div>
