@@ -58,12 +58,12 @@ type CancelSearchOptions = {
 type SSEDispatchHandlers = {
   handlePhaseUpdate: (phase: SearchPhase) => void;
   handleProgressUpdate: (scannedCount: number) => void;
-  handleFilteredUpdate?: (filteredCount: number) => void;
-  handleCompletion: (data: { scannedCount: number; filteredCount?: number; evaluatedCount: number; listings: Listing[]; threshold?: number; averageConfidence?: number | null }) => void;
+  handleCompletion: (data: { scannedCount: number; filteredCount?: number; filteredOutListings?: DebugFacebookListing[]; evaluatedCount: number; listings: Listing[]; threshold?: number; averageConfidence?: number | null }) => void;
   handleAuthError: () => void;
   handleLocationError: (message: string) => void;
   setEvaluatedCount: (n: number) => void;
   onListingResult?: (listing: Listing, evaluatedCount: number, fbListingId?: string) => void;
+  onFilteredFacebookListing?: (listing: DebugFacebookListing) => void;
   onDebugMode?: (params?: DebugSearchParams) => void;
   onDebugFacebook?: (listings: DebugFacebookListing[]) => void;
   onDebugFacebookListing?: (listing: DebugFacebookListing) => void;
@@ -84,6 +84,7 @@ function dispatchSSEEvent(payloadString: string, handlers: SSEDispatchHandlers):
     phase?: SearchPhase;
     scannedCount?: number;
     filteredCount?: number;
+    filteredOutListings?: DebugFacebookListing[];
     evaluatedCount?: number;
     listing?: Listing;
     fbListingId?: string;
@@ -111,8 +112,8 @@ function dispatchSSEEvent(payloadString: string, handlers: SSEDispatchHandlers):
     handlers.handleLocationError(data.message || "Location not found");
   } else if (data.type === "phase" && data.phase != null) {
     handlers.handlePhaseUpdate(data.phase);
-  } else if (data.type === "filtered" && typeof data.filteredCount === "number") {
-    handlers.handleFilteredUpdate?.(data.filteredCount);
+  } else if (data.type === "filtered_facebook_listing" && data.listing) {
+    handlers.onFilteredFacebookListing?.(data.listing as DebugFacebookListing);
   } else if (data.type === "progress" && typeof data.scannedCount === "number") {
     handlers.handleProgressUpdate(data.scannedCount);
   } else if (data.type === "listing_result" && data.listing != null && typeof data.evaluatedCount === "number") {
@@ -123,6 +124,7 @@ function dispatchSSEEvent(payloadString: string, handlers: SSEDispatchHandlers):
     handlers.handleCompletion({
       scannedCount: data.scannedCount ?? 0,
       filteredCount: data.filteredCount ?? 0,
+      filteredOutListings: (data.filteredOutListings ?? []) as DebugFacebookListing[],
       evaluatedCount: data.evaluatedCount ?? 0,
       listings: data.listings as Listing[],
       threshold: data.threshold,
@@ -238,6 +240,7 @@ export default function Home() {
   const [debugEnabled, setDebugEnabled] = useState(false);
   const [debugSearchParams, setDebugSearchParams] = useState<DebugSearchParams | null>(null);
   const [debugFacebookListings, setDebugFacebookListings] = useState<DebugFacebookListing[]>([]);
+  const [filteredOutListings, setFilteredOutListings] = useState<DebugFacebookListing[]>([]);
   const [debugEbayQueries, setDebugEbayQueries] = useState<DebugEbayQueryEntry[]>([]);
   const [debugLogs, setDebugLogs] = useState<DebugLogEntry[]>([]);
   const [isSearching, setIsSearching] = useState<boolean>(false);
@@ -297,13 +300,6 @@ export default function Home() {
   }, []);
 
   /**
-   * Updates the filtered count when listings are filtered for suspicious prices.
-   */
-  const handleFilteredUpdate = useCallback((filteredCount: number) => {
-    setFilteredCount(filteredCount);
-  }, []);
-
-  /**
    * Handles an auth_error event from the backend, indicating the Facebook session has expired.
    * Resets the search state and sends the user back to the cookie setup guide so they can
    * re-connect their Facebook account.
@@ -313,6 +309,7 @@ export default function Home() {
     setIsSearching(false);
     setScannedCount(0);
     setFilteredCount(0);
+    setFilteredOutListings([]);
     setEvaluatedCount(0);
     setPhase("scraping");
     setError("Your Facebook session has expired. Please re-connect your account to keep searching.");
@@ -374,6 +371,7 @@ export default function Home() {
     setAppState("form");
     setScannedCount(0);
     setFilteredCount(0);
+    setFilteredOutListings([]);
     setEvaluatedCount(0);
     setPhase("scraping");
     if (clearError) {
@@ -399,9 +397,10 @@ export default function Home() {
    * Applies the final search result: sets listings, counts, threshold, generates CSV blob,
    * and switches the app to the done state so the results table is shown.
    */
-  const handleCompletion = useCallback((data: { scannedCount: number; filteredCount?: number; evaluatedCount: number; listings: Listing[]; threshold?: number }) => {
+  const handleCompletion = useCallback((data: { scannedCount: number; filteredCount?: number; filteredOutListings?: DebugFacebookListing[]; evaluatedCount: number; listings: Listing[]; threshold?: number }) => {
     setScannedCount(data.scannedCount);
     setFilteredCount(data.filteredCount ?? 0);
+    setFilteredOutListings(data.filteredOutListings ?? []);
     setEvaluatedCount(data.evaluatedCount);
     setListings(data.listings);
     setThreshold(data.threshold || 0);
@@ -494,6 +493,10 @@ export default function Home() {
     }
   }, []);
 
+  const onFilteredFacebookListing = useCallback((listing: DebugFacebookListing) => {
+    setFilteredOutListings((prev: DebugFacebookListing[]) => [...prev, listing]);
+  }, []);
+
   /**
    * Parses an SSE stream from the reader and updates UI from each event.
    * Reads in chunks and accumulates text in a buffer so only complete lines (ending with \n)
@@ -512,12 +515,12 @@ export default function Home() {
       const sseHandlers: SSEDispatchHandlers = {
         handlePhaseUpdate,
         handleProgressUpdate,
-        handleFilteredUpdate,
         handleCompletion,
         handleAuthError,
         handleLocationError,
         setEvaluatedCount,
         onListingResult,
+        onFilteredFacebookListing,
         onDebugMode: (params) => {
           setDebugEnabled(true);
           if (params) setDebugSearchParams(params);
@@ -582,7 +585,7 @@ export default function Home() {
         reader.releaseLock();
       }
     },
-    [handlePhaseUpdate, handleProgressUpdate, handleFilteredUpdate, handleCompletion, handleAuthError, handleLocationError, onListingResult, onDebugEbayQueryStart, onDebugEbayQueryGenerated, onDebugEbayQueryFinished]
+    [handlePhaseUpdate, handleProgressUpdate, handleCompletion, handleAuthError, handleLocationError, onListingResult, onFilteredFacebookListing, onDebugEbayQueryStart, onDebugEbayQueryGenerated, onDebugEbayQueryFinished]
   );
 
   /**
@@ -673,6 +676,7 @@ export default function Home() {
     // Reset all state — clean slate for the new search
     setScannedCount(0);
     setFilteredCount(0);
+    setFilteredOutListings([]);
     setEvaluatedCount(0);
     setMaxListings(Number(data.maxListings) || 20);
     setCsvBlob(null);
@@ -700,6 +704,7 @@ export default function Home() {
     setAppState("form");
     setScannedCount(0);
     setFilteredCount(0);
+    setFilteredOutListings([]);
     setEvaluatedCount(0);
     setCsvBlob(null);
     setListings([]);
@@ -768,17 +773,16 @@ export default function Home() {
                 <SearchLoadingState
                   phase={phase}
                   scannedCount={scannedCount}
-                  filteredCount={filteredCount}
                   evaluatedCount={evaluatedCount}
                   maxListings={maxListings}
                   onCancel={cancelSearch}
                 />
-                {phase === "evaluating" && listings.length > 0 && (
+                {phase === "evaluating" && (listings.length > 0 || filteredOutListings.length > 0) && (
                   <SearchResultsTable
                     listings={listings}
                     scannedCount={scannedCount}
-                    suspiciousFilteredCount={filteredCount}
                     threshold={threshold}
+                    filteredOutListings={filteredOutListings}
                     onDownloadCSV={downloadCSV}
                     onReset={handleReset}
                     isLoading={true}
@@ -791,8 +795,8 @@ export default function Home() {
               <SearchResultsTable
                 listings={listings}
                 scannedCount={scannedCount}
-                suspiciousFilteredCount={filteredCount}
                 threshold={threshold}
+                filteredOutListings={filteredOutListings}
                 onDownloadCSV={downloadCSV}
                 onReset={handleReset}
               />
