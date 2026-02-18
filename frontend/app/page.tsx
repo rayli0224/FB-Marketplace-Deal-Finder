@@ -25,6 +25,51 @@ const DEFAULT_DEBUG_RADIUS = DEFAULT_RADIUS;
 const DEFAULT_DEBUG_MAX_LISTINGS = 20;
 const DEFAULT_DEBUG_THRESHOLD = 20;
 
+const DEBUG_LOGS_STORAGE_KEY = "fb_marketplace_debug_logs";
+const DEBUG_MODE_ENABLED_KEY = "fb_marketplace_debug_mode_enabled";
+
+function loadDebugLogsFromStorage(): DebugLogEntry[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const stored = localStorage.getItem(DEBUG_LOGS_STORAGE_KEY);
+    if (!stored) return [];
+    return JSON.parse(stored) as DebugLogEntry[];
+  } catch {
+    return [];
+  }
+}
+
+function saveDebugLogsToStorage(logs: DebugLogEntry[]): void {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.setItem(DEBUG_LOGS_STORAGE_KEY, JSON.stringify(logs));
+  } catch {
+    // Storage may be disabled or quota exceeded; continue without persistence
+  }
+}
+
+function setDebugModeEnabledInStorage(enabled: boolean): void {
+  if (typeof window === "undefined") return;
+  try {
+    if (enabled) {
+      localStorage.setItem(DEBUG_MODE_ENABLED_KEY, "true");
+    } else {
+      localStorage.removeItem(DEBUG_MODE_ENABLED_KEY);
+    }
+  } catch {
+    // Storage may be disabled or quota exceeded; continue without persistence
+  }
+}
+
+function isDebugModeEnabledInStorage(): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    return localStorage.getItem(DEBUG_MODE_ENABLED_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Opens a URL in a new background tab without stealing focus from the current tab.
  * Simulates a Cmd+Click (macOS) / Ctrl+Click (Windows/Linux) which browsers
@@ -254,11 +299,19 @@ export default function Home() {
   const [debugFacebookListings, setDebugFacebookListings] = useState<DebugFacebookListing[]>([]);
   const [filteredOutListings, setFilteredOutListings] = useState<DebugFacebookListing[]>([]);
   const [debugEbayQueries, setDebugEbayQueries] = useState<DebugEbayQueryEntry[]>([]);
-  const [debugLogs, setDebugLogs] = useState<DebugLogEntry[]>([]);
+  const [debugLogs, setDebugLogs] = useState<DebugLogEntry[]>(() => loadDebugLogsFromStorage());
+  const [debugModeEnabled, setDebugModeEnabledState] = useState<boolean>(() => isDebugModeEnabledInStorage());
   const [isSearching, setIsSearching] = useState<boolean>(false);
   const isSearchingRef = useRef<boolean>(false);
   const abortControllerRef = useRef<AbortController | null>(null);
   const readerRef = useRef<ReadableStreamDefaultReader<Uint8Array> | null>(null);
+
+  /**
+   * Persists debug logs to localStorage whenever they change.
+   */
+  useEffect(() => {
+    saveDebugLogsToStorage(debugLogs);
+  }, [debugLogs]);
 
   /**
    * Generates a CSV blob from listings data with pirate-themed column headers.
@@ -332,7 +385,6 @@ export default function Home() {
     setEvaluatedCount(0);
     setPhase("scraping");
     setCurrentItem(null);
-    setDebugLogs([]);
     setError("Your Facebook session has expired. Please re-connect your account to keep searching.");
     setAppState("setup");
   }, []);
@@ -352,6 +404,14 @@ export default function Home() {
       } catch {
         // Backend may already be down, continue with local cleanup
       }
+    }
+
+    // Add log entry for cancellation if requested
+    if (addCancelLog && debugModeEnabled) {
+      setDebugLogs((prev: DebugLogEntry[]) => [
+        ...prev,
+        { level: "WARNING", message: "Search cancelled by user", timestampMs: Date.now() },
+      ]);
     }
 
     // Cancel the reader first to stop reading from the stream
@@ -389,11 +449,10 @@ export default function Home() {
     setEvaluatedCount(0);
     setPhase("scraping");
     setCurrentItem(null);
-    setDebugLogs([]);
     if (clearError) {
       setError(null);
     }
-  }, []);
+  }, [debugModeEnabled]);
 
   const handleLocationError = useCallback((message: string) => {
     // Reset search state immediately
@@ -540,7 +599,11 @@ export default function Home() {
         onListingResult,
         onFilteredFacebookListing,
         onDebugMode: (params) => {
-          if (params) setDebugSearchParams(params);
+          if (params) {
+            setDebugSearchParams(params);
+            setDebugModeEnabledInStorage(true);
+            setDebugModeEnabledState(true);
+          }
         },
         onDebugFacebook: setDebugFacebookListings,
         onDebugFacebookListing: (listing: DebugFacebookListing) =>
@@ -705,7 +768,6 @@ export default function Home() {
     setDebugSearchParams(null);
     setDebugFacebookListings([]);
     setDebugEbayQueries([]);
-    setDebugLogs([]);
     setAppState("loading");
     
     // Start search directly — backend handles killing any previous search before starting
@@ -731,7 +793,6 @@ export default function Home() {
     setDebugSearchParams(null);
     setDebugFacebookListings([]);
     setDebugEbayQueries([]);
-    setDebugLogs([]);
     isSearchingRef.current = false;
     setIsSearching(false);
   };
@@ -834,7 +895,7 @@ export default function Home() {
           </div>
         </div>
 
-        {debugSearchParams !== null && (
+        {debugModeEnabled && (
           <FloatingLogPanel logs={debugLogs} debugEnabled={true} />
         )}
 
