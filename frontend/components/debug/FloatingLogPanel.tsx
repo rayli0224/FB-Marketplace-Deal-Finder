@@ -7,7 +7,6 @@ const DEFAULT_X = 24;
 const DEFAULT_Y = 24;
 const DEFAULT_WIDTH = 384;
 const DEFAULT_HEIGHT = 400;
-const EDGE_MARGIN = 8;
 const RESIZE_RIGHT_MARGIN = 24;
 const MIN_WIDTH = 200;
 const MIN_HEIGHT = 150;
@@ -15,6 +14,7 @@ const MAX_HEIGHT_VH = 85;
 const SCROLL_BOTTOM_THRESHOLD = 20;
 const VIEWPORT_FALLBACK_HEIGHT = 800;
 const VIEWPORT_FALLBACK_WIDTH = 600;
+const HEADER_FALLBACK_HEIGHT = 40;
 const LOG_CONTENT_PADDING = "px-3 py-2";
 const LOG_LINK_CLASS = "underline text-primary hover:text-primary/80";
 const LOG_TIMER_CLASS = "shrink-0 text-[10px] text-muted-foreground/80 tabular-nums mr-2";
@@ -128,6 +128,7 @@ export function FloatingLogPanel({ logs, debugEnabled }: FloatingLogPanelProps) 
   const [isResizing, setIsResizing] = useState(false);
   const [shouldAutoScroll, setShouldAutoScroll] = useState(true);
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
+  const headerRef = useRef<HTMLDivElement | null>(null);
   const dragStartRef = useRef({ x: 0, y: 0, left: 0, top: 0 });
   const resizeStartRef = useRef({ x: 0, y: 0, width: 0, height: 0 });
 
@@ -150,14 +151,18 @@ export function FloatingLogPanel({ logs, debugEnabled }: FloatingLogPanelProps) 
   useEffect(() => {
     if (!isDragging) return;
     const viewport = getViewportSize();
-    const maxX = viewport.width - size.width - EDGE_MARGIN;
-    const maxY = viewport.height - size.height - EDGE_MARGIN;
+    const headerElement = headerRef.current;
+    const headerWidth = headerElement?.offsetWidth ?? size.width;
+    const headerHeight = headerElement?.offsetHeight ?? HEADER_FALLBACK_HEIGHT;
 
     const handlePointerMove = (e: PointerEvent) => {
       const { x, y, left, top } = dragStartRef.current;
+      const calculatedX = left + (e.clientX - x);
+      const calculatedY = top + (e.clientY - y);
+      
       setPosition({
-        x: Math.max(EDGE_MARGIN, Math.min(maxX, left + (e.clientX - x))),
-        y: Math.max(EDGE_MARGIN, Math.min(maxY, top + (e.clientY - y))),
+        x: Math.max(0, Math.min(viewport.width - headerWidth, calculatedX)),
+        y: Math.max(0, Math.min(viewport.height - headerHeight, calculatedY)),
       });
     };
 
@@ -171,7 +176,7 @@ export function FloatingLogPanel({ logs, debugEnabled }: FloatingLogPanelProps) 
       window.removeEventListener("pointerup", handlePointerUp);
       window.removeEventListener("pointercancel", handlePointerUp);
     };
-  }, [isDragging, size.width, size.height]);
+  }, [isDragging, size.width]);
 
   const handleResizePointerDown = useCallback(
     (e: React.PointerEvent) => {
@@ -242,7 +247,7 @@ export function FloatingLogPanel({ logs, debugEnabled }: FloatingLogPanelProps) 
 
   return (
     <div
-      className="fixed z-50 flex flex-col rounded-md border border-border bg-background shadow-lg"
+      className="fixed z-50 flex flex-col rounded-md border border-border bg-background shadow-lg overflow-visible"
       style={{
         left: position.x,
         top: position.y,
@@ -252,6 +257,7 @@ export function FloatingLogPanel({ logs, debugEnabled }: FloatingLogPanelProps) 
       }}
     >
       <div
+        ref={headerRef}
         onPointerDown={handlePointerDown}
         className={`flex items-center justify-between gap-2 ${LOG_CONTENT_PADDING} border-b border-border bg-muted/50 font-mono text-xs font-semibold text-foreground cursor-grab active:cursor-grabbing select-none`}
         aria-label="Drag to move log panel"
