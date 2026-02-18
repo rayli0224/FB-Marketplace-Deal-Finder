@@ -834,7 +834,9 @@ export default function Home() {
           </div>
         </div>
 
-        <FloatingLogPanel logs={debugLogs} debugEnabled={debugSearchParams !== null} />
+        {debugSearchParams !== null && (
+          <FloatingLogPanel logs={debugLogs} debugEnabled={true} />
+        )}
 
         <AppFooter />
       </div>
