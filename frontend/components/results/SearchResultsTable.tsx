@@ -26,10 +26,19 @@ export interface Listing {
   noCompReason?: string;
 }
 
+export interface FilteredOutListingRow {
+  title: string;
+  price: number;
+  location: string;
+  url: string;
+  fbListingId?: string;
+}
+
 export interface SearchResultsTableProps {
   listings: Listing[];
   scannedCount: number;
   threshold: number;
+  filteredOutListings?: FilteredOutListingRow[];
   onDownloadCSV: () => void;
   onReset: () => void;
   isLoading?: boolean;
@@ -176,6 +185,19 @@ function ListingCompsPanel({ listing }: { listing: Listing }) {
 }
 
 /**
+ * Converts a filtered-out listing row to a Listing for display in the table.
+ */
+function filteredOutToListing(row: FilteredOutListingRow): Listing {
+  return {
+    title: row.title,
+    price: row.price,
+    location: row.location,
+    url: row.url,
+    dealScore: null,
+  };
+}
+
+/**
  * Scrollable results table with one row per listing (title, price, location, deal %, link).
  * Header shows result counts and actions (CSV export, new search). Filter section toggles
  * visibility of below-threshold deals. Rows are color-coded by deal quality; each row can
@@ -185,11 +207,13 @@ export function SearchResultsTable({
   listings,
   scannedCount,
   threshold,
+  filteredOutListings = [],
   onDownloadCSV,
   onReset,
   isLoading = false,
 }: SearchResultsTableProps) {
   const [showBadDeals, setShowBadDeals] = useState<boolean>(true);
+  const [showFilteredOut, setShowFilteredOut] = useState<boolean>(false);
   const [isFiltersExpanded, setIsFiltersExpanded] = useState<boolean>(false);
   const [expandedListingUrl, setExpandedListingUrl] = useState<string | null>(null);
 
@@ -197,6 +221,11 @@ export function SearchResultsTable({
     if (showBadDeals) return true;
     return !isBadDeal(listing.dealScore, threshold);
   });
+
+  const filteredOutUrls = new Set(filteredOutListings.map((item) => item.url));
+  const displayListings: Listing[] = isLoading || showFilteredOut
+    ? [...filteredListings, ...filteredOutListings.map(filteredOutToListing)]
+    : filteredListings;
 
   const filteredCount = filteredListings.length;
 
@@ -234,32 +263,41 @@ export function SearchResultsTable({
         )}
       </div>
 
-      {/* Filters Section */}
-      <div className="border-2 border-border bg-secondary">
-        <button
-          type="button"
-          onClick={() => setIsFiltersExpanded(!isFiltersExpanded)}
-          className="w-full flex items-center justify-between px-4 py-2 border-b border-border hover:bg-secondary/80 transition-colors"
-        >
-          <h3 className="font-mono text-xs font-bold text-muted-foreground">
-            <span className="text-primary">{"$"}</span> FILTERS
-          </h3>
-          <span className="font-mono text-xs text-primary transition-transform" style={{ transform: isFiltersExpanded ? 'rotate(180deg)' : 'rotate(0deg)' }}>
-            ▼
-          </span>
-        </button>
-        {isFiltersExpanded && (
-          <div className="p-4">
-            <FullSizeToggle
-              checked={showBadDeals}
-              onChange={setShowBadDeals}
-              label="Show bad deals"
-            />
-          </div>
-        )}
-      </div>
+      {/* Filters Section - hidden during loading */}
+      {!isLoading && (
+        <div className="border-2 border-border bg-secondary">
+          <button
+            type="button"
+            onClick={() => setIsFiltersExpanded(!isFiltersExpanded)}
+            className="w-full flex items-center justify-between px-4 py-2 border-b border-border hover:bg-secondary/80 transition-colors"
+          >
+            <h3 className="font-mono text-xs font-bold text-muted-foreground">
+              <span className="text-primary">{"$"}</span> FILTERS
+            </h3>
+            <span className="font-mono text-xs text-primary transition-transform" style={{ transform: isFiltersExpanded ? 'rotate(180deg)' : 'rotate(0deg)' }}>
+              ▼
+            </span>
+          </button>
+          {isFiltersExpanded && (
+            <div className="p-4 space-y-3">
+              <FullSizeToggle
+                checked={showBadDeals}
+                onChange={setShowBadDeals}
+                label="Show bad deals"
+              />
+              {filteredOutListings.length > 0 && (
+                <FullSizeToggle
+                  checked={showFilteredOut}
+                  onChange={setShowFilteredOut}
+                  label="Show filtered-out listings"
+                />
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
-      {listings.length > 0 ? (
+      {displayListings.length > 0 ? (
         <div className="max-h-[60vh] overflow-auto border border-border">
           <table className="w-full border-collapse font-mono text-sm">
             <thead className="sticky top-0 bg-secondary">
@@ -273,30 +311,45 @@ export function SearchResultsTable({
               </tr>
             </thead>
             <tbody>
-              {filteredListings.map((listing, index) => {
-                const goodDeal = isGoodDeal(listing.dealScore, threshold);
-                const badDeal = isBadDeal(listing.dealScore, threshold);
-                const rowBgClass = goodDeal 
-                  ? "bg-green-500/10 hover:bg-green-500/20" 
-                  : badDeal 
+              {displayListings.map((listing) => {
+                const isFilteredOut = listing.dealScore === null && filteredOutUrls.has(listing.url);
+                const goodDeal = !isFilteredOut && isGoodDeal(listing.dealScore, threshold);
+                const badDeal = !isFilteredOut && isBadDeal(listing.dealScore, threshold);
+                const rowBgClass = isFilteredOut
+                  ? "bg-muted/30 hover:bg-muted/50 opacity-70"
+                  : goodDeal
+                  ? "bg-green-500/10 hover:bg-green-500/20"
+                  : badDeal
                   ? "bg-red-500/10 hover:bg-red-500/20"
                   : "hover:bg-secondary/50";
                 const hasComps = listing.ebaySearchQuery != null || listing.compPrice != null;
                 const hasDetails = !hasComps && (listing.noCompReason != null && listing.noCompReason !== "");
                 const isExpanded = expandedListingUrl === listing.url;
 
+                const filteredOutStyle = isFilteredOut ? "text-muted-foreground line-through" : "";
+                const titleClasses = `px-3 py-2 max-w-[300px] truncate ${filteredOutStyle}`.trim();
+                const priceClasses = isFilteredOut 
+                  ? "px-3 py-2 font-bold text-muted-foreground line-through"
+                  : "px-3 py-2 font-bold text-primary";
+                const locationClasses = isFilteredOut
+                  ? "px-3 py-2 max-w-[150px] truncate text-muted-foreground/70 line-through"
+                  : "px-3 py-2 max-w-[150px] truncate text-muted-foreground";
+                const linkClasses = isFilteredOut
+                  ? "text-muted-foreground hover:text-foreground hover:underline line-through"
+                  : "text-primary hover:underline";
+
                 return (
                 <Fragment key={listing.url}>
                 <tr
                   className={`border-b border-border/50 transition-colors ${rowBgClass}`}
                 >
-                  <td className="px-3 py-2 max-w-[300px] truncate" title={listing.title}>
+                  <td className={titleClasses} title={listing.title}>
                     {listing.title}
                   </td>
-                  <td className="px-3 py-2 text-primary font-bold">
+                  <td className={priceClasses}>
                     {formatPrice(listing.price, listing.currency)}
                   </td>
-                  <td className="px-3 py-2 text-muted-foreground max-w-[150px] truncate" title={listing.location}>
+                  <td className={locationClasses} title={listing.location}>
                     {listing.location}
                   </td>
                   <td className="px-3 py-2">
@@ -304,6 +357,8 @@ export function SearchResultsTable({
                       <span className={`font-bold ${goodDeal ? 'text-green-500' : badDeal ? 'text-red-500' : 'text-muted-foreground'}`}>
                         {listing.dealScore}%
                       </span>
+                    ) : isFilteredOut ? (
+                      <span className="text-muted-foreground italic">Filtered</span>
                     ) : (
                       <span className="text-muted-foreground/50">--</span>
                     )}
@@ -313,7 +368,7 @@ export function SearchResultsTable({
                       href={listing.url} 
                       target="_blank" 
                       rel="noopener noreferrer"
-                      className="text-primary hover:underline"
+                      className={linkClasses}
                       onClick={(e: React.MouseEvent) => e.stopPropagation()}
                     >
                       VIEW →
