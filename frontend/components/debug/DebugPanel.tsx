@@ -8,6 +8,7 @@ export type DebugFacebookListing = {
   fbListingId?: string;
   title: string;
   price: number;
+  currency?: string;
   location: string;
   url: string;
   description: string;
@@ -19,6 +20,16 @@ export type DebugEbayQueryEntry = {
   listingIndex: number;
   fbTitle: string;
   ebayQuery?: string;
+  productRecon?: {
+    canonical_name?: string;
+    brand?: string;
+    category?: string;
+    model_or_series?: string;
+    year_or_generation?: string;
+    variant_dimensions?: string[];
+    notes?: string;
+    citations?: { url: string; title?: string }[];
+  };
   noCompReason?: string;
   startedAtMs: number;
   queryGeneratedAtMs?: number;
@@ -167,6 +178,7 @@ function DebugPairedRows({
 
 /** Renders one Facebook listing's debug fields (title, price, location, url, description). */
 function FacebookListingCell({ item }: { item: DebugFacebookListing }) {
+  const currency = item.currency ?? "$";
   return (
     <div className={`space-y-1${item.filtered ? " opacity-50" : ""}`}>
       {item.filtered && (
@@ -180,7 +192,7 @@ function FacebookListingCell({ item }: { item: DebugFacebookListing }) {
       </div>
       <div className="text-muted-foreground">
         <span>Price: </span>
-        <span className="text-foreground">${item.price.toFixed(2)}</span>
+        <span className="text-foreground">{currency}{item.price.toFixed(2)}</span>
       </div>
       <div className="text-muted-foreground">
         <span>Location: </span>
@@ -253,6 +265,51 @@ function EbayQueryCell({ entry, nowMs }: { entry: DebugEbayQueryEntry; nowMs: nu
           <span className="text-muted-foreground">—</span>
         ) : (
           <span className="text-muted-foreground">Waiting for query...</span>
+        )}
+      </div>
+      <div className="pt-1">
+        <div className="text-muted-foreground">
+          <span className="text-muted-foreground">Details found: </span>
+        </div>
+        {entry.productRecon ? (
+          <div className="text-muted-foreground space-y-0.5 pl-4">
+            <div><span>◦ Product name: </span><span className="text-foreground">{entry.productRecon.canonical_name ?? "—"}</span></div>
+            <div><span>◦ Brand: </span><span className="text-foreground">{entry.productRecon.brand ?? "—"}</span></div>
+            <div><span>◦ Category: </span><span className="text-foreground">{entry.productRecon.category ?? "—"}</span></div>
+            <div><span>◦ Model/series: </span><span className="text-foreground">{entry.productRecon.model_or_series ?? "—"}</span></div>
+            <div><span>◦ Year/generation: </span><span className="text-foreground">{entry.productRecon.year_or_generation ?? "—"}</span></div>
+            <div>
+              <span>◦ Price-changing details: </span>
+              <span className="text-foreground">
+                {(entry.productRecon.variant_dimensions ?? []).length > 0
+                  ? (entry.productRecon.variant_dimensions ?? []).join(", ")
+                  : "—"}
+              </span>
+            </div>
+            <div><span>◦ Notes: </span><span className="text-foreground">{entry.productRecon.notes ?? "—"}</span></div>
+            <div>
+              <span>◦ Citations: </span>
+              {(entry.productRecon.citations ?? []).length > 0 ? (
+                <span className="inline-flex flex-col gap-0.5">
+                  {(entry.productRecon.citations ?? []).map((c, idx) => (
+                    <a
+                      key={`${c.url}-${idx}`}
+                      href={c.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-primary hover:underline break-all"
+                    >
+                      {c.url}
+                    </a>
+                  ))}
+                </span>
+              ) : (
+                <span className="text-foreground">—</span>
+              )}
+            </div>
+          </div>
+        ) : (
+          <div className="text-muted-foreground pl-4">Waiting for research...</div>
         )}
       </div>
       {entry.noCompReason && (

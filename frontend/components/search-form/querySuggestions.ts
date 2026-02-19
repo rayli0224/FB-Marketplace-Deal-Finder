@@ -10,4 +10,9 @@ export const QUERY_SUGGESTIONS = [
   "standing desk",
   "ship in a bottle",
   "coffee maker",
+  "Nuphy Air 75 V2",
+  "Lego Star Wars",
+  "Nintendo Switch",
+  "Samsung TV",
+  "IKEA bookshelf"
 ] as const;

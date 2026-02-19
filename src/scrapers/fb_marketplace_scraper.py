@@ -360,8 +360,8 @@ class FBMarketplaceScraper:
                 self._check_cancelled()
                 self.page.wait_for_load_state("domcontentloaded", timeout=CONTINUE_AS_WAIT_TIMEOUT_MS)
                 logger.info("✅ Facebook login confirmation accepted")
-            except Exception as e:
-                logger.debug("Continue-as click failure details: %s", e)
+            except Exception:
+                logger.debug("Could not click the Continue as button; re-checking login status.")
 
         self._check_cancelled()
         current_url = self.page.url.lower()

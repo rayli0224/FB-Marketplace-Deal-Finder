@@ -72,6 +72,7 @@ def compare_listing_to_ebay(
     market_price_cache: Optional[dict] = None,
     market_price_cache_lock: Optional[LockType] = None,
     on_query_generated: Optional[Callable[[str], None]] = None,
+    on_product_recon: Optional[Callable[[dict, list[dict]], None]] = None,
 ) -> Dict:
     """
     Compare a single FB listing to eBay sold prices and compute deal score.
@@ -101,6 +102,7 @@ def compare_listing_to_ebay(
             market_price_cache,
             market_price_cache_lock,
             on_query_generated,
+            on_product_recon,
         )
     except SearchCancelledError:
         raise
@@ -122,6 +124,7 @@ def _compare_listing_to_ebay_inner(
     market_price_cache: Optional[dict] = None,
     market_price_cache_lock: Optional[LockType] = None,
     on_query_generated: Optional[Callable[[str], None]] = None,
+    on_product_recon: Optional[Callable[[dict, list[dict]], None]] = None,
 ) -> Dict:
     """Inner comparison logic. Caller handles exceptions and returns fallback result."""
     log_data_block(logger, "Data", price=listing.price, location=listing.location, url=listing.url)
@@ -134,13 +137,20 @@ def _compare_listing_to_ebay_inner(
 
     logger.info("💡 Preparing eBay search")
     with wait_status(logger, "eBay search"):
-        query_result = generate_ebay_query_for_listing(listing, original_query)
+        query_result = generate_ebay_query_for_listing(
+            listing,
+            original_query,
+            on_product_recon=on_product_recon,
+        )
     if query_result is None:
         log_warning(logger, "Could not prepare search — skipping deal score")
         return _listing_result(listing, None, no_comp_reason="Could not prepare search")
-    enhanced_query, skip_reason = query_result
+    enhanced_query, skip_reason, product_recon_json = query_result
     if skip_reason is not None:
         return _listing_result(listing, None, no_comp_reason=skip_reason)
+    if not product_recon_json:
+        log_warning(logger, "Could not research item details — skipping deal score")
+        return _listing_result(listing, None, no_comp_reason="Could not prepare search")
     if on_query_generated is not None:
         on_query_generated(enhanced_query)
 
@@ -182,7 +192,12 @@ def _compare_listing_to_ebay_inner(
     all_items_with_filter_flag = None
     if ebay_items:
         with wait_status(logger, "matching listings"):
-            filter_result = filter_ebay_results_with_openai(listing, ebay_items, cancelled=cancelled)
+            filter_result = filter_ebay_results_with_openai(
+                listing,
+                ebay_items,
+                product_recon_json=product_recon_json,
+                cancelled=cancelled,
+            )
         if filter_result is not None and asyncio.iscoroutine(filter_result):
             log_warning(logger, "Filter returned coroutine instead of result — using all listings")
             filter_result = None
