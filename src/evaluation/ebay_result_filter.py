@@ -89,13 +89,14 @@ async def _filter_batch(
     fb_listing_text: str,
     items: List[dict],
     start_index: int,
-) -> List[Tuple[int, str, str]]:
+) -> List[Tuple[int, str, str, float]]:
     """
     Filter a batch of eBay items against a FB listing using OpenAI.
 
     start_index: 1-based global index of the first item in this batch.
-    Returns list of (1-based global index, decision, reason) for each item.
+    Returns list of (1-based global index, decision, reason, ratio) for each item.
     Decision is one of: "accept", "reject", "maybe".
+    Ratio is a positive number for quantity normalization (defaults to 1.0).
     On API error or invalid response, keeps all items in the batch (fail-open with "accept").
     """
     if not items:
@@ -115,15 +116,15 @@ async def _filter_batch(
         raw_content = extract_response_output_text(response)
         if not raw_content:
             logger.debug(f"Batch {start_index}-{start_index + len(items) - 1}: empty response — keeping all")
-            return [(start_index + i, "accept", "") for i in range(len(items))]
+            return [(start_index + i, "accept", "", 1.0) for i in range(len(items))]
         results_list = _try_parse_results_list(raw_content, len(items))
         if results_list is None:
             logger.debug(f"Batch {start_index}-{start_index + len(items) - 1}: invalid JSON — keeping all")
-            return [(start_index + i, "accept", "") for i in range(len(items))]
+            return [(start_index + i, "accept", "", 1.0) for i in range(len(items))]
         out = []
         for i, r in enumerate(results_list):
             if not isinstance(r, dict):
-                out.append((start_index + i, "accept", ""))
+                out.append((start_index + i, "accept", "", 1.0))
                 continue
             decision = r.get("decision", "accept")
             if decision not in ("accept", "reject", "maybe"):
@@ -131,11 +132,14 @@ async def _filter_batch(
             reason = r.get("reason", "")
             if not isinstance(reason, str):
                 reason = str(reason)
-            out.append((start_index + i, decision, reason))
+            ratio = r.get("ratio", 1.0)
+            if not isinstance(ratio, (int, float)) or ratio <= 0:
+                ratio = 1.0
+            out.append((start_index + i, decision, reason, float(ratio)))
         return out
     except Exception as e:
         logger.debug(f"Batch {start_index}-{start_index + len(items) - 1}: API error ({e}) — keeping all")
-        return [(start_index + i, "accept", "") for i in range(len(items))]
+        return [(start_index + i, "accept", "", 1.0) for i in range(len(items))]
 
 
 async def _filter_ebay_results_async(
@@ -155,7 +159,7 @@ async def _filter_ebay_results_async(
     - accept_indices: 1-based indices of items marked "accept"
     - maybe_indices: 1-based indices of items marked "maybe"
     - filtered_items: list of items that passed filtering (accept + maybe)
-    - decisions: dict mapping 1-based index to {decision, reason}
+    - decisions: dict mapping 1-based index to {decision, reason, ratio}
     """
     if not AsyncOpenAI:
         logger.debug("Async OpenAI unavailable — skipping match filter")
@@ -190,7 +194,7 @@ async def _filter_ebay_results_async(
             batches.append((batch, start_index))
 
         running_tasks: set[asyncio.Task] = set()
-        results: List[Tuple[int, str, str]] = []
+        results: List[Tuple[int, str, str, float]] = []
         next_batch_idx = 0
 
         while next_batch_idx < len(batches) or running_tasks:
@@ -253,8 +257,8 @@ async def _filter_ebay_results_async(
     maybe_indices = []
     decisions = {}
 
-    for item_index, decision, reason in results:
-        decisions[str(item_index)] = {"decision": decision, "reason": reason}
+    for item_index, decision, reason, ratio in results:
+        decisions[str(item_index)] = {"decision": decision, "reason": reason, "ratio": ratio}
         if decision == "accept":
             accept_indices.append(item_index)
         elif decision == "maybe":
@@ -308,7 +312,7 @@ def filter_ebay_results_with_openai(
     - accept_indices: 1-based indices of items marked "accept" (full weight in average)
     - maybe_indices: 1-based indices of items marked "maybe" (0.5 weight in average)
     - filtered_items: list of items that passed filtering (accept + maybe)
-    - decisions: dict mapping 1-based index to {decision, reason}
+    - decisions: dict mapping 1-based index to {decision, reason, ratio}
     """
     if not AsyncOpenAI:
         logger.debug("Search suggestions unavailable — skipping match filter")

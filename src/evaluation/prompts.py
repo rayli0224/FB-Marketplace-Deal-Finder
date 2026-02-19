@@ -197,6 +197,20 @@ For electronics, OEM stands for Original Equipment Manufacturer, and it is typic
 
 ---
 
+### Step 4 — Quantity Ratio
+Compare the quantity/amount in the Facebook listing vs the eBay item. Return a ratio to normalize unit prices:
+- If FB listing is 1 product but eBay listing is 4 products → ratio: `4.0` (eBay has 4x more, so divide eBay price by 4 for unit price)
+- If FB listing is 4 products but eBay listing is 1 product → ratio: `0.25` (eBay has 1/4 as much, so multiply eBay price by 4 for unit price)
+- If quantities match (both 1, both 2, etc.) → ratio: `1.0`
+- If quantity is unclear or not applicable → ratio: `1.0`
+
+Examples:
+- FB: "4-pack of batteries" vs eBay: "single battery" → ratio: `0.25`
+- FB: "pokemon card booster pack" vs eBay: "lot of 4 booster packs" → ratio: `4.0`
+- FB: "MacBook Pro" vs eBay: "MacBook Pro" → ratio: `1.0`
+
+---
+
 ### Examples
 FB: "MacBook Pro 2019 16 inch i9" vs eBay: "MacBook Pro 2020 16 inch i9" → `reject`  
 FB: "Leather jacket, size M" vs eBay: "Leather jacket, size L" → `accept`  
@@ -208,10 +222,10 @@ FB: "LEGO set, complete" vs eBay: "LEGO set, missing minifigure" → `maybe`
 Return JSON array in same order as eBay items:  
 
 [
-  {{"decision": "accept", "reason": "Size difference allowed (M vs L)"}},
-  {{"decision": "reject", "reason": "Different generation (2020 vs 2019)"}},
-  {{"decision": "maybe", "reason": "Missing minor part (minifigure)"}}
+  {{"decision": "accept", "reason": "Size difference allowed (M vs L)", "ratio": 1.0}},
+  {{"decision": "reject", "reason": "Different generation (2020 vs 2019)", "ratio": 1.0}},
+  {{"decision": "maybe", "reason": "Missing minor part (minifigure)", "ratio": 1.0}}
 ]
 
-No extra text. Reason ≤10 words, include key detail.
+No extra text. Reason ≤10 words, include key detail. Ratio must be a positive number.
 """

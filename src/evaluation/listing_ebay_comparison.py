@@ -197,6 +197,7 @@ def _compare_listing_to_ebay_inner(
                 decision_info = decisions.get(str(item_idx), {})
                 decision = decision_info.get("decision", "accept")
                 reason = decision_info.get("reason", "")
+                ratio = decision_info.get("ratio", 1.0)
                 
                 # filterStatus: "accept", "maybe", or "reject"
                 # filtered: True only for rejected items (backwards compatibility)
@@ -205,21 +206,26 @@ def _compare_listing_to_ebay_inner(
                     **item,
                     "filtered": is_rejected,
                     "filterStatus": decision,
+                    "ratio": ratio,
                 }
                 if reason:
                     item_with_flags["filterReason"] = reason
                 all_items_with_filter_flag.append(item_with_flags)
 
             # Calculate weighted average: accept=1.0 weight, maybe=0.5 weight
+            # Apply ratio to normalize unit prices (e.g., if ratio=4.0, eBay has 4x quantity, so divide price by 4)
             weighted_sum = 0.0
             total_weight = 0.0
             for i, item in enumerate(ebay_items):
                 item_idx = i + 1
+                decision_info = decisions.get(str(item_idx), {})
+                ratio = decision_info.get("ratio", 1.0)
+                unit_price = item["price"] / ratio
                 if item_idx in accept_indices_set:
-                    weighted_sum += item["price"] * 1.0
+                    weighted_sum += unit_price * 1.0
                     total_weight += 1.0
                 elif item_idx in maybe_indices_set:
-                    weighted_sum += item["price"] * 0.5
+                    weighted_sum += unit_price * 0.5
                     total_weight += 0.5
 
             if len(filtered_items) != len(ebay_items) or maybe_indices:
@@ -258,7 +264,7 @@ def _compare_listing_to_ebay_inner(
             logger.debug("Filtering unavailable (OpenAI not configured) - using original results")
             if ebay_items:
                 all_items_with_filter_flag = [
-                    {**item, "filtered": False, "filterStatus": "accept"}
+                    {**item, "filtered": False, "filterStatus": "accept", "ratio": 1.0}
                     for item in ebay_items
                 ]
                 ebay_stats.item_summaries = all_items_with_filter_flag

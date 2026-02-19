@@ -12,6 +12,7 @@ export interface CompItem {
   filtered?: boolean;  // True if this item was filtered out as non-comparable (backwards compat)
   filterStatus?: "accept" | "maybe" | "reject";  // Decision status from filtering
   filterReason?: string;  // Short reason explaining why item was accepted, maybe, or rejected
+  ratio?: number;  // Quantity ratio for unit price normalization (defaults to 1.0)
 }
 
 export interface Listing {
@@ -161,6 +162,9 @@ function ListingCompsPanel({ listing }: { listing: Listing }) {
                     ? 'Partial match (0.5x weight in average)' 
                     : undefined;
 
+                  const ratio = item.ratio ?? 1.0;
+                  const unitPrice = ratio !== 1.0 ? item.price / ratio : null;
+                  
                   return (
                     <li key={i} className={`flex items-baseline gap-2 flex-wrap ${opacityClass}`} style={{ wordBreak: 'break-word', overflowWrap: 'anywhere' }}>
                       <a
@@ -174,6 +178,11 @@ function ListingCompsPanel({ listing }: { listing: Listing }) {
                       </a>
                       <span className={`font-bold shrink-0 ${priceClass}`}>
                         {formatPrice(item.price, "$")}
+                        {unitPrice !== null && (
+                          <span className={`text-xs font-normal ml-1 ${priceClass}`}>
+                            (unit price {formatPrice(unitPrice, "$")})
+                          </span>
+                        )}
                       </span>
                       {statusLabel && (
                         <span className={`text-xs ${reasonClass} shrink-0`}>{statusLabel}</span>
