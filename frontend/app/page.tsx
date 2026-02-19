@@ -9,9 +9,10 @@ import { AppFooter } from "@/components/layout/AppFooter";
 import { MarketplaceSearchForm } from "@/components/search-form/MarketplaceSearchForm";
 import type { SearchPhase } from "@/components/loading/SearchLoadingState";
 import { SearchErrorState } from "@/components/results/SearchErrorState";
-import { SearchResultsTable } from "@/components/results/SearchResultsTable";
+import { SearchLoadingView } from "@/components/results/SearchLoadingView";
+import { SearchResultsView } from "@/components/results/SearchResultsView";
 import { CookieSetupGuide } from "@/components/auth/CookieSetupGuide";
-import type { Listing } from "@/components/results/SearchResultsTable";
+import type { Listing } from "@/components/results/ResultsTable";
 import { FloatingLogPanel } from "@/components/debug/FloatingLogPanel";
 import type { DebugFacebookListing, DebugEbayQueryEntry, DebugLogEntry } from "@/components/debug/DebugPanel";
 
@@ -884,14 +885,10 @@ export default function Home() {
             )}
 
             {appState === "loading" && (
-              <SearchResultsTable
+              <SearchLoadingView
                 listings={listings}
-                scannedCount={scannedCount}
                 threshold={threshold}
                 filteredOutListings={filteredOutListings}
-                onDownloadCSV={downloadCSV}
-                onReset={handleReset}
-                isLoading={true}
                 currentItem={currentItem}
                 facebookListings={debugFacebookListings}
                 ebayQueries={debugEbayQueries}
@@ -900,15 +897,13 @@ export default function Home() {
             )}
 
             {appState === "done" && (
-              <SearchResultsTable
+              <SearchResultsView
                 listings={listings}
                 scannedCount={scannedCount}
                 threshold={threshold}
                 filteredOutListings={filteredOutListings}
                 onDownloadCSV={downloadCSV}
                 onReset={handleReset}
-                facebookListings={debugFacebookListings}
-                ebayQueries={debugEbayQueries}
               />
             )}
 
