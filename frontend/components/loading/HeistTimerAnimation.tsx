@@ -1,8 +1,13 @@
 "use client";
 
 /** Radar container (circle, border, background). */
-const RADAR_CONTAINER_CLASS =
-  "relative h-24 w-24 shrink-0 overflow-hidden rounded-full border-2 border-primary/80 bg-secondary";
+const RADAR_CONTAINER_BASE = "relative shrink-0 overflow-hidden rounded-full border-2 border-primary/80 bg-secondary";
+
+/** Radar size variants. */
+const RADAR_SIZE_CLASSES = {
+  default: "h-24 w-24",
+  compact: "h-12 w-12",
+} as const;
 
 /** Radar sweep line (hand). */
 const RADAR_SWEEP_LINE_CLASS =
@@ -16,16 +21,21 @@ const SWEEP_ROTATION_DURATION_S = 3;
 const TRANSFORM_ORIGIN_CENTER = "50% 50%";
 const ROTATE_KEYFRAME_NAME = "heist-radar-rotate";
 
+export interface HeistTimerAnimationProps {
+  compact?: boolean;
+}
+
 /**
  * Pirate radar animation for the loading timer.
  * Sweep hand and center dot.
  */
-export function HeistTimerAnimation() {
+export function HeistTimerAnimation({ compact = false }: HeistTimerAnimationProps) {
+  const sizeClass = RADAR_SIZE_CLASSES[compact ? "compact" : "default"];
   const keyframesCss = `@keyframes ${ROTATE_KEYFRAME_NAME} { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`;
   const animationValue = `${ROTATE_KEYFRAME_NAME} ${SWEEP_ROTATION_DURATION_S}s linear infinite`;
 
   return (
-    <div className={RADAR_CONTAINER_CLASS} aria-hidden>
+    <div className={`${RADAR_CONTAINER_BASE} ${sizeClass}`} aria-hidden>
       <style dangerouslySetInnerHTML={{ __html: keyframesCss }} />
       <div
         className="absolute inset-0"
