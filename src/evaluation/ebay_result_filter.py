@@ -21,7 +21,6 @@ from src.scrapers.fb_marketplace_scraper import Listing, SearchCancelledError
 from src.utils.colored_logger import setup_colored_logger, log_warning
 from src.evaluation.prompts import (
     RESULT_FILTERING_SYSTEM_MESSAGE,
-    format_fb_listing_for_prompt,
     get_batch_filtering_prompt,
 )
 from src.evaluation.openai_client import (
@@ -86,7 +85,7 @@ def _try_parse_results_list(raw_content: str, expected_count: int) -> Optional[L
 
 async def _filter_batch(
     client: "AsyncOpenAI",
-    fb_listing_text: str,
+    product_recon_json: str,
     items: List[dict],
     start_index: int,
 ) -> List[Tuple[int, str, str]]:
@@ -102,7 +101,7 @@ async def _filter_batch(
         return []
     ebay_items_text = _format_ebay_batch(items)
     prompt = get_batch_filtering_prompt(
-        fb_listing_text=fb_listing_text,
+        product_recon_json=product_recon_json,
         ebay_items_text=ebay_items_text,
     )
     try:
@@ -141,6 +140,7 @@ async def _filter_batch(
 async def _filter_ebay_results_async(
     listing: Listing,
     ebay_items: List[dict],
+    product_recon_json: str,
     cancelled: Optional[threading.Event] = None,
 ) -> Optional[Tuple[List[int], List[int], List[dict], dict]]:
     """
@@ -171,7 +171,6 @@ async def _filter_ebay_results_async(
         raise SearchCancelledError("Search was cancelled by user")
 
     client = AsyncOpenAI(api_key=OPENAI_API_KEY)
-    fb_listing_text = format_fb_listing_for_prompt(listing)
 
     async def _cancel_running_tasks(tasks: set[asyncio.Task]) -> None:
         """Cancel running batch tasks and wait for them to finish cleanup."""
@@ -208,7 +207,7 @@ async def _filter_ebay_results_async(
                     await _cancel_running_tasks(running_tasks)
                     raise SearchCancelledError("Search was cancelled by user")
                 task = asyncio.create_task(
-                    _filter_batch(client, fb_listing_text, batch, start_index)
+                    _filter_batch(client, product_recon_json, batch, start_index)
                 )
                 running_tasks.add(task)
                 next_batch_idx += 1
@@ -293,6 +292,7 @@ async def _filter_ebay_results_async(
 def filter_ebay_results_with_openai(
     listing: Listing,
     ebay_items: List[dict],
+    product_recon_json: str,
     cancelled: Optional[threading.Event] = None,
 ) -> Optional[Tuple[List[int], List[int], List[dict], dict]]:
     """
@@ -328,11 +328,11 @@ def filter_ebay_results_with_openai(
             with concurrent.futures.ThreadPoolExecutor() as executor:
                 future = executor.submit(
                     asyncio.run,
-                    _filter_ebay_results_async(listing, ebay_items, cancelled),
+                    _filter_ebay_results_async(listing, ebay_items, product_recon_json, cancelled),
                 )
                 return future.result()
         except RuntimeError:
-            return asyncio.run(_filter_ebay_results_async(listing, ebay_items, cancelled))
+            return asyncio.run(_filter_ebay_results_async(listing, ebay_items, product_recon_json, cancelled))
     except SearchCancelledError:
         raise
     except Exception as e:

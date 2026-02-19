@@ -27,7 +27,7 @@ from src.scrapers.ebay_scraper_v2 import (
 )
 from src.evaluation.listing_ebay_comparison import compare_listing_to_ebay
 from src.evaluation.fb_listing_filter import is_suspicious_price
-from src.utils.colored_logger import setup_colored_logger, log_step_sep, log_error_short, log_warning
+from src.utils.colored_logger import setup_colored_logger, log_step_sep, log_error_short, log_warning, SEP_LINE_LEN
 from src.utils.search_runtime_config import (
     LISTING_EVAL_MAX_WORKERS,
     LISTING_EVAL_WORKER_START_DELAY_SEC,
@@ -111,12 +111,12 @@ class QueueLogHandler(logging.Handler):
         if not label:
             return
 
-        for line in lines:
-            self._event_queue.put({
-                "type": "debug_log",
-                "level": "INFO",
-                "message": line,
-            })
+        # Separator line right before the completion marker.
+        self._event_queue.put({
+            "type": "debug_log",
+            "level": "INFO",
+            "message": "─" * SEP_LINE_LEN,
+        })
 
         if outcome == "done":
             end_message = f"✅ Finished {label}"
@@ -129,7 +129,22 @@ class QueueLogHandler(logging.Handler):
             "level": "INFO",
             "message": end_message,
         })
-
+        
+        # Emit the buffered per-listing logs first so any separator lines
+        # appear as a prefix/suffix around the listing block.
+        for line in lines:
+            self._event_queue.put({
+                "type": "debug_log",
+                "level": "INFO",
+                "message": line,
+            })
+        
+        self._event_queue.put({
+            "type": "debug_log",
+            "level": "INFO",
+            "message": "─" * SEP_LINE_LEN,
+        })
+        
 
 def create_search_stream(request, debug_mode: bool):
     """
@@ -170,6 +185,7 @@ def create_search_stream(request, debug_mode: bool):
             "fbListingId": fb_listing_id,
             "title": listing.title,
             "price": listing.price,
+            "currency": listing.currency,
             "location": listing.location,
             "url": listing.url,
             "description": listing.description or "",
@@ -414,6 +430,16 @@ def create_search_stream(request, debug_mode: bool):
                                     "ebayQuery": ebay_query,
                                 })
 
+                        def on_product_recon(recon: dict, citations: list[dict]):
+                            if debug_mode and not cancelled.is_set():
+                                event_queue.put({
+                                    "type": "debug_product_recon",
+                                    "listingIndex": index,
+                                    "fbListingId": fb_listing_id,
+                                    "recon": recon,
+                                    "citations": citations,
+                                })
+
                         result = compare_listing_to_ebay(
                             listing=listing,
                             original_query=request.query,
@@ -426,6 +452,7 @@ def create_search_stream(request, debug_mode: bool):
                             market_price_cache=market_price_cache,
                             market_price_cache_lock=market_price_cache_lock,
                             on_query_generated=on_query_generated,
+                            on_product_recon=on_product_recon if debug_mode else None,
                         )
                         if debug_log_handler is not None:
                             debug_log_handler.finish_thread_buffer(worker_thread_id, "done")
@@ -570,6 +597,9 @@ def create_search_stream(request, debug_mode: bool):
                     yield f"data: {json.dumps(event)}\n\n"
                     continue
                 if event["type"] == "debug_ebay_query_finished":
+                    yield f"data: {json.dumps(event)}\n\n"
+                    continue
+                if event["type"] == "debug_product_recon":
                     yield f"data: {json.dumps(event)}\n\n"
                     continue
                 if event["type"] == "listing_result":

@@ -70,6 +70,11 @@ type SSEDispatchHandlers = {
   onDebugEbayQueryStart?: (entry: { fbListingId: string; listingIndex: number; fbTitle: string }) => void;
   onDebugEbayQueryGenerated?: (entry: DebugEbayQueryEntry) => void;
   onDebugEbayQueryFinished?: (entry: { fbListingId: string; listingIndex: number; failed?: boolean }) => void;
+  onDebugProductRecon?: (entry: {
+    fbListingId: string;
+    listingIndex: number;
+    recon: NonNullable<DebugEbayQueryEntry["productRecon"]>;
+  }) => void;
   onDebugLog?: (entry: DebugLogEntry) => void;
   onInspectorUrl?: (url: string, source?: string) => void;
 };
@@ -104,6 +109,8 @@ function dispatchSSEEvent(payloadString: string, handlers: SSEDispatchHandlers):
     message?: string;
     url?: string;
     source?: string;
+    recon?: Record<string, unknown>;
+    citations?: { url: string; title?: string }[];
   };
   if (data.type === "auth_error") {
     handlers.handleAuthError();
@@ -178,6 +185,28 @@ function dispatchSSEEvent(payloadString: string, handlers: SSEDispatchHandlers):
       fbListingId: data.fbListingId,
       listingIndex: data.listingIndex,
       failed: data.failed,
+    });
+  } else if (
+    data.type === "debug_product_recon"
+    && typeof data.listingIndex === "number"
+    && typeof data.fbListingId === "string"
+    && data.recon != null
+  ) {
+    handlers.onDebugProductRecon?.({
+      fbListingId: data.fbListingId,
+      listingIndex: data.listingIndex,
+      recon: {
+        canonical_name: String((data.recon as any).canonical_name ?? ""),
+        brand: String((data.recon as any).brand ?? ""),
+        category: String((data.recon as any).category ?? ""),
+        model_or_series: String((data.recon as any).model_or_series ?? ""),
+        year_or_generation: String((data.recon as any).year_or_generation ?? ""),
+        variant_dimensions: Array.isArray((data.recon as any).variant_dimensions)
+          ? ((data.recon as any).variant_dimensions as any[]).map((v) => String(v))
+          : [],
+        notes: String((data.recon as any).notes ?? ""),
+        citations: Array.isArray(data.citations) ? data.citations : [],
+      },
     });
   } else if (data.type === "debug_log" && data.level != null && data.message != null) {
     handlers.onDebugLog?.({ level: data.level, message: data.message, timestampMs: Date.now() });
@@ -472,6 +501,33 @@ export default function Home() {
     );
   }, []);
 
+  const onDebugProductRecon = useCallback((entry: { fbListingId: string; listingIndex: number; recon: NonNullable<DebugEbayQueryEntry["productRecon"]> }) => {
+    setDebugEbayQueries((prev: DebugEbayQueryEntry[]) => {
+      const existing = prev.find((item) => item.fbListingId === entry.fbListingId);
+      if (!existing) {
+        return [
+          ...prev,
+          {
+            fbListingId: entry.fbListingId,
+            listingIndex: entry.listingIndex,
+            fbTitle: "",
+            startedAtMs: Date.now(),
+            productRecon: entry.recon,
+            failed: false,
+          },
+        ];
+      }
+      return prev.map((item) =>
+        item.fbListingId === entry.fbListingId
+          ? {
+              ...item,
+              productRecon: entry.recon,
+            }
+          : item
+      );
+    });
+  }, []);
+
   /**
    * Handles a single listing result from the backend as it's processed.
    * Appends the listing to the results array for incremental display.
@@ -528,6 +584,7 @@ export default function Home() {
         onDebugEbayQueryStart: onDebugEbayQueryStart,
         onDebugEbayQueryGenerated: onDebugEbayQueryGenerated,
         onDebugEbayQueryFinished: onDebugEbayQueryFinished,
+        onDebugProductRecon: onDebugProductRecon,
         onDebugLog: (entry) => setDebugLogs((prev: DebugLogEntry[]) => [...prev, entry]),
         onInspectorUrl: openBackgroundTab,
       };
@@ -582,7 +639,7 @@ export default function Home() {
         reader.releaseLock();
       }
     },
-    [handlePhaseUpdate, handleProgressUpdate, handleFilteredUpdate, handleCompletion, handleAuthError, handleLocationError, onListingResult, onDebugEbayQueryStart, onDebugEbayQueryGenerated, onDebugEbayQueryFinished]
+    [handlePhaseUpdate, handleProgressUpdate, handleFilteredUpdate, handleCompletion, handleAuthError, handleLocationError, onListingResult, onDebugEbayQueryStart, onDebugEbayQueryGenerated, onDebugEbayQueryFinished, onDebugProductRecon]
   );
 
   /**
