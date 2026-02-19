@@ -212,6 +212,7 @@ def create_search_stream(request, debug_mode: bool):
         fb_listing_id = _next_fb_listing_id()
         filtered_count_holder[0] += 1
         listing_dict = build_debug_listing_dict(listing, fb_listing_id, filtered=True)
+        listing_dict["filterReason"] = "Suspicious price"
         filtered_out_listings.append(listing_dict)
         event_queue.put({"type": "filtered_facebook_listing", "listing": listing_dict})
         event_queue.put({"type": "debug_facebook_listing", "listing": listing_dict})

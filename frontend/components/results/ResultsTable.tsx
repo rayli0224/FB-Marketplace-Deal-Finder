@@ -32,6 +32,7 @@ export interface FilteredOutListingRow {
   location: string;
   url: string;
   fbListingId?: string;
+  filterReason?: string;
 }
 
 export interface ResultsTableProps {
@@ -51,6 +52,23 @@ const TABLE_COLUMN_COUNT_WITH_STATUS = 7;
 /** Number of columns when status column is hidden. */
 const TABLE_COLUMN_COUNT_WITHOUT_STATUS = 6;
 
+/** Offset used to sort post-eval filtered (newer) above pre-eval filtered (older). */
+const FILTERED_RECENCY_OFFSET = 1_000_000;
+
+type ListingFilterInfo = { isFiltered: true; isPostEval: boolean } | { isFiltered: false };
+
+/** Returns filter status for a listing. Used for sorting and row styling. */
+function getListingFilterInfo(
+  listing: Listing,
+  filteredOutUrls: Set<string>
+): ListingFilterInfo {
+  const inFilteredOut = filteredOutUrls.has(listing.url);
+  const hasNoCompReason = listing.noCompReason != null && listing.noCompReason !== "";
+  const isFiltered = listing.dealScore === null && (inFilteredOut || hasNoCompReason);
+  if (!isFiltered) return { isFiltered: false };
+  return { isFiltered: true, isPostEval: hasNoCompReason && !inFilteredOut };
+}
+
 /** Returns true when the listing meets or exceeds the deal threshold. */
 function isGoodDeal(dealScore: number | null, threshold: number): boolean {
   return dealScore !== null && dealScore >= threshold;
@@ -69,6 +87,7 @@ export function filteredOutToListing(row: FilteredOutListingRow): Listing {
     location: row.location,
     url: row.url,
     dealScore: null,
+    noCompReason: row.filterReason ?? "Filtered before evaluation",
   };
 }
 
@@ -101,7 +120,6 @@ function getItemStatusClass(status: "Filtered" | "Completed" | "Evaluating" | "T
 function ListingDetailsPanel({ reason }: { reason: string }) {
   return (
     <div className="font-mono text-xs text-muted-foreground">
-      <span className="font-bold text-foreground">Why no comparison: </span>
       {reason}
     </div>
   );
@@ -240,6 +258,26 @@ export function ResultsTable({
   }, [facebookListings]);
 
   const filteredOutUrls = new Set(filteredOutListings.map((item) => item.url));
+
+  const sortedDisplayListings = useMemo(() => {
+    const filtered: { listing: Listing; idx: number; isPostEval: boolean }[] = [];
+    const nonFiltered: Listing[] = [];
+    displayListings.forEach((listing, idx) => {
+      const filterInfo = getListingFilterInfo(listing, filteredOutUrls);
+      if (filterInfo.isFiltered) {
+        filtered.push({ listing, idx, isPostEval: filterInfo.isPostEval });
+      } else {
+        nonFiltered.push(listing);
+      }
+    });
+    filtered.sort((a, b) => {
+      const recencyA = a.isPostEval ? a.idx + FILTERED_RECENCY_OFFSET : a.idx;
+      const recencyB = b.isPostEval ? b.idx + FILTERED_RECENCY_OFFSET : b.idx;
+      return recencyB - recencyA;
+    });
+    return [...nonFiltered, ...filtered.map((f) => f.listing)];
+  }, [displayListings, filteredOutListings]);
+
   const columnCount = showStatusColumn ? TABLE_COLUMN_COUNT_WITH_STATUS : TABLE_COLUMN_COUNT_WITHOUT_STATUS;
 
   if (displayListings.length === 0) {
@@ -267,8 +305,9 @@ export function ResultsTable({
           </tr>
         </thead>
         <tbody>
-          {displayListings.map((listing) => {
-            const isFilteredOut = listing.dealScore === null && filteredOutUrls.has(listing.url);
+          {sortedDisplayListings.map((listing) => {
+            const filterInfo = getListingFilterInfo(listing, filteredOutUrls);
+            const isFilteredOut = filterInfo.isFiltered;
             const goodDeal = !isFilteredOut && isGoodDeal(listing.dealScore, threshold);
             const badDeal = !isFilteredOut && isBadDeal(listing.dealScore, threshold);
             const rowBgClass = isFilteredOut
@@ -316,7 +355,7 @@ export function ResultsTable({
               ? "px-3 py-2 max-w-[150px] truncate text-muted-foreground/70 line-through"
               : "px-3 py-2 max-w-[150px] truncate text-muted-foreground";
             const linkClasses = isFilteredOut
-              ? "text-muted-foreground hover:text-foreground hover:underline line-through"
+              ? "text-muted-foreground hover:text-foreground hover:underline"
               : "text-primary hover:underline";
 
             return (
@@ -355,7 +394,7 @@ export function ResultsTable({
                         {listing.dealScore}%
                       </span>
                     ) : isFilteredOut ? (
-                      <span className="text-muted-foreground italic">Filtered</span>
+                      <span className="text-muted-foreground/50">--</span>
                     ) : (
                       <span className="text-muted-foreground/50">--</span>
                     )}

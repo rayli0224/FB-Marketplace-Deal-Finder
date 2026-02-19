@@ -6,6 +6,8 @@ import { CancelSearchButton } from "@/components/loading/CancelSearchButton";
 import { ResultsTable, filteredOutToListing } from "@/components/results/ResultsTable";
 import type { Listing, FilteredOutListingRow } from "@/components/results/ResultsTable";
 import type { DebugFacebookListing, DebugEbayQueryEntry } from "@/components/debug/DebugPanel";
+import type { DebugSearchParams } from "@/components/debug/DebugSearchParams";
+import { SearchQueryDetails } from "@/components/results/SearchQueryDetails";
 
 const ELAPSED_TIME_UPDATE_INTERVAL_MS = 100;
 
@@ -16,11 +18,12 @@ export interface SearchLoadingViewProps {
   currentItem: { listingIndex: number; fbTitle: string; totalListings: number } | null;
   facebookListings: DebugFacebookListing[];
   ebayQueries: DebugEbayQueryEntry[];
+  searchParams: DebugSearchParams | null;
   onCancel: () => void;
 }
 
 /**
- * Loading-state view: shows live progress (treasures found, current item), timer, and cancel.
+ * Loading-state view: shows live progress (current item), timer, and cancel.
  * Displays pending Facebook listings and filtered-out items alongside evaluated results.
  */
 export function SearchLoadingView({
@@ -30,6 +33,7 @@ export function SearchLoadingView({
   currentItem,
   facebookListings,
   ebayQueries,
+  searchParams,
   onCancel,
 }: SearchLoadingViewProps) {
   const [nowMs, setNowMs] = useState<number>(() => Date.now());
@@ -70,8 +74,6 @@ export function SearchLoadingView({
     ...filteredOutListings.map(filteredOutToListing),
   ];
 
-  const filteredCount = listings.length;
-
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between">
@@ -82,9 +84,6 @@ export function SearchLoadingView({
             </h2>
             <HeistClockSection />
           </div>
-          <p className="font-mono text-xs text-muted-foreground">
-            {filteredCount} treasure{filteredCount !== 1 ? "s" : ""} found so far...
-          </p>
           {currentItem && (
             <div className="mt-2 border-2 border-primary/50 bg-primary/5 px-3 py-2 rounded">
               <div className="font-mono text-xs">
@@ -103,6 +102,8 @@ export function SearchLoadingView({
         </div>
         <CancelSearchButton onCancel={onCancel} />
       </div>
+
+      <SearchQueryDetails searchParams={searchParams} />
 
       <ResultsTable
         displayListings={displayListings}

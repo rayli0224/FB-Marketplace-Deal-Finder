@@ -13,6 +13,7 @@ export type DebugFacebookListing = {
   url: string;
   description: string;
   filtered?: boolean;
+  filterReason?: string;
 };
 
 export type DebugEbayQueryEntry = {
@@ -314,7 +315,6 @@ function EbayQueryCell({ entry, nowMs }: { entry: DebugEbayQueryEntry; nowMs: nu
       </div>
       {entry.noCompReason && (
         <div className="text-muted-foreground">
-          <span className="font-bold text-foreground">Why no comparison: </span>
           <span>{entry.noCompReason}</span>
         </div>
       )}
