@@ -2,6 +2,8 @@
 
 import { Fragment, useState, useEffect, useMemo } from "react";
 import { FullSizeToggle } from "@/components/ui/FullSizeToggle";
+import { HeistClockSection } from "@/components/loading/HeistClockSection";
+import { CancelSearchButton } from "@/components/loading/CancelSearchButton";
 import type { DebugFacebookListing, DebugEbayQueryEntry } from "@/components/debug/DebugPanel";
 import type { DebugSearchParams } from "@/components/debug/DebugSearchParams";
 
@@ -48,6 +50,7 @@ export interface SearchResultsTableProps {
   searchParams?: DebugSearchParams | null;
   facebookListings?: DebugFacebookListing[];
   ebayQueries?: DebugEbayQueryEntry[];
+  onCancel?: () => void;
 }
 
 /** Interval in ms for updating elapsed time display during loading. */
@@ -239,6 +242,7 @@ export function SearchResultsTable({
   searchParams = null,
   facebookListings = [],
   ebayQueries = [],
+  onCancel,
 }: SearchResultsTableProps) {
   const [showBadDeals, setShowBadDeals] = useState<boolean>(true);
   const [showFilteredOut, setShowFilteredOut] = useState<boolean>(false);
@@ -303,24 +307,14 @@ export function SearchResultsTable({
 
   return (
     <div className="space-y-3">
-      {searchParams && (
-        <div className="border border-border bg-secondary px-4 py-2 rounded font-mono text-xs">
-          <div className="font-semibold text-foreground mb-1.5">Search request</div>
-          <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-0.5 text-muted-foreground">
-            <div><span>Query: </span><span className="text-foreground">{searchParams.query}</span></div>
-            <div><span>Zip: </span><span className="text-foreground">{searchParams.zipCode}</span></div>
-            <div><span>Radius: </span><span className="text-foreground">{searchParams.radius} mi</span></div>
-            <div><span>Max listings: </span><span className="text-foreground">{searchParams.maxListings}</span></div>
-            <div><span>Threshold: </span><span className="text-foreground">{searchParams.threshold}%</span></div>
-            <div><span>Extract descriptions: </span><span className="text-foreground">{searchParams.extractDescriptions ? "Yes" : "No"}</span></div>
-          </div>
-        </div>
-      )}
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="font-mono text-lg font-bold text-foreground">
-            {isLoading ? "LOOT INCOMING..." : "HEIST COMPLETE!"}
-          </h2>
+          <div className="flex items-center gap-3 flex-wrap">
+            <h2 className="font-mono text-lg font-bold text-foreground">
+              {isLoading ? "LOOT INCOMING..." : "HEIST COMPLETE!"}
+            </h2>
+            {isLoading && <HeistClockSection />}
+          </div>
           <p className="font-mono text-xs text-muted-foreground">
             {isLoading 
               ? `${filteredCount} treasure${filteredCount !== 1 ? "s" : ""} found so far...`
@@ -343,6 +337,9 @@ export function SearchResultsTable({
             </div>
           )}
         </div>
+        {isLoading && onCancel && (
+          <CancelSearchButton onCancel={onCancel} />
+        )}
         {!isLoading && (
           <div className="flex gap-2">
             <button
@@ -362,6 +359,20 @@ export function SearchResultsTable({
           </div>
         )}
       </div>
+
+      {searchParams && (
+        <div className="border border-border bg-secondary px-4 py-2 rounded font-mono text-xs">
+          <div className="font-semibold text-foreground mb-1.5">Search request</div>
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-0.5 text-muted-foreground">
+            <div><span>Query: </span><span className="text-foreground">{searchParams.query}</span></div>
+            <div><span>Zip: </span><span className="text-foreground">{searchParams.zipCode}</span></div>
+            <div><span>Radius: </span><span className="text-foreground">{searchParams.radius} mi</span></div>
+            <div><span>Max listings: </span><span className="text-foreground">{searchParams.maxListings}</span></div>
+            <div><span>Threshold: </span><span className="text-foreground">{searchParams.threshold}%</span></div>
+            <div><span>Extract descriptions: </span><span className="text-foreground">{searchParams.extractDescriptions ? "Yes" : "No"}</span></div>
+          </div>
+        </div>
+      )}
 
       {/* Filters Section - hidden during loading */}
       {!isLoading && (

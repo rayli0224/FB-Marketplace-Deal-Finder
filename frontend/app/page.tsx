@@ -7,7 +7,7 @@ import { formSchema, type FormData as ValidationFormData, DEFAULT_RADIUS } from 
 import { AppHeader } from "@/components/layout/AppHeader";
 import { AppFooter } from "@/components/layout/AppFooter";
 import { MarketplaceSearchForm } from "@/components/search-form/MarketplaceSearchForm";
-import { SearchLoadingState, type SearchPhase } from "@/components/loading/SearchLoadingState";
+import type { SearchPhase } from "@/components/loading/SearchLoadingState";
 import { SearchErrorState } from "@/components/results/SearchErrorState";
 import { SearchResultsTable } from "@/components/results/SearchResultsTable";
 import { CookieSetupGuide } from "@/components/auth/CookieSetupGuide";
@@ -822,7 +822,14 @@ export default function Home() {
     setPhase("scraping");
     setCurrentItem(null);
     setThreshold(Number(data.threshold) || 0);
-    setDebugSearchParams(null);
+    setDebugSearchParams({
+      query: data.query,
+      zipCode: data.zipCode,
+      radius: Number(data.radius) || DEFAULT_DEBUG_RADIUS,
+      maxListings: Number(data.maxListings) || DEFAULT_DEBUG_MAX_LISTINGS,
+      threshold: Number(data.threshold) ?? DEFAULT_DEBUG_THRESHOLD,
+      extractDescriptions: data.extractDescriptions ?? false,
+    });
     setDebugFacebookListings([]);
     setDebugEbayQueries([]);
     setAppState("loading");
@@ -905,31 +912,20 @@ export default function Home() {
             )}
 
             {appState === "loading" && (
-              <div className="space-y-6">
-                <SearchLoadingState
-                  phase={phase}
-                  scannedCount={scannedCount}
-                  evaluatedCount={evaluatedCount}
-                  maxListings={maxListings}
-                  currentItem={currentItem}
-                  onCancel={cancelSearch}
-                />
-                {phase === "evaluating" && (listings.length > 0 || filteredOutListings.length > 0) && (
-                  <SearchResultsTable
-                    listings={listings}
-                    scannedCount={scannedCount}
-                    threshold={threshold}
-                    filteredOutListings={filteredOutListings}
-                    onDownloadCSV={downloadCSV}
-                    onReset={handleReset}
-                    isLoading={true}
-                    currentItem={currentItem}
-                    searchParams={debugSearchParams}
-                    facebookListings={debugFacebookListings}
-                    ebayQueries={debugEbayQueries}
-                  />
-                )}
-              </div>
+              <SearchResultsTable
+                listings={listings}
+                scannedCount={scannedCount}
+                threshold={threshold}
+                filteredOutListings={filteredOutListings}
+                onDownloadCSV={downloadCSV}
+                onReset={handleReset}
+                isLoading={true}
+                currentItem={currentItem}
+                searchParams={debugSearchParams}
+                facebookListings={debugFacebookListings}
+                ebayQueries={debugEbayQueries}
+                onCancel={cancelSearch}
+              />
             )}
 
             {appState === "done" && (
