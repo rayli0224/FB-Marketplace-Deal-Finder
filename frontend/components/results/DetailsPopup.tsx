@@ -4,7 +4,13 @@ import { useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import type { CompItem, Listing } from "./ResultsTable";
 
-function formatPrice(price: number, currency: string = "$"): string {
+const DEFAULT_CURRENCY = "$";
+const COMP_TABLE_ROW_HEIGHT = "max-h-[2.5em]";
+const COMP_TABLE_BORDER_R = "border-r border-border last:border-r-0";
+const COMP_TABLE_CELL_BASE = `px-2 py-1 align-top ${COMP_TABLE_ROW_HEIGHT} overflow-hidden`;
+const POPUP_ANCHOR_OFFSET_TOP = 8;
+
+function formatPrice(price: number, currency: string = DEFAULT_CURRENCY): string {
   return `${currency}${price.toFixed(2)}`;
 }
 
@@ -18,6 +24,26 @@ function DetailsContentPanel({ reason }: { reason: string }) {
 
 function getCompItemStatus(item: CompItem): "accept" | "maybe" | "reject" {
   return (item.filterStatus ?? (item.filtered ? "reject" : "accept")) as "accept" | "maybe" | "reject";
+}
+
+function getCompRowStyles(status: "accept" | "maybe" | "reject"): {
+  opacityClass: string;
+  linkClass: string;
+  priceClass: string;
+  reasonClass: string;
+  statusLabel: string;
+  titleText: string | undefined;
+} {
+  const isRejected = status === "reject";
+  const isMaybe = status === "maybe";
+  return {
+    opacityClass: isRejected ? "opacity-60" : "",
+    linkClass: isRejected ? "text-red-500 line-through" : isMaybe ? "text-yellow-500" : "text-primary",
+    priceClass: isRejected ? "text-red-500" : isMaybe ? "text-yellow-500" : "text-primary",
+    reasonClass: isRejected ? "text-red-500/70" : isMaybe ? "text-yellow-500/70" : "text-muted-foreground",
+    statusLabel: isRejected ? "Rejected" : isMaybe ? "Maybe" : "Accepted",
+    titleText: isRejected ? "Filtered out as non-comparable" : isMaybe ? "Partial match (0.5x weight in average)" : undefined,
+  };
 }
 
 function sortCompsValidFirst(items: CompItem[]): CompItem[] {
@@ -60,59 +86,39 @@ function CompsContentPanel({ listing }: { listing: Listing }) {
               <table className="w-full min-w-max table-auto border-collapse border border-border text-xs">
                 <thead>
                   <tr className="border-b border-border bg-secondary/50">
-                    <th className="border-r border-border px-2 py-1 text-left font-semibold text-foreground last:border-r-0">Listing</th>
-                    <th className="border-r border-border px-2 py-1 text-right font-semibold text-foreground whitespace-nowrap last:border-r-0">Price</th>
-                    <th className="border-r border-border px-2 py-1 text-left font-semibold text-foreground whitespace-nowrap last:border-r-0">Status</th>
+                    <th className={`${COMP_TABLE_BORDER_R} px-2 py-1 text-left font-semibold text-foreground`}>Listing</th>
+                    <th className={`${COMP_TABLE_BORDER_R} px-2 py-1 text-right font-semibold text-foreground whitespace-nowrap`}>Price</th>
+                    <th className={`${COMP_TABLE_BORDER_R} px-2 py-1 text-left font-semibold text-foreground whitespace-nowrap`}>Status</th>
                     <th className="px-2 py-1 text-left font-semibold text-foreground">Reason</th>
                   </tr>
                 </thead>
                 <tbody>
                   {sortedItems.map((item: CompItem, i: number) => {
                     const status = getCompItemStatus(item);
-                    const isRejected = status === "reject";
-                    const isMaybe = status === "maybe";
-                    const opacityClass = isRejected ? "opacity-60" : "";
-                    const linkClass = isRejected
-                      ? "text-red-500 line-through"
-                      : isMaybe
-                        ? "text-yellow-500"
-                        : "text-primary";
-                    const priceClass = isRejected ? "text-red-500" : isMaybe ? "text-yellow-500" : "text-primary";
-                    const reasonClass = isRejected
-                      ? "text-red-500/70"
-                      : isMaybe
-                        ? "text-yellow-500/70"
-                        : "text-muted-foreground";
-                    const statusLabel = isRejected ? "Rejected" : isMaybe ? "Maybe" : "Accepted";
-                    const titleText = isRejected
-                      ? "Filtered out as non-comparable"
-                      : isMaybe
-                        ? "Partial match (0.5x weight in average)"
-                        : undefined;
-
+                    const styles = getCompRowStyles(status);
                     return (
                       <tr
                         key={item.url ? `${item.url}-${i}` : i}
-                        className={`border-b border-border/50 last:border-b-0 ${opacityClass}`}
+                        className={`border-b border-border/50 last:border-b-0 ${styles.opacityClass}`}
                       >
-                        <td className="border-r border-border px-2 py-1 align-top max-h-[2.5em] overflow-hidden last:border-r-0">
+                        <td className={`${COMP_TABLE_CELL_BASE} ${COMP_TABLE_BORDER_R}`}>
                           <a
                             href={item.url}
                             target="_blank"
                             rel="noopener noreferrer"
-                            className={`hover:underline truncate block max-w-[200px] cursor-pointer ${linkClass}`}
-                            title={titleText ?? (item.title || "eBay listing")}
+                            className={`hover:underline truncate block max-w-[200px] cursor-pointer ${styles.linkClass}`}
+                            title={styles.titleText ?? (item.title || "eBay listing")}
                           >
                             {item.title || "eBay listing"}
                           </a>
                         </td>
-                        <td className={`border-r border-border px-2 py-1 text-right font-bold align-top max-h-[2.5em] overflow-hidden last:border-r-0 ${priceClass}`}>
-                          <span className="line-clamp-2 block">{formatPrice(item.price, "$")}</span>
+                        <td className={`${COMP_TABLE_CELL_BASE} ${COMP_TABLE_BORDER_R} text-right font-bold ${styles.priceClass}`}>
+                          <span className="line-clamp-2 block">{formatPrice(item.price, DEFAULT_CURRENCY)}</span>
                         </td>
-                        <td className={`border-r border-border px-2 py-1 align-top max-h-[2.5em] overflow-hidden last:border-r-0 ${reasonClass}`}>
-                          <span className="line-clamp-2 block">{statusLabel}</span>
+                        <td className={`${COMP_TABLE_CELL_BASE} ${COMP_TABLE_BORDER_R} ${styles.reasonClass}`}>
+                          <span className="line-clamp-2 block">{styles.statusLabel}</span>
                         </td>
-                        <td className={`px-2 py-1 align-top max-h-[2.5em] overflow-hidden ${reasonClass}`}>
+                        <td className={`${COMP_TABLE_CELL_BASE} ${styles.reasonClass}`}>
                           <span className="line-clamp-2 block" title={item.filterReason ?? ""}>
                             {item.filterReason ?? "—"}
                           </span>
@@ -126,7 +132,7 @@ function CompsContentPanel({ listing }: { listing: Listing }) {
               <ul className="p-2 space-y-0.5">
                 {compPrices?.map((p, i) => (
                   <li key={i}>
-                    <span className="text-muted-foreground">{formatPrice(p, "$")}</span>
+                    <span className="text-muted-foreground">{formatPrice(p, DEFAULT_CURRENCY)}</span>
                   </li>
                 ))}
               </ul>
@@ -155,18 +161,17 @@ export function DetailsPopup({ listing, anchorRect, onClose }: DetailsPopupProps
     const handleEscape = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
     };
-    window.addEventListener("keydown", handleEscape);
-    return () => window.removeEventListener("keydown", handleEscape);
-  }, [onClose]);
-
-  useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
       if (popupRef.current && !popupRef.current.contains(e.target as Node)) {
         onClose();
       }
     };
+    window.addEventListener("keydown", handleEscape);
     document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
+    return () => {
+      window.removeEventListener("keydown", handleEscape);
+      document.removeEventListener("mousedown", handleClickOutside);
+    };
   }, [onClose]);
 
   const hasComps =
@@ -182,7 +187,7 @@ export function DetailsPopup({ listing, anchorRect, onClose }: DetailsPopupProps
       className="fixed z-50 w-fit max-w-[min(560px,90vw)] max-h-[85vh] overflow-hidden flex flex-col border-2 border-border bg-secondary shadow-[4px_4px_0_0] shadow-primary/20 font-mono text-xs"
       style={{
         left: anchorRect.left + anchorRect.width / 2,
-        top: anchorRect.top - 8,
+        top: anchorRect.top - POPUP_ANCHOR_OFFSET_TOP,
         transform: "translate(-50%, -100%)",
       }}
       role="dialog"
