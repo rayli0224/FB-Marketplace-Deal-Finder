@@ -5,6 +5,7 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { formSchema, type FormData as ValidationFormData, DEFAULT_RADIUS } from "@/lib/validation";
 import { AppHeader } from "@/components/layout/AppHeader";
+import { RedCloseButton } from "@/components/easter-eggs/red-close/RedCloseButton";
 import { AppFooter } from "@/components/layout/AppFooter";
 import { MarketplaceSearchForm } from "@/components/search-form/MarketplaceSearchForm";
 import type { SearchPhase } from "@/components/loading/SearchLoadingState";
@@ -858,7 +859,7 @@ export default function Home() {
 
         <div className="border-2 border-border bg-card shadow-[4px_4px_0_0] shadow-primary/20">
           <div className="flex items-center gap-2 border-b border-border bg-secondary px-4 py-2">
-            <span className="h-3 w-3 rounded-full bg-destructive" />
+            <RedCloseButton />
             <span className="h-3 w-3 rounded-full bg-accent" />
             <span className="h-3 w-3 rounded-full bg-primary" />
             <span className="ml-2 font-mono text-xs text-muted-foreground">loot_finder.exe</span>
