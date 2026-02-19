@@ -1,7 +1,8 @@
 "use client";
 
-import { Fragment, useState, useMemo } from "react";
+import { Fragment, useState, useMemo, useCallback, useRef, useEffect } from "react";
 import type { DebugFacebookListing, DebugEbayQueryEntry } from "@/components/debug/DebugPanel";
+import { DetailsPopup } from "./DetailsPopup";
 
 export interface CompItem {
   title: string;
@@ -46,12 +47,6 @@ export interface ResultsTableProps {
   nowMs?: number;
 }
 
-/** Number of columns when status column is shown. */
-const TABLE_COLUMN_COUNT_WITH_STATUS = 7;
-
-/** Number of columns when status column is hidden. */
-const TABLE_COLUMN_COUNT_WITHOUT_STATUS = 6;
-
 /** Offset used to sort post-eval filtered (newer) above pre-eval filtered (older). */
 const FILTERED_RECENCY_OFFSET = 1_000_000;
 
@@ -64,7 +59,11 @@ function getListingFilterInfo(
 ): ListingFilterInfo {
   const inFilteredOut = filteredOutUrls.has(listing.url);
   const hasNoCompReason = listing.noCompReason != null && listing.noCompReason !== "";
-  const isFiltered = listing.dealScore === null && (inFilteredOut || hasNoCompReason);
+  const ranEbayQuery =
+    listing.ebaySearchQuery != null && String(listing.ebaySearchQuery).trim() !== "";
+  const isFiltered =
+    listing.dealScore === null &&
+    (inFilteredOut || (hasNoCompReason && !ranEbayQuery));
   if (!isFiltered) return { isFiltered: false };
   return { isFiltered: true, isPostEval: hasNoCompReason && !inFilteredOut };
 }
@@ -117,114 +116,6 @@ function getItemStatusClass(status: "Filtered" | "Completed" | "Evaluating" | "T
   }
 }
 
-function ListingDetailsPanel({ reason }: { reason: string }) {
-  return (
-    <div className="font-mono text-xs text-muted-foreground">
-      {reason}
-    </div>
-  );
-}
-
-function ListingCompsPanel({ listing }: { listing: Listing }) {
-  const { ebaySearchQuery, compPrice, compPrices, compItems, currency = "$" } = listing;
-  const prices = compItems?.map((c) => c.price) ?? compPrices ?? [];
-  const count = prices.length;
-
-  return (
-    <div className="font-mono text-xs space-y-2">
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-muted-foreground">
-        {ebaySearchQuery != null && (
-          <div>
-            <span className="font-bold text-foreground">eBay search query: </span>
-            <span className="break-all">&quot;{ebaySearchQuery}&quot;</span>
-          </div>
-        )}
-        {compPrice != null && (
-          <div>
-            <span className="font-bold text-foreground">Comp price (eBay avg): </span>
-            <span className="text-primary font-bold">{formatPrice(compPrice, "$")}</span>
-          </div>
-        )}
-      </div>
-      {count > 0 && (
-        <div>
-          <span className="font-bold text-foreground">Compared against {count} listing{count !== 1 ? "s" : ""}:</span>
-          <ul className="mt-1 max-h-40 overflow-auto space-y-0.5 pl-2 border-l-2 border-border">
-            {compItems && compItems.length > 0
-              ? compItems.map((item, i) => {
-                  const status = item.filterStatus ?? (item.filtered ? "reject" : "accept");
-                  const isRejected = status === "reject";
-                  const isMaybe = status === "maybe";
-                  const opacityClass = isRejected ? "opacity-60" : "";
-                  const linkClass = isRejected
-                    ? "text-red-500 line-through"
-                    : isMaybe
-                      ? "text-yellow-500"
-                      : "text-primary";
-                  const priceClass = isRejected ? "text-red-500" : isMaybe ? "text-yellow-500" : "text-primary";
-                  const reasonClass = isRejected
-                    ? "text-red-500/70"
-                    : isMaybe
-                      ? "text-yellow-500/70"
-                      : "text-muted-foreground";
-                  const statusLabel = isRejected ? "(filtered)" : isMaybe ? "(maybe)" : null;
-                  const titleText = isRejected
-                    ? "Filtered out as non-comparable"
-                    : isMaybe
-                      ? "Partial match (0.5x weight in average)"
-                      : undefined;
-
-                  return (
-                    <li
-                      key={i}
-                      className={`flex items-baseline gap-2 flex-wrap ${opacityClass}`}
-                      style={{ wordBreak: "break-word", overflowWrap: "anywhere" }}
-                    >
-                      <a
-                        href={item.url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className={`truncate max-w-[280px] hover:underline ${linkClass}`}
-                        title={titleText}
-                      >
-                        {item.title || "eBay listing"}
-                      </a>
-                      <span className={`font-bold shrink-0 ${priceClass}`}>
-                        {formatPrice(item.price, "$")}
-                      </span>
-                      {statusLabel && (
-                        <span className={`text-xs ${reasonClass} shrink-0`}>{statusLabel}</span>
-                      )}
-                      {item.filterReason && (
-                        <span
-                          className={`text-xs ${reasonClass}`}
-                          style={{
-                            wordBreak: "break-word",
-                            overflowWrap: "break-word",
-                            whiteSpace: "normal",
-                            minWidth: 0,
-                            flex: "1 1 0%",
-                            maxWidth: "100%",
-                          }}
-                        >
-                          — {item.filterReason}
-                        </span>
-                      )}
-                    </li>
-                  );
-                })
-              : compPrices?.map((p, i) => (
-                  <li key={i}>
-                    <span className="text-muted-foreground">{formatPrice(p, "$")}</span>
-                  </li>
-                ))}
-          </ul>
-        </div>
-      )}
-    </div>
-  );
-}
-
 /**
  * Shared results table: renders rows for displayListings with expandable comps/details.
  * Used by both SearchLoadingView and SearchResultsView.
@@ -240,6 +131,9 @@ export function ResultsTable({
   nowMs = 0,
 }: ResultsTableProps) {
   const [expandedListingUrl, setExpandedListingUrl] = useState<string | null>(null);
+  const [anchorRect, setAnchorRect] = useState<DOMRect | null>(null);
+  const buttonRef = useRef<HTMLButtonElement | null>(null);
+  const scrollContainerRef = useRef<HTMLDivElement | null>(null);
 
   const ebayQueriesByFbId = useMemo(() => {
     const m = new Map<string, DebugEbayQueryEntry>();
@@ -278,7 +172,50 @@ export function ResultsTable({
     return [...nonFiltered, ...filtered.map((f) => f.listing)];
   }, [displayListings, filteredOutListings]);
 
-  const columnCount = showStatusColumn ? TABLE_COLUMN_COUNT_WITH_STATUS : TABLE_COLUMN_COUNT_WITHOUT_STATUS;
+  const handleCloseDetails = useCallback(() => {
+    setExpandedListingUrl(null);
+    setAnchorRect(null);
+    buttonRef.current = null;
+  }, []);
+
+  const handleOpenDetails = useCallback(
+    (e: React.MouseEvent<HTMLButtonElement>, url: string) => {
+      if (expandedListingUrl === url) {
+        handleCloseDetails();
+      } else {
+        buttonRef.current = e.currentTarget;
+        setAnchorRect(e.currentTarget.getBoundingClientRect());
+        setExpandedListingUrl(url);
+      }
+    },
+    [expandedListingUrl, handleCloseDetails]
+  );
+
+  const expandedListing = useMemo(
+    () =>
+      expandedListingUrl
+        ? sortedDisplayListings.find((l) => l.url === expandedListingUrl) ?? null
+        : null,
+    [expandedListingUrl, sortedDisplayListings]
+  );
+
+  useEffect(() => {
+    if (!expandedListingUrl) return;
+    const onScrollOrResize = () => {
+      if (buttonRef.current) {
+        setAnchorRect(buttonRef.current.getBoundingClientRect());
+      }
+    };
+    const scrollEl = scrollContainerRef.current;
+    if (scrollEl) scrollEl.addEventListener("scroll", onScrollOrResize);
+    window.addEventListener("scroll", onScrollOrResize, true);
+    window.addEventListener("resize", onScrollOrResize);
+    return () => {
+      if (scrollEl) scrollEl.removeEventListener("scroll", onScrollOrResize);
+      window.removeEventListener("scroll", onScrollOrResize, true);
+      window.removeEventListener("resize", onScrollOrResize);
+    };
+  }, [expandedListingUrl]);
 
   if (displayListings.length === 0) {
     return (
@@ -289,161 +226,147 @@ export function ResultsTable({
   }
 
   return (
-    <div className="max-h-[60vh] overflow-auto border border-border">
-      <table className="w-full border-collapse font-mono text-sm">
-        <thead className="sticky top-0 bg-secondary">
-          <tr className="border-b border-border text-left">
-            <th className="px-3 py-2 text-xs text-muted-foreground">TITLE</th>
-            <th className="px-3 py-2 text-xs text-muted-foreground">PRICE</th>
-            <th className="px-3 py-2 text-xs text-muted-foreground">LOCATION</th>
-            {showStatusColumn && (
-              <th className="px-3 py-2 text-xs text-muted-foreground">STATUS</th>
-            )}
-            <th className="px-3 py-2 text-xs text-muted-foreground">DEAL %</th>
-            <th className="px-3 py-2 text-xs text-muted-foreground">LINK</th>
-            <th className="px-3 py-2 text-xs text-muted-foreground w-20">DETAILS</th>
-          </tr>
-        </thead>
-        <tbody>
-          {sortedDisplayListings.map((listing) => {
-            const filterInfo = getListingFilterInfo(listing, filteredOutUrls);
-            const isFilteredOut = filterInfo.isFiltered;
-            const goodDeal = !isFilteredOut && isGoodDeal(listing.dealScore, threshold);
-            const badDeal = !isFilteredOut && isBadDeal(listing.dealScore, threshold);
-            const rowBgClass = isFilteredOut
-              ? "bg-muted/30 hover:bg-muted/50 opacity-70"
-              : goodDeal
-                ? "bg-green-500/10 hover:bg-green-500/20"
-                : badDeal
-                  ? "bg-red-500/10 hover:bg-red-500/20"
-                  : "hover:bg-secondary/50";
-            const hasComps = listing.ebaySearchQuery != null || listing.compPrice != null;
-            const hasDetails = !hasComps && (listing.noCompReason != null && listing.noCompReason !== "");
-            const isExpanded = expandedListingUrl === listing.url;
-            const fbListing = facebookListingsByUrl.get(listing.url);
-            const ebayQuery = fbListing?.fbListingId ? ebayQueriesByFbId.get(fbListing.fbListingId) : undefined;
+    <Fragment>
+      <div ref={scrollContainerRef} className="max-h-[60vh] overflow-auto border border-border">
+        <table className="w-full border-collapse font-mono text-sm">
+          <thead className="sticky top-0 bg-secondary">
+            <tr className="border-b border-border text-left">
+              <th className="px-3 py-2 text-xs text-muted-foreground">LISTING</th>
+              <th className="px-3 py-2 text-xs text-muted-foreground">PRICE</th>
+              <th className="px-3 py-2 text-xs text-muted-foreground">LOCATION</th>
+              {showStatusColumn && (
+                <th className="px-3 py-2 text-xs text-muted-foreground">STATUS</th>
+              )}
+              <th className="px-3 py-2 text-xs text-muted-foreground">DEAL %</th>
+              <th className="px-3 py-2 text-xs text-muted-foreground w-20">DETAILS</th>
+            </tr>
+          </thead>
+          <tbody>
+            {sortedDisplayListings.map((listing) => {
+              const filterInfo = getListingFilterInfo(listing, filteredOutUrls);
+              const isFilteredOut = filterInfo.isFiltered;
+              const goodDeal = !isFilteredOut && isGoodDeal(listing.dealScore, threshold);
+              const badDeal = !isFilteredOut && isBadDeal(listing.dealScore, threshold);
+              const rowBgClass = isFilteredOut
+                ? "bg-muted/30 hover:bg-muted/50 opacity-70"
+                : goodDeal
+                  ? "bg-green-500/10 hover:bg-green-500/20"
+                  : badDeal
+                    ? "bg-red-500/10 hover:bg-red-500/20"
+                    : "hover:bg-secondary/50";
+              const hasComps = listing.ebaySearchQuery != null || listing.compPrice != null;
+              const hasDetails = !hasComps && (listing.noCompReason != null && listing.noCompReason !== "");
+              const isExpanded = expandedListingUrl === listing.url;
+              const fbListing = facebookListingsByUrl.get(listing.url);
+              const ebayQuery = fbListing?.fbListingId ? ebayQueriesByFbId.get(fbListing.fbListingId) : undefined;
 
-            const isUnprocessed = showStatusColumn && listing.dealScore === null && !ebayQuery && !isFilteredOut;
+              const isUnprocessed = showStatusColumn && listing.dealScore === null && !ebayQuery && !isFilteredOut;
 
-            let itemStatus: "Filtered" | "Completed" | "Evaluating" | "Todo";
-            if (isFilteredOut) {
-              itemStatus = "Filtered";
-            } else if (ebayQuery) {
-              itemStatus = ebayQuery.finishedAtMs ? "Completed" : "Evaluating";
-            } else if (listing.dealScore !== null) {
-              itemStatus = "Completed";
-            } else if (isUnprocessed) {
-              itemStatus = "Todo";
-            } else {
-              itemStatus = showStatusColumn ? "Evaluating" : "Completed";
-            }
+              let itemStatus: "Filtered" | "Completed" | "Evaluating" | "Todo";
+              if (isFilteredOut) {
+                itemStatus = "Filtered";
+              } else if (ebayQuery) {
+                itemStatus = ebayQuery.finishedAtMs ? "Completed" : "Evaluating";
+              } else if (listing.dealScore !== null) {
+                itemStatus = "Completed";
+              } else if (isUnprocessed) {
+                itemStatus = "Todo";
+              } else {
+                itemStatus = showStatusColumn ? "Evaluating" : "Completed";
+              }
 
-            const itemElapsedMs = isFilteredOut
-              ? null
-              : ebayQuery && ebayQuery.startedAtMs
-                ? (ebayQuery.finishedAtMs ?? nowMs) - ebayQuery.startedAtMs
-                : null;
-            const itemElapsedFormatted =
-              itemElapsedMs !== null && itemElapsedMs >= 0 ? formatElapsedMs(itemElapsedMs) : null;
+              const itemElapsedMs = isFilteredOut
+                ? null
+                : ebayQuery && ebayQuery.startedAtMs
+                  ? (ebayQuery.finishedAtMs ?? nowMs) - ebayQuery.startedAtMs
+                  : null;
+              const itemElapsedFormatted =
+                itemElapsedMs !== null && itemElapsedMs >= 0 ? formatElapsedMs(itemElapsedMs) : null;
 
-            const filteredOutStyle = isFilteredOut ? "text-muted-foreground line-through" : "";
-            const titleClasses = `px-3 py-2 max-w-[300px] truncate ${filteredOutStyle}`.trim();
-            const priceClasses = isFilteredOut
-              ? "px-3 py-2 font-bold text-muted-foreground line-through"
-              : "px-3 py-2 font-bold text-primary";
-            const locationClasses = isFilteredOut
-              ? "px-3 py-2 max-w-[150px] truncate text-muted-foreground/70 line-through"
-              : "px-3 py-2 max-w-[150px] truncate text-muted-foreground";
-            const linkClasses = isFilteredOut
-              ? "text-muted-foreground hover:text-foreground hover:underline"
-              : "text-primary hover:underline";
-
-            return (
-              <Fragment key={listing.url}>
-                <tr className={`border-b border-border/50 transition-colors ${rowBgClass}`}>
-                  <td className={titleClasses} title={listing.title}>
-                    {listing.title}
-                  </td>
-                  <td className={priceClasses}>
-                    {formatPrice(listing.price, listing.currency)}
-                  </td>
-                  <td className={locationClasses} title={listing.location}>
-                    {listing.location}
-                  </td>
-                  {showStatusColumn && (
-                    <td className="px-3 py-2">
-                      <div className="flex flex-col gap-0.5">
-                        <span
-                          className={`text-xs font-semibold ${getItemStatusClass(itemStatus)}`}
-                        >
-                          {itemStatus}
-                        </span>
-                        {itemElapsedFormatted !== null && (
-                          <span className="text-[10px] text-muted-foreground tabular-nums">
-                            {itemElapsedFormatted}
+              const filteredOutStyle = isFilteredOut ? "text-muted-foreground line-through" : "";
+              const titleClasses = `px-3 py-2 max-w-[300px] truncate ${filteredOutStyle}`.trim();
+              const priceClasses = isFilteredOut
+                ? "px-3 py-2 font-bold text-muted-foreground line-through"
+                : "px-3 py-2 font-bold text-primary";
+              const locationClasses = isFilteredOut
+                ? "px-3 py-2 max-w-[150px] truncate text-muted-foreground/70 line-through"
+                : "px-3 py-2 max-w-[150px] truncate text-muted-foreground";
+              return (
+                <Fragment key={listing.url}>
+                  <tr className={`border-b border-border/50 transition-colors ${rowBgClass}`}>
+                    <td className={titleClasses} title={listing.title}>
+                      <a
+                        href={listing.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className={`block truncate cursor-pointer ${isFilteredOut ? "text-muted-foreground hover:text-foreground hover:underline" : "text-primary hover:underline"}`}
+                        onClick={(e: React.MouseEvent) => e.stopPropagation()}
+                      >
+                        {listing.title}
+                      </a>
+                    </td>
+                    <td className={priceClasses}>
+                      {formatPrice(listing.price, listing.currency)}
+                    </td>
+                    <td className={locationClasses} title={listing.location}>
+                      {listing.location}
+                    </td>
+                    {showStatusColumn && (
+                      <td className="px-3 py-2">
+                        <div className="flex flex-col gap-0.5">
+                          <span
+                            className={`text-xs font-semibold ${getItemStatusClass(itemStatus)}`}
+                          >
+                            {itemStatus}
                           </span>
-                        )}
-                      </div>
+                          {itemElapsedFormatted !== null && (
+                            <span className="text-[10px] text-muted-foreground tabular-nums">
+                              {itemElapsedFormatted}
+                            </span>
+                          )}
+                        </div>
+                      </td>
+                    )}
+                    <td className="px-3 py-2">
+                      {listing.dealScore !== null ? (
+                        <span
+                          className={`font-bold ${goodDeal ? "text-green-500" : badDeal ? "text-red-500" : "text-muted-foreground"}`}
+                        >
+                          {listing.dealScore}%
+                        </span>
+                      ) : (
+                        <span className="text-muted-foreground/50">--</span>
+                      )}
                     </td>
-                  )}
-                  <td className="px-3 py-2">
-                    {listing.dealScore !== null ? (
-                      <span
-                        className={`font-bold ${goodDeal ? "text-green-500" : badDeal ? "text-red-500" : "text-muted-foreground"}`}
-                      >
-                        {listing.dealScore}%
-                      </span>
-                    ) : isFilteredOut ? (
-                      <span className="text-muted-foreground/50">--</span>
-                    ) : (
-                      <span className="text-muted-foreground/50">--</span>
-                    )}
-                  </td>
-                  <td className="px-3 py-2">
-                    <a
-                      href={listing.url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className={linkClasses}
-                      onClick={(e: React.MouseEvent) => e.stopPropagation()}
-                    >
-                      VIEW →
-                    </a>
-                  </td>
-                  <td className="px-3 py-2">
-                    {hasComps || hasDetails ? (
-                      <button
-                        type="button"
-                        onClick={() => setExpandedListingUrl(isExpanded ? null : listing.url)}
-                        className="font-mono text-xs text-primary hover:underline"
-                        aria-expanded={isExpanded}
-                      >
-                        {isExpanded ? "▲ Hide" : hasComps ? "▼ Comps" : "▼ Details"}
-                      </button>
-                    ) : (
-                      <span className="text-muted-foreground/50 text-xs">--</span>
-                    )}
-                  </td>
-                </tr>
-                {isExpanded && hasComps && (
-                  <tr className="border-b border-border/50 bg-secondary/80">
-                    <td colSpan={columnCount} className="px-4 py-3">
-                      <ListingCompsPanel listing={listing} />
+                    <td className="px-3 py-2">
+                      {hasComps || hasDetails ? (
+                        <button
+                          type="button"
+                          onClick={(e) => handleOpenDetails(e, listing.url)}
+                          className="font-mono text-xs text-primary hover:underline"
+                          aria-expanded={isExpanded}
+                        >
+                          {isExpanded ? "▲ Hide" : "▼ Details"}
+                        </button>
+                      ) : (
+                        <span className="text-muted-foreground/50 text-xs">--</span>
+                      )}
                     </td>
                   </tr>
-                )}
-                {isExpanded && hasDetails && listing.noCompReason && (
-                  <tr className="border-b border-border/50 bg-secondary/80">
-                    <td colSpan={columnCount} className="px-4 py-3">
-                      <ListingDetailsPanel reason={listing.noCompReason} />
-                    </td>
-                  </tr>
-                )}
-              </Fragment>
-            );
-          })}
-        </tbody>
-      </table>
-    </div>
+                </Fragment>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      {expandedListing && anchorRect && (
+        <DetailsPopup
+          listing={expandedListing}
+          anchorRect={anchorRect}
+          onClose={handleCloseDetails}
+        />
+      )}
+    </Fragment>
   );
 }
