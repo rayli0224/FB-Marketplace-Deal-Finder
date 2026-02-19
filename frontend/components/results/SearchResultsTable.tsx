@@ -5,7 +5,6 @@ import { FullSizeToggle } from "@/components/ui/FullSizeToggle";
 import { HeistClockSection } from "@/components/loading/HeistClockSection";
 import { CancelSearchButton } from "@/components/loading/CancelSearchButton";
 import type { DebugFacebookListing, DebugEbayQueryEntry } from "@/components/debug/DebugPanel";
-import type { DebugSearchParams } from "@/components/debug/DebugSearchParams";
 
 export interface CompItem {
   title: string;
@@ -47,7 +46,6 @@ export interface SearchResultsTableProps {
   onReset: () => void;
   isLoading?: boolean;
   currentItem?: { listingIndex: number; fbTitle: string; totalListings: number } | null;
-  searchParams?: DebugSearchParams | null;
   facebookListings?: DebugFacebookListing[];
   ebayQueries?: DebugEbayQueryEntry[];
   onCancel?: () => void;
@@ -239,7 +237,6 @@ export function SearchResultsTable({
   onReset,
   isLoading = false,
   currentItem = null,
-  searchParams = null,
   facebookListings = [],
   ebayQueries = [],
   onCancel,
@@ -359,20 +356,6 @@ export function SearchResultsTable({
           </div>
         )}
       </div>
-
-      {searchParams && (
-        <div className="border border-border bg-secondary px-4 py-2 rounded font-mono text-xs">
-          <div className="font-semibold text-foreground mb-1.5">Search request</div>
-          <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-0.5 text-muted-foreground">
-            <div><span>Query: </span><span className="text-foreground">{searchParams.query}</span></div>
-            <div><span>Zip: </span><span className="text-foreground">{searchParams.zipCode}</span></div>
-            <div><span>Radius: </span><span className="text-foreground">{searchParams.radius} mi</span></div>
-            <div><span>Max listings: </span><span className="text-foreground">{searchParams.maxListings}</span></div>
-            <div><span>Threshold: </span><span className="text-foreground">{searchParams.threshold}%</span></div>
-            <div><span>Extract descriptions: </span><span className="text-foreground">{searchParams.extractDescriptions ? "Yes" : "No"}</span></div>
-          </div>
-        </div>
-      )}
 
       {/* Filters Section - hidden during loading */}
       {!isLoading && (
