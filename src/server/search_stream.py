@@ -201,13 +201,10 @@ def create_search_stream(request, debug_mode: bool):
         fb_listing_id = _next_fb_listing_id()
         fb_evaluable_listings.append((fb_listing_id, listing))
         event_queue.put({"type": "progress", "scannedCount": count})
-        if debug_mode:
-            event_queue.put(
-                {
-                    "type": "debug_facebook_listing",
-                    "listing": build_debug_listing_dict(listing, fb_listing_id),
-                }
-            )
+        event_queue.put({
+            "type": "debug_facebook_listing",
+            "listing": build_debug_listing_dict(listing, fb_listing_id),
+        })
 
     def on_listing_filtered(listing):
         if cancelled.is_set():
@@ -217,8 +214,7 @@ def create_search_stream(request, debug_mode: bool):
         listing_dict = build_debug_listing_dict(listing, fb_listing_id, filtered=True)
         filtered_out_listings.append(listing_dict)
         event_queue.put({"type": "filtered_facebook_listing", "listing": listing_dict})
-        if debug_mode:
-            event_queue.put({"type": "debug_facebook_listing", "listing": listing_dict})
+        event_queue.put({"type": "debug_facebook_listing", "listing": listing_dict})
 
     def listing_passes_filter(listing) -> bool:
         """Return True if the listing should be kept (not suspicious)."""
@@ -292,18 +288,18 @@ def create_search_stream(request, debug_mode: bool):
             log_step_sep(logger, f"🔍 Step 1: Starting search — query='{request.query}', location={location_info_stream}, radius={request.radius}mi")
             log_step_sep(logger, "📜 Step 2: Scraping Facebook Marketplace")
             yield f"data: {json.dumps({'type': 'phase', 'phase': 'scraping'})}\n\n"
-            if debug_mode:
-                debug_mode_payload = {
-                    "type": "debug_mode",
-                    "debug": True,
-                    "query": request.query,
-                    "zipCode": request.zipCode,
-                    "radius": request.radius,
-                    "maxListings": request.maxListings,
-                    "threshold": request.threshold,
-                    "extractDescriptions": request.extractDescriptions,
-                }
-                yield f"data: {json.dumps(debug_mode_payload)}\n\n"
+            debug_mode_payload = {
+                "type": "debug_mode",
+                "debug": True,
+                "logsEnabled": debug_mode,
+                "query": request.query,
+                "zipCode": request.zipCode,
+                "radius": request.radius,
+                "maxListings": request.maxListings,
+                "threshold": request.threshold,
+                "extractDescriptions": request.extractDescriptions,
+            }
+            yield f"data: {json.dumps(debug_mode_payload)}\n\n"
 
             thread = threading.Thread(target=scrape_worker)
             thread.start()
@@ -408,20 +404,19 @@ def create_search_stream(request, debug_mode: bool):
                         "fbTitle": listing.title,
                         "totalListings": len(fb_evaluable_listings),
                     })
-                    if debug_mode:
-                        event_queue.put({
-                            "type": "debug_ebay_query_start",
-                            "listingIndex": index,
-                            "fbListingId": fb_listing_id,
-                            "fbTitle": listing.title,
-                        })
+                    event_queue.put({
+                        "type": "debug_ebay_query_start",
+                        "listingIndex": index,
+                        "fbListingId": fb_listing_id,
+                        "fbTitle": listing.title,
+                    })
                     if debug_log_handler is not None:
                         debug_log_handler.start_thread_buffer(worker_thread_id, listing_label)
 
                     ebay_scraper = ebay_pool.acquire()
                     try:
                         def on_query_generated(ebay_query: str):
-                            if debug_mode and not cancelled.is_set():
+                            if not cancelled.is_set():
                                 event_queue.put({
                                     "type": "debug_ebay_query_generated",
                                     "listingIndex": index,
@@ -431,7 +426,7 @@ def create_search_stream(request, debug_mode: bool):
                                 })
 
                         def on_product_recon(recon: dict, citations: list[dict]):
-                            if debug_mode and not cancelled.is_set():
+                            if not cancelled.is_set():
                                 event_queue.put({
                                     "type": "debug_product_recon",
                                     "listingIndex": index,
@@ -452,7 +447,7 @@ def create_search_stream(request, debug_mode: bool):
                             market_price_cache=market_price_cache,
                             market_price_cache_lock=market_price_cache_lock,
                             on_query_generated=on_query_generated,
-                            on_product_recon=on_product_recon if debug_mode else None,
+                            on_product_recon=on_product_recon,
                         )
                         if debug_log_handler is not None:
                             debug_log_handler.finish_thread_buffer(worker_thread_id, "done")
@@ -499,13 +494,12 @@ def create_search_stream(request, debug_mode: bool):
                                 try:
                                     completed_index, completed_fb_listing_id, completed_listing, result = future.result()
                                     count += 1
-                                    if debug_mode:
-                                        event_queue.put({
-                                            "type": "debug_ebay_query_finished",
-                                            "listingIndex": completed_index,
-                                            "fbListingId": completed_fb_listing_id,
-                                            "failed": False,
-                                        })
+                                    event_queue.put({
+                                        "type": "debug_ebay_query_finished",
+                                        "listingIndex": completed_index,
+                                        "fbListingId": completed_fb_listing_id,
+                                        "failed": False,
+                                    })
                                     if result:
                                         scored_by_index[completed_index] = result
                                         event_queue.put({
@@ -526,13 +520,12 @@ def create_search_stream(request, debug_mode: bool):
                                 except SearchCancelledError:
                                     if cancelled.is_set():
                                         continue
-                                    if debug_mode:
-                                        event_queue.put({
-                                            "type": "debug_ebay_query_finished",
-                                            "listingIndex": idx,
-                                            "fbListingId": fb_listing_id,
-                                            "failed": True,
-                                        })
+                                    event_queue.put({
+                                        "type": "debug_ebay_query_finished",
+                                        "listingIndex": idx,
+                                        "fbListingId": fb_listing_id,
+                                        "failed": True,
+                                    })
                                     cancelled.set()
                                     for pending_future in pending:
                                         pending_future.cancel()
@@ -540,13 +533,12 @@ def create_search_stream(request, debug_mode: bool):
                                 except Exception as e:
                                     if cancelled.is_set():
                                         continue
-                                    if debug_mode:
-                                        event_queue.put({
-                                            "type": "debug_ebay_query_finished",
-                                            "listingIndex": idx,
-                                            "fbListingId": fb_listing_id,
-                                            "failed": True,
-                                        })
+                                    event_queue.put({
+                                        "type": "debug_ebay_query_finished",
+                                        "listingIndex": idx,
+                                        "fbListingId": fb_listing_id,
+                                        "failed": True,
+                                    })
                                     log_warning(logger, f"Error processing listing '{listing.title}': {e}")
                                     count += 1
                                     error_result = {

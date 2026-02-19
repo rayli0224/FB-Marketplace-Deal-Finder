@@ -14,16 +14,10 @@ import { CookieSetupGuide } from "@/components/auth/CookieSetupGuide";
 import type { Listing } from "@/components/results/SearchResultsTable";
 import { FloatingLogPanel } from "@/components/debug/FloatingLogPanel";
 import type { DebugFacebookListing, DebugEbayQueryEntry, DebugLogEntry } from "@/components/debug/DebugPanel";
-import type { DebugSearchParams } from "@/components/debug/DebugSearchParams";
 
 type AppState = "setup" | "form" | "loading" | "done" | "error";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-
-/** Defaults when backend omits debug_mode params (fallback for older or partial payloads). */
-const DEFAULT_DEBUG_RADIUS = DEFAULT_RADIUS;
-const DEFAULT_DEBUG_MAX_LISTINGS = 20;
-const DEFAULT_DEBUG_THRESHOLD = 20;
 
 const DEBUG_LOGS_STORAGE_KEY = "fb_marketplace_debug_logs";
 const DEBUG_MODE_ENABLED_KEY = "fb_marketplace_debug_mode_enabled";
@@ -109,7 +103,7 @@ type SSEDispatchHandlers = {
   onCurrentItem?: (entry: { listingIndex: number; fbTitle: string; totalListings: number }) => void;
   onListingResult?: (listing: Listing, evaluatedCount: number, fbListingId?: string) => void;
   onFilteredFacebookListing?: (listing: DebugFacebookListing) => void;
-  onDebugMode?: (params?: DebugSearchParams) => void;
+  onDebugMode?: (logsEnabled?: boolean) => void;
   onDebugFacebook?: (listings: DebugFacebookListing[]) => void;
   onDebugFacebookListing?: (listing: DebugFacebookListing) => void;
   onDebugEbayQueryStart?: (entry: { fbListingId: string; listingIndex: number; fbTitle: string }) => void;
@@ -143,6 +137,7 @@ function dispatchSSEEvent(payloadString: string, handlers: SSEDispatchHandlers):
     threshold?: number;
     averageConfidence?: number | null;
     debug?: boolean;
+    logsEnabled?: boolean;
     query?: string;
     zipCode?: string;
     radius?: number;
@@ -194,18 +189,7 @@ function dispatchSSEEvent(payloadString: string, handlers: SSEDispatchHandlers):
       threshold: data.threshold,
     });
   } else if (data.type === "debug_mode" && data.debug) {
-    const params: DebugSearchParams | undefined =
-      data.query != null && data.zipCode != null
-        ? {
-            query: data.query,
-            zipCode: data.zipCode,
-            radius: data.radius ?? DEFAULT_DEBUG_RADIUS,
-            maxListings: data.maxListings ?? DEFAULT_DEBUG_MAX_LISTINGS,
-            threshold: data.threshold ?? DEFAULT_DEBUG_THRESHOLD,
-            extractDescriptions: data.extractDescriptions ?? false,
-          }
-        : undefined;
-    handlers.onDebugMode?.(params);
+    handlers.onDebugMode?.(data.logsEnabled);
   } else if (data.type === "debug_facebook" && Array.isArray(data.listings)) {
     handlers.onDebugFacebook?.(data.listings as DebugFacebookListing[]);
   } else if (data.type === "debug_facebook_listing" && data.listing) {
@@ -324,7 +308,6 @@ export default function Home() {
   const [error, setError] = useState<string | null>(null);
   const [phase, setPhase] = useState<SearchPhase>("scraping");
   const [threshold, setThreshold] = useState<number>(0);
-  const [debugSearchParams, setDebugSearchParams] = useState<DebugSearchParams | null>(null);
   const [debugFacebookListings, setDebugFacebookListings] = useState<DebugFacebookListing[]>([]);
   const [filteredOutListings, setFilteredOutListings] = useState<DebugFacebookListing[]>([]);
   const [debugEbayQueries, setDebugEbayQueries] = useState<DebugEbayQueryEntry[]>([]);
@@ -654,12 +637,10 @@ export default function Home() {
         onCurrentItem: handleCurrentItem,
         onListingResult,
         onFilteredFacebookListing,
-        onDebugMode: (params) => {
-          if (params) {
-            setDebugSearchParams(params);
-            setDebugModeEnabledInStorage(true);
-            setDebugModeEnabledState(true);
-          }
+        onDebugMode: (logsEnabled) => {
+          const showLogs = Boolean(logsEnabled);
+          setDebugModeEnabledInStorage(showLogs);
+          setDebugModeEnabledState(showLogs);
         },
         onDebugFacebook: setDebugFacebookListings,
         onDebugFacebookListing: (listing: DebugFacebookListing) =>
@@ -822,14 +803,6 @@ export default function Home() {
     setPhase("scraping");
     setCurrentItem(null);
     setThreshold(Number(data.threshold) || 0);
-    setDebugSearchParams({
-      query: data.query,
-      zipCode: data.zipCode,
-      radius: Number(data.radius) || DEFAULT_DEBUG_RADIUS,
-      maxListings: Number(data.maxListings) || DEFAULT_DEBUG_MAX_LISTINGS,
-      threshold: Number(data.threshold) ?? DEFAULT_DEBUG_THRESHOLD,
-      extractDescriptions: data.extractDescriptions ?? false,
-    });
     setDebugFacebookListings([]);
     setDebugEbayQueries([]);
     setAppState("loading");
@@ -854,7 +827,6 @@ export default function Home() {
     setListings([]);
     setError(null);
     setCurrentItem(null);
-    setDebugSearchParams(null);
     setDebugFacebookListings([]);
     setDebugEbayQueries([]);
     isSearchingRef.current = false;
@@ -921,7 +893,6 @@ export default function Home() {
                 onReset={handleReset}
                 isLoading={true}
                 currentItem={currentItem}
-                searchParams={debugSearchParams}
                 facebookListings={debugFacebookListings}
                 ebayQueries={debugEbayQueries}
                 onCancel={cancelSearch}
@@ -936,7 +907,6 @@ export default function Home() {
                 filteredOutListings={filteredOutListings}
                 onDownloadCSV={downloadCSV}
                 onReset={handleReset}
-                searchParams={debugSearchParams}
                 facebookListings={debugFacebookListings}
                 ebayQueries={debugEbayQueries}
               />
