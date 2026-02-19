@@ -4,12 +4,15 @@ import { useState } from "react";
 import { FullSizeToggle } from "@/components/ui/FullSizeToggle";
 import { ResultsTable, filteredOutToListing, isBadDeal } from "@/components/results/ResultsTable";
 import type { Listing, FilteredOutListingRow } from "@/components/results/ResultsTable";
+import type { DebugSearchParams } from "@/components/debug/DebugSearchParams";
+import { SearchQueryDetails } from "@/components/results/SearchQueryDetails";
 
 export interface SearchResultsViewProps {
   listings: Listing[];
   scannedCount: number;
   threshold: number;
   filteredOutListings: FilteredOutListingRow[];
+  searchParams: DebugSearchParams | null;
   onDownloadCSV: () => void;
   onReset: () => void;
 }
@@ -23,6 +26,7 @@ export function SearchResultsView({
   scannedCount,
   threshold,
   filteredOutListings,
+  searchParams,
   onDownloadCSV,
   onReset,
 }: SearchResultsViewProps) {
@@ -70,6 +74,8 @@ export function SearchResultsView({
           </button>
         </div>
       </div>
+
+      <SearchQueryDetails searchParams={searchParams} />
 
       <div className="border-2 border-border bg-secondary">
         <button

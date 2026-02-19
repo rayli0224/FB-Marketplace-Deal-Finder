@@ -15,8 +15,23 @@ import { CookieSetupGuide } from "@/components/auth/CookieSetupGuide";
 import type { Listing } from "@/components/results/ResultsTable";
 import { FloatingLogPanel } from "@/components/debug/FloatingLogPanel";
 import type { DebugFacebookListing, DebugEbayQueryEntry, DebugLogEntry } from "@/components/debug/DebugPanel";
+import type { DebugSearchParams } from "@/components/debug/DebugSearchParams";
 
 type AppState = "setup" | "form" | "loading" | "done" | "error";
+
+const DEFAULT_THRESHOLD = 20;
+const DEFAULT_MAX_LISTINGS = 20;
+
+function buildSearchParamsFromFormData(data: ValidationFormData): DebugSearchParams {
+  return {
+    query: data.query,
+    zipCode: data.zipCode,
+    radius: Number(data.radius),
+    maxListings: Number(data.maxListings) || DEFAULT_MAX_LISTINGS,
+    threshold: Number(data.threshold) || DEFAULT_THRESHOLD,
+    extractDescriptions: data.extractDescriptions ?? false,
+  };
+}
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
@@ -892,6 +907,7 @@ export default function Home() {
                 currentItem={currentItem}
                 facebookListings={debugFacebookListings}
                 ebayQueries={debugEbayQueries}
+                searchParams={buildSearchParamsFromFormData(formData)}
                 onCancel={cancelSearch}
               />
             )}
@@ -902,6 +918,7 @@ export default function Home() {
                 scannedCount={scannedCount}
                 threshold={threshold}
                 filteredOutListings={filteredOutListings}
+                searchParams={buildSearchParamsFromFormData(formData)}
                 onDownloadCSV={downloadCSV}
                 onReset={handleReset}
               />
