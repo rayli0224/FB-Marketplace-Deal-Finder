@@ -226,8 +226,20 @@ For electronics, OEM stands for Original Equipment Manufacturer, and it is typic
 
 ---
 
-### Step 3 — Decision Rules
-- **Reject:** Key attribute differs, functional variant differs, extreme condition difference, missing critical components, or critical info missing.  
+### Step 3 — Quantity/Lot Matching
+Compare the quantity or lot size between the Facebook listing and the eBay item. Reject items with different quantities:
+- **Reject:** FB listing is a single item but eBay item is a lot/bundle/multi-pack, OR FB listing is a set/bundle but eBay item is a single item.
+- **Accept:** Quantities match (both single items, both same-size sets, or quantity is unclear/not applicable).
+
+Examples:
+- FB: "single battery" vs eBay: "4-pack of batteries" → `reject` (quantity mismatch)
+- FB: "MacBook i9 Pro" vs eBay: "MacBook Pro 16in 32GB RAM" → check other attributes (both single items)
+- FB: "10 game series" vs eBay: "full game series (10)" → check other attributes (quantities match)
+
+---
+
+### Step 4 — Decision Rules
+- **Reject:** Key attribute differs, functional variant differs, extreme condition difference, missing critical components, critical info missing, OR quantity/lot mismatch (from Step 3).  
 - **Maybe:** Core product mostly matches, but minor difference exists (missing minor part, small accessory change, slight ambiguity).  
 - **Accept:** All key attributes match; minor allowed differences (color, cosmetic wear, size for clothing/shoes).  
 
@@ -237,6 +249,7 @@ For electronics, OEM stands for Original Equipment Manufacturer, and it is typic
 FB: "MacBook Pro 2019 16 inch i9" vs eBay: "MacBook Pro 2020 16 inch i9" → `reject`  
 FB: "Leather jacket, size M" vs eBay: "Leather jacket, size L" → `accept`  
 FB: "LEGO set, complete" vs eBay: "LEGO set, missing minifigure" → `maybe`  
+FB: "single battery" vs eBay: "4-pack batteries" → `reject` (quantity mismatch)  
 
 ---
 
@@ -246,6 +259,7 @@ Return JSON array in same order as eBay items:
 [
   {{"decision": "accept", "reason": "Size difference allowed (M vs L)"}},
   {{"decision": "reject", "reason": "Different generation (2020 vs 2019)"}},
+  {{"decision": "reject", "reason": "Quantity mismatch (single vs 4-pack)"}},
   {{"decision": "maybe", "reason": "Missing minor part (minifigure)"}}
 ]
 
