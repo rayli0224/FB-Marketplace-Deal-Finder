@@ -171,6 +171,7 @@ def create_search_stream(request, debug_mode: bool):
             logging.getLogger(name).addHandler(debug_log_handler)
 
     filtered_count_holder = [0]
+    filtered_out_listings: list[dict] = []
     fb_listing_id_counter = 0
 
     def _next_fb_listing_id() -> str:
@@ -213,17 +214,11 @@ def create_search_stream(request, debug_mode: bool):
             return
         fb_listing_id = _next_fb_listing_id()
         filtered_count_holder[0] += 1
+        listing_dict = build_debug_listing_dict(listing, fb_listing_id, filtered=True)
+        filtered_out_listings.append(listing_dict)
+        event_queue.put({"type": "filtered_facebook_listing", "listing": listing_dict})
         if debug_mode:
-            event_queue.put(
-                {
-                    "type": "debug_facebook_listing",
-                    "listing": build_debug_listing_dict(
-                        listing,
-                        fb_listing_id,
-                        filtered=True,
-                    ),
-                }
-            )
+            event_queue.put({"type": "debug_facebook_listing", "listing": listing_dict})
 
     def listing_passes_filter(listing) -> bool:
         """Return True if the listing should be kept (not suspicious)."""
@@ -364,8 +359,6 @@ def create_search_stream(request, debug_mode: bool):
                 f"📋 Found {len(fb_evaluable_listings)} listings"
                 + (f" ({filtered_count} filtered out)" if filtered_count > 0 else "")
             )
-            if filtered_count > 0:
-                yield f"data: {json.dumps({'type': 'filtered', 'filteredCount': filtered_count})}\n\n"
             yield from drain_log_queue()
             yield f"data: {json.dumps({'type': 'phase', 'phase': 'evaluating'})}\n\n"
 
@@ -408,6 +401,13 @@ def create_search_stream(request, debug_mode: bool):
                     """
                     worker_thread_id = threading.get_ident()
                     listing_label = f"[{index}/{len(fb_evaluable_listings)}] FB listing: {listing.title}"
+                    event_queue.put({
+                        "type": "current_item",
+                        "listingIndex": index,
+                        "fbListingId": fb_listing_id,
+                        "fbTitle": listing.title,
+                        "totalListings": len(fb_evaluable_listings),
+                    })
                     if debug_mode:
                         event_queue.put({
                             "type": "debug_ebay_query_start",
@@ -622,6 +622,7 @@ def create_search_stream(request, debug_mode: bool):
                 "type": "done",
                 "scannedCount": total_scanned,
                 "filteredCount": filtered_count,
+                "filteredOutListings": filtered_out_listings,
                 "evaluatedCount": evaluated_count,
                 "listings": scored_listings,
                 "threshold": request.threshold,

@@ -31,9 +31,9 @@ const FALLBACK_PHASE_MESSAGE = "Getting the crew ready...";
 export interface SearchLoadingStateProps {
   phase: SearchPhase;
   scannedCount: number;
-  filteredCount?: number;
   evaluatedCount: number;
   maxListings: number;
+  currentItem?: { listingIndex: number; fbTitle: string; totalListings: number } | null;
   onCancel?: () => void;
 }
 
@@ -50,9 +50,10 @@ function getPhaseMessage(phase: SearchPhase): string {
 /**
  * Loading state component displaying progress during marketplace search.
  * Shows current phase with heist clock (radar + elapsed time), phase description,
- * and progress bars for scanned and evaluated listings. Includes a cancel button.
+ * progress bars for scanned and evaluated listings, and current item being processed.
+ * Includes a cancel button.
  */
-export function SearchLoadingState({ phase, scannedCount, filteredCount = 0, evaluatedCount, maxListings, onCancel }: SearchLoadingStateProps) {
+export function SearchLoadingState({ phase, scannedCount, evaluatedCount, maxListings, currentItem, onCancel }: SearchLoadingStateProps) {
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
 
   useEffect(() => {
@@ -75,11 +76,6 @@ export function SearchLoadingState({ phase, scannedCount, filteredCount = 0, eva
           <span className={CONTENT_TEXT_XS_CLASS}>
             Heist clock: <span className={`tabular-nums font-medium ${CONTENT_TEXT_CLASS}`}>{formatHeistClock(elapsedSeconds)}</span>
           </span>
-          {filteredCount > 0 && (
-            <span className={`${CONTENT_TEXT_XS_CLASS} text-muted-foreground`}>
-              {filteredCount} filtered (free, $1, or odd high prices)
-            </span>
-          )}
         </div>
         {onCancel && (
           <button
@@ -102,6 +98,21 @@ export function SearchLoadingState({ phase, scannedCount, filteredCount = 0, eva
             icon="~"
           />
         </LoadingBox>
+        {phase === "evaluating" && currentItem && (
+          <LoadingBox className="border-2 border-primary/50 bg-primary/5">
+            <div className={CONTENT_TEXT_XS_CLASS}>
+              <span className="text-primary font-bold">Processing:</span>
+            </div>
+            <div className={`mt-1 ${CONTENT_TEXT_XS_CLASS}`}>
+              <span className="text-primary/80">
+                [{currentItem.listingIndex}/{currentItem.totalListings}]
+              </span>
+              <span className={`ml-2 ${CONTENT_TEXT_CLASS} font-medium`}>
+                {currentItem.fbTitle}
+              </span>
+            </div>
+          </LoadingBox>
+        )}
         <LoadingBox>
           <ProgressBar
             label="Evaluating loot value"
