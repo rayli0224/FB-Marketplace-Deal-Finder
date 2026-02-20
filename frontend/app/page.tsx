@@ -392,6 +392,20 @@ export default function Home() {
   }, [debugLogs]);
 
   /**
+   * On loading page, reload or tab close sends a cancel request to the backend
+   * (same effect as the Cancel button). Uses keepalive so the request completes
+   * even as the page unloads.
+   */
+  useEffect(() => {
+    if (appState !== "loading") return;
+    const handleBeforeUnload = () => {
+      void fetch(`${API_URL}/api/search/cancel`, { method: "POST", keepalive: true });
+    };
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+  }, [appState]);
+
+  /**
    * Generates a CSV blob from listings data with pirate-themed column headers.
    * Formats each listing row with quoted strings for text fields and formatted numbers.
    * Returns a Blob object with CSV MIME type for download.
