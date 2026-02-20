@@ -16,7 +16,7 @@ import time
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
-from typing import Callable, List, Optional, Tuple
+from typing import Callable, List, Optional
 
 from playwright.sync_api import sync_playwright, Browser, Page, BrowserContext
 
@@ -449,34 +449,3 @@ def get_market_price(
     finally:
         if own_scraper:
             scraper.close()
-
-
-def get_market_price_cached(
-    search_term: str,
-    n_items: int,
-    scraper: Optional[EbaySoldScraper],
-    cache: Optional[dict],
-    cache_lock: Optional[threading.Lock],
-    cancelled: Optional[threading.Event] = None,
-) -> Tuple[Optional[PriceStats], bool]:
-    """
-    Get eBay market price, using cache when available.
-    Returns (stats, from_cache). from_cache is True when a cached value was used.
-    """
-    key = (search_term.strip().lower(), n_items)
-    if cache is not None and cache_lock is not None:
-        with cache_lock:
-            cached = cache.get(key)
-        if cached is not None:
-            return (cached, True)
-
-    stats = get_market_price(
-        search_term=search_term,
-        n_items=n_items,
-        scraper=scraper,
-        cancelled=cancelled,
-    )
-    if cache is not None and cache_lock is not None and stats is not None:
-        with cache_lock:
-            cache[key] = stats
-    return (stats, False)

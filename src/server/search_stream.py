@@ -385,8 +385,6 @@ def create_search_stream(request, debug_mode: bool):
                     if not cancelled.is_set():
                         event_queue.put({"type": _EVENT_INSPECTOR_URL, "url": url, "source": "ebay"})
 
-                market_price_cache = {}
-                market_price_cache_lock = threading.Lock()
                 scored_by_index = {}
 
                 ebay_pool = EbayScraperPool(
@@ -402,8 +400,7 @@ def create_search_stream(request, debug_mode: bool):
                     Evaluate one FB listing using a pooled eBay browser.
 
                     Acquires an idle browser from the pool, runs the comparison, then
-                    releases it back for the next task. Uses a shared per-search eBay
-                    price cache so repeated queries reuse sold-item stats.
+                    releases it back for the next task.
                     """
                     worker_thread_id = threading.get_ident()
                     listing_label = f"[{index}/{len(fb_evaluable_listings)}] FB listing: {listing.title}"
@@ -454,8 +451,6 @@ def create_search_stream(request, debug_mode: bool):
                             total_listings=len(fb_evaluable_listings),
                             cancelled=cancelled,
                             ebay_scraper=ebay_scraper,
-                            market_price_cache=market_price_cache,
-                            market_price_cache_lock=market_price_cache_lock,
                             on_query_generated=on_query_generated,
                             on_product_recon=on_product_recon,
                         )

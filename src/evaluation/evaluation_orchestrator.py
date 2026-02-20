@@ -6,14 +6,13 @@ Calls step modules only; contains orchestration logic only.
 """
 
 import threading
-from _thread import LockType
 from typing import Callable, Dict, Optional, Tuple
 
 from src.scrapers.fb_marketplace_scraper import Listing, SearchCancelledError
 from src.scrapers.ebay_scraper_v2 import (
     EbaySoldScraper,
     DEFAULT_EBAY_ITEMS,
-    get_market_price_cached,
+    get_market_price,
 )
 from src.evaluation.deal_calculator import calculate_deal_score_for_listing
 from src.evaluation.fb_listing_filter import filter_fb_listing
@@ -68,15 +67,13 @@ def compare_listing_to_ebay(
     total_listings: Optional[int] = None,
     cancelled: Optional[threading.Event] = None,
     ebay_scraper: Optional[EbaySoldScraper] = None,
-    market_price_cache: Optional[dict] = None,
-    market_price_cache_lock: Optional[LockType] = None,
     on_query_generated: Optional[Callable[[str], None]] = None,
     on_product_recon: Optional[Callable[[dict, list[dict]], None]] = None,
 ) -> Dict:
     """
     Compare a single FB listing to eBay sold prices and compute deal score.
 
-    Orchestrates: generate_ebay_query_for_listing → get_market_price_cached → filter_ebay_results_for_listing → calculate_deal_score_for_listing.
+    Orchestrates: generate_ebay_query_for_listing → get_market_price → filter_ebay_results_for_listing → calculate_deal_score_for_listing.
     """
     if listing_index is not None and total_listings is not None:
         progress = f"[{listing_index}/{total_listings}] "
@@ -93,8 +90,6 @@ def compare_listing_to_ebay(
             n_items,
             cancelled,
             ebay_scraper,
-            market_price_cache,
-            market_price_cache_lock,
             on_query_generated,
             on_product_recon,
         )
@@ -114,8 +109,6 @@ def _evaluate_listing(
     n_items: int,
     cancelled: Optional[threading.Event] = None,
     ebay_scraper: Optional[EbaySoldScraper] = None,
-    market_price_cache: Optional[dict] = None,
-    market_price_cache_lock: Optional[LockType] = None,
     on_query_generated: Optional[Callable[[str], None]] = None,
     on_product_recon: Optional[Callable[[dict, list[dict]], None]] = None,
 ) -> Dict:
@@ -141,11 +134,12 @@ def _evaluate_listing(
         on_query_generated(enhanced_query)
 
     with wait_status(logger, "eBay prices"):
-        ebay_stats, from_cache = get_market_price_cached(
-            enhanced_query, n_items, ebay_scraper, market_price_cache, market_price_cache_lock, cancelled
+        ebay_stats = get_market_price(
+            search_term=enhanced_query,
+            n_items=n_items,
+            scraper=ebay_scraper,
+            cancelled=cancelled,
         )
-    if from_cache:
-        logger.info("Using saved eBay prices for matching search")
     if not ebay_stats:
         log_warning(logger, "No eBay results — skipping deal score")
         return build_listing_result(listing, None, no_comp_reason="No similar items found on eBay")
