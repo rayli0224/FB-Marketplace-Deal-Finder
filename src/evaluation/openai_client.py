@@ -2,7 +2,7 @@
 Low-level OpenAI API helpers for sync and async requests.
 
 Provides response extraction, JSON parsing, rate-limit retry, and request
-creation. Used by ebay_query_generator and ebay_result_filter.
+creation. Used by ebay_query_generator and ebay_results_filter.
 """
 
 import asyncio

@@ -25,7 +25,7 @@ from src.scrapers.ebay_scraper_v2 import (
     DEFAULT_EBAY_ITEMS,
     EbayScraperPool,
 )
-from src.evaluation.listing_ebay_comparison import compare_listing_to_ebay
+from src.evaluation.evaluation_orchestrator import compare_listing_to_ebay
 from src.evaluation.fb_listing_filter import is_suspicious_price
 from src.utils.colored_logger import setup_colored_logger, log_step_sep, log_error_short, log_warning, SEP_LINE_LEN
 from src.utils.search_runtime_config import (
@@ -47,7 +47,16 @@ logger = setup_colored_logger("server")
 _EVENT_INSPECTOR_URL = "inspector_url"
 
 # Loggers that receive the queue handler in debug mode.
-_DEBUG_LOG_LOGGER_NAMES = ("server", "fb_scraper", "listing_ebay_comparison", "ebay_query_generator", "ebay_result_filter", "ebay_scraper_v2")
+_DEBUG_LOG_LOGGER_NAMES = (
+    "server",
+    "fb_scraper",
+    "evaluation_orchestrator",
+    "fb_listing_filter",
+    "internet_enrichment",
+    "ebay_query_generator",
+    "ebay_results_filter",
+    "ebay_scraper_v2",
+)
 
 
 class QueueLogHandler(logging.Handler):

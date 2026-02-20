@@ -12,6 +12,12 @@ from src.scrapers.ebay_scraper_v2 import PriceStats
 from src.utils.currency import convert_fb_price_to_usd
 
 
+def calculate_deal_score_for_listing(listing: Listing, ebay_stats: Optional[PriceStats]) -> Optional[float]:
+    """Convert listing price to USD and calculate deal score. Returns None on failure."""
+    fb_price_usd = convert_fb_price_to_usd(listing.price, listing.currency)
+    return calculate_deal_score(fb_price_usd, ebay_stats)
+
+
 def calculate_deal_score(fb_price: float, ebay_stats: Optional[PriceStats]) -> Optional[float]:
     """
     Calculate deal score as percentage savings vs eBay average. E.g. if eBay avg
@@ -38,10 +44,7 @@ def score_listings(
     scored_listings = []
 
     for listing in fb_listings:
-        # Convert FB price to USD for comparison (eBay prices are always in USD)
-        fb_price_usd = convert_fb_price_to_usd(listing.price, listing.currency)
-        deal_score = calculate_deal_score(fb_price_usd, ebay_stats)
-
+        deal_score = calculate_deal_score_for_listing(listing, ebay_stats)
         scored_listings.append({
             "title": listing.title,
             "price": listing.price,
