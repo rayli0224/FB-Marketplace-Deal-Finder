@@ -35,11 +35,12 @@ from src.utils.search_runtime_config import (
 )
 
 from src.server.search_state import (
+    CANCEL_SIGNAL_TYPE,
     cancel_and_wait_for_previous_search,
     kill_lingering_chrome,
-    set_active_search,
-    mark_search_starting,
     mark_search_complete,
+    mark_search_starting,
+    set_active_search,
 )
 
 logger = setup_colored_logger("server")
@@ -310,17 +311,20 @@ def create_search_stream(request, debug_mode: bool):
                 "extractDescriptions": request.extractDescriptions,
             }
             yield f"data: {json.dumps(debug_mode_payload)}\n\n"
+            yield from drain_log_queue()
 
             thread = threading.Thread(target=scrape_worker)
             thread.start()
             thread_id = thread.ident
 
-            set_active_search(cancelled=cancelled, thread_id=thread_id)
+            set_active_search(cancelled=cancelled, thread_id=thread_id, event_queue=event_queue)
 
             while True:
                 try:
                     event = event_queue.get(timeout=0.5)
 
+                    if event.get("type") == CANCEL_SIGNAL_TYPE:
+                        break
                     if event["type"] == "auth_error":
                         logger.warning("🔒 Sending auth_error to client")
                         yield f"data: {json.dumps({'type': 'auth_error'})}\n\n"
@@ -583,6 +587,8 @@ def create_search_stream(request, debug_mode: bool):
                     event = event_queue.get(timeout=0.5)
                 except queue.Empty:
                     continue
+                if event.get("type") == CANCEL_SIGNAL_TYPE:
+                    break
                 if event["type"] == "evaluation_done":
                     scored_listings = event["scored_listings"]
                     evaluated_count = event["evaluated_count"]
