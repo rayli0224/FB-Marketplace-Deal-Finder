@@ -356,10 +356,27 @@ export default function Home() {
   const abortControllerRef = useRef<AbortController | null>(null);
   const readerRef = useRef<ReadableStreamDefaultReader<Uint8Array> | null>(null);
 
-  /** Sync debug panel visibility from localStorage on mount so SSR and first client render match (avoids hydration mismatch). */
+  /** Sync openDevToolsTabs from localStorage on mount. */
   useEffect(() => {
-    setDebugModeEnabledState(isDebugModeEnabledInStorage());
     setOpenDevToolsTabs(isOpenDevToolsTabsInStorage());
+  }, []);
+
+  /** Fetch backend debug status on mount so panels show or hide immediately without needing to run a search. */
+  useEffect(() => {
+    async function fetchDebugStatus() {
+      try {
+        const res = await fetch(`${API_URL}/api/debug/status`);
+        if (!res.ok) {
+          setDebugModeEnabledState(false);
+          return;
+        }
+        const data = (await res.json()) as { debug?: boolean };
+        setDebugModeEnabledState(Boolean(data.debug));
+      } catch {
+        setDebugModeEnabledState(false);
+      }
+    }
+    fetchDebugStatus();
   }, []);
 
   const handleOpenDevToolsTabsChange = useCallback((checked: boolean) => {

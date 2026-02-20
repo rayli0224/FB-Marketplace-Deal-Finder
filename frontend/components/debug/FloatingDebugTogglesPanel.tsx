@@ -10,6 +10,8 @@ const PANEL_MIN_WIDTH = 200;
 const HEADER_FALLBACK_HEIGHT = 40;
 const CONTENT_PADDING = "px-3 py-2";
 
+type Position = { x: number; y: number };
+
 function getViewportSize(): { width: number; height: number } {
   if (typeof window === "undefined") return { width: 800, height: 600 };
   return { width: window.innerWidth, height: window.innerHeight };
@@ -28,7 +30,7 @@ export function FloatingDebugTogglesPanel({
   openDevToolsTabs,
   onOpenDevToolsTabsChange,
 }: FloatingDebugTogglesPanelProps) {
-  const [position, setPosition] = useState(() => {
+  const [position, setPosition] = useState<Position>(() => {
     if (typeof window === "undefined") return { x: 0, y: DEFAULT_Y };
     const x = Math.max(0, window.innerWidth - PANEL_ESTIMATE_WIDTH - RIGHT_MARGIN);
     return { x, y: DEFAULT_Y };
@@ -41,7 +43,7 @@ export function FloatingDebugTogglesPanel({
 
   const updatePositionForRightEdge = useCallback(() => {
     const panelWidth = panelRef.current?.offsetWidth ?? PANEL_ESTIMATE_WIDTH;
-    setPosition((prev: { x: number; y: number }) => ({
+    setPosition((prev: Position) => ({
       ...prev,
       x: Math.max(0, window.innerWidth - panelWidth - RIGHT_MARGIN),
     }));
