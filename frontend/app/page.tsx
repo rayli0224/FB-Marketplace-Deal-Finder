@@ -15,6 +15,7 @@ import { SearchResultsView } from "@/components/results/SearchResultsView";
 import { CookieSetupGuide } from "@/components/auth/CookieSetupGuide";
 import type { Listing } from "@/components/results/ResultsTable";
 import { FloatingLogPanel } from "@/components/debug/FloatingLogPanel";
+import { FloatingDebugTogglesPanel } from "@/components/debug/FloatingDebugTogglesPanel";
 import type { DebugFacebookListing, DebugEbayQueryEntry, DebugLogEntry } from "@/components/debug/DebugPanel";
 import type { DebugSearchParams } from "@/components/debug/DebugSearchParams";
 
@@ -38,6 +39,7 @@ const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
 const DEBUG_LOGS_STORAGE_KEY = "fb_marketplace_debug_logs";
 const DEBUG_MODE_ENABLED_KEY = "fb_marketplace_debug_mode_enabled";
+const OPEN_DEVTOOLS_TABS_KEY = "fb_marketplace_open_devtools_tabs";
 
 function loadDebugLogsFromStorage(): DebugLogEntry[] {
   if (typeof window === "undefined") return [];
@@ -78,6 +80,24 @@ function isDebugModeEnabledInStorage(): boolean {
     return localStorage.getItem(DEBUG_MODE_ENABLED_KEY) === "true";
   } catch {
     return false;
+  }
+}
+
+function setOpenDevToolsTabsInStorage(enabled: boolean): void {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.setItem(OPEN_DEVTOOLS_TABS_KEY, enabled ? "true" : "false");
+  } catch {
+    // Storage may be disabled or quota exceeded; continue without persistence
+  }
+}
+
+function isOpenDevToolsTabsInStorage(): boolean {
+  if (typeof window === "undefined") return true;
+  try {
+    return localStorage.getItem(OPEN_DEVTOOLS_TABS_KEY) !== "false";
+  } catch {
+    return true;
   }
 }
 
@@ -330,14 +350,38 @@ export default function Home() {
   const [debugEbayQueries, setDebugEbayQueries] = useState<DebugEbayQueryEntry[]>([]);
   const [debugLogs, setDebugLogs] = useState<DebugLogEntry[]>(() => loadDebugLogsFromStorage());
   const [debugModeEnabled, setDebugModeEnabledState] = useState<boolean>(false);
+  const [openDevToolsTabs, setOpenDevToolsTabs] = useState<boolean>(true);
   const [isSearching, setIsSearching] = useState<boolean>(false);
   const isSearchingRef = useRef<boolean>(false);
   const abortControllerRef = useRef<AbortController | null>(null);
   const readerRef = useRef<ReadableStreamDefaultReader<Uint8Array> | null>(null);
 
-  /** Sync debug panel visibility from localStorage on mount so SSR and first client render match (avoids hydration mismatch). */
+  /** Sync openDevToolsTabs from localStorage on mount. */
   useEffect(() => {
-    setDebugModeEnabledState(isDebugModeEnabledInStorage());
+    setOpenDevToolsTabs(isOpenDevToolsTabsInStorage());
+  }, []);
+
+  /** Fetch backend debug status on mount so panels show or hide immediately without needing to run a search. */
+  useEffect(() => {
+    async function fetchDebugStatus() {
+      try {
+        const res = await fetch(`${API_URL}/api/debug/status`);
+        if (!res.ok) {
+          setDebugModeEnabledState(false);
+          return;
+        }
+        const data = (await res.json()) as { debug?: boolean };
+        setDebugModeEnabledState(Boolean(data.debug));
+      } catch {
+        setDebugModeEnabledState(false);
+      }
+    }
+    fetchDebugStatus();
+  }, []);
+
+  const handleOpenDevToolsTabsChange = useCallback((checked: boolean) => {
+    setOpenDevToolsTabs(checked);
+    setOpenDevToolsTabsInStorage(checked);
   }, []);
 
   /**
@@ -672,7 +716,9 @@ export default function Home() {
         onDebugEbayQueryFinished: onDebugEbayQueryFinished,
         onDebugProductRecon: onDebugProductRecon,
         onDebugLog: (entry) => setDebugLogs((prev: DebugLogEntry[]) => [...prev, entry]),
-        onInspectorUrl: openBackgroundTab,
+        onInspectorUrl: (url) => {
+          if (openDevToolsTabs) openBackgroundTab(url);
+        },
       };
 
       try {
@@ -725,7 +771,7 @@ export default function Home() {
         reader.releaseLock();
       }
     },
-    [handlePhaseUpdate, handleProgressUpdate, handleCompletion, handleAuthError, handleLocationError, handleCurrentItem, onListingResult, onFilteredFacebookListing, onDebugEbayQueryStart, onDebugEbayQueryGenerated, onDebugEbayQueryFinished, onDebugProductRecon]
+    [handlePhaseUpdate, handleProgressUpdate, handleCompletion, handleAuthError, handleLocationError, handleCurrentItem, onListingResult, onFilteredFacebookListing, onDebugEbayQueryStart, onDebugEbayQueryGenerated, onDebugEbayQueryFinished, onDebugProductRecon, openDevToolsTabs]
   );
 
   /**
@@ -938,7 +984,13 @@ export default function Home() {
         </div>
 
         {debugModeEnabled && (
-          <FloatingLogPanel logs={debugLogs} debugEnabled={true} />
+          <>
+            <FloatingLogPanel logs={debugLogs} debugEnabled={true} />
+            <FloatingDebugTogglesPanel
+              openDevToolsTabs={openDevToolsTabs}
+              onOpenDevToolsTabsChange={handleOpenDevToolsTabsChange}
+            />
+          </>
         )}
 
         <AppFooter />
