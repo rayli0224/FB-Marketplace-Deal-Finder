@@ -25,7 +25,7 @@ from src.scrapers.ebay_scraper_v2 import (
     DEFAULT_EBAY_ITEMS,
     EbayScraperPool,
 )
-from src.evaluation.listing_ebay_comparison import compare_listing_to_ebay
+from src.evaluation.evaluation_orchestrator import compare_listing_to_ebay
 from src.evaluation.fb_listing_filter import is_suspicious_price
 from src.utils.colored_logger import setup_colored_logger, log_step_sep, log_error_short, log_warning, SEP_LINE_LEN
 from src.utils.search_runtime_config import (
@@ -47,7 +47,16 @@ logger = setup_colored_logger("server")
 _EVENT_INSPECTOR_URL = "inspector_url"
 
 # Loggers that receive the queue handler in debug mode.
-_DEBUG_LOG_LOGGER_NAMES = ("server", "fb_scraper", "listing_ebay_comparison", "ebay_query_generator", "ebay_result_filter", "ebay_scraper_v2")
+_DEBUG_LOG_LOGGER_NAMES = (
+    "server",
+    "fb_scraper",
+    "evaluation_orchestrator",
+    "fb_listing_filter",
+    "internet_enrichment",
+    "ebay_query_generator",
+    "ebay_results_filter",
+    "ebay_scraper_v2",
+)
 
 
 class QueueLogHandler(logging.Handler):
@@ -376,8 +385,6 @@ def create_search_stream(request, debug_mode: bool):
                     if not cancelled.is_set():
                         event_queue.put({"type": _EVENT_INSPECTOR_URL, "url": url, "source": "ebay"})
 
-                market_price_cache = {}
-                market_price_cache_lock = threading.Lock()
                 scored_by_index = {}
 
                 ebay_pool = EbayScraperPool(
@@ -393,8 +400,7 @@ def create_search_stream(request, debug_mode: bool):
                     Evaluate one FB listing using a pooled eBay browser.
 
                     Acquires an idle browser from the pool, runs the comparison, then
-                    releases it back for the next task. Uses a shared per-search eBay
-                    price cache so repeated queries reuse sold-item stats.
+                    releases it back for the next task.
                     """
                     worker_thread_id = threading.get_ident()
                     listing_label = f"[{index}/{len(fb_evaluable_listings)}] FB listing: {listing.title}"
@@ -445,8 +451,6 @@ def create_search_stream(request, debug_mode: bool):
                             total_listings=len(fb_evaluable_listings),
                             cancelled=cancelled,
                             ebay_scraper=ebay_scraper,
-                            market_price_cache=market_price_cache,
-                            market_price_cache_lock=market_price_cache_lock,
                             on_query_generated=on_query_generated,
                             on_product_recon=on_product_recon,
                         )

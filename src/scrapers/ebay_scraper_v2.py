@@ -16,7 +16,7 @@ import time
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
-from typing import Callable, Optional, List
+from typing import Callable, List, Optional
 
 from playwright.sync_api import sync_playwright, Browser, Page, BrowserContext
 

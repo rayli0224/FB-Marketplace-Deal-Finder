@@ -42,7 +42,7 @@ LISTING_EVAL_WORKER_START_DELAY_SEC = _read_non_negative_float_env(
 )
 EVAL_WAIT_TIMEOUT_SEC = _read_non_negative_float_env("EVAL_WAIT_TIMEOUT_SEC", 0.2)
 
-# eBay post-filtering batch concurrency (ebay_result_filter.py)
+# eBay post-filtering batch concurrency (ebay_results_filter/)
 POST_FILTER_BATCH_SIZE = _read_positive_int_env("POST_FILTER_BATCH_SIZE", 5)
 POST_FILTER_MAX_CONCURRENT_BATCHES = _read_positive_int_env(
     "POST_FILTER_MAX_CONCURRENT_BATCHES",
