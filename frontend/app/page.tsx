@@ -329,11 +329,16 @@ export default function Home() {
   const [filteredOutListings, setFilteredOutListings] = useState<DebugFacebookListing[]>([]);
   const [debugEbayQueries, setDebugEbayQueries] = useState<DebugEbayQueryEntry[]>([]);
   const [debugLogs, setDebugLogs] = useState<DebugLogEntry[]>(() => loadDebugLogsFromStorage());
-  const [debugModeEnabled, setDebugModeEnabledState] = useState<boolean>(() => isDebugModeEnabledInStorage());
+  const [debugModeEnabled, setDebugModeEnabledState] = useState<boolean>(false);
   const [isSearching, setIsSearching] = useState<boolean>(false);
   const isSearchingRef = useRef<boolean>(false);
   const abortControllerRef = useRef<AbortController | null>(null);
   const readerRef = useRef<ReadableStreamDefaultReader<Uint8Array> | null>(null);
+
+  /** Sync debug panel visibility from localStorage on mount so SSR and first client render match (avoids hydration mismatch). */
+  useEffect(() => {
+    setDebugModeEnabledState(isDebugModeEnabledInStorage());
+  }, []);
 
   /**
    * Persists debug logs to localStorage whenever they change.
