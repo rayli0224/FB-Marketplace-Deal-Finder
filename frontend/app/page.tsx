@@ -38,8 +38,6 @@ const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
 const DEBUG_LOGS_STORAGE_KEY = "fb_marketplace_debug_logs";
 const DEBUG_MODE_ENABLED_KEY = "fb_marketplace_debug_mode_enabled";
-/** Length of the horizontal separator (dash) line between log steps. Must match backend (SEP_LINE_LEN) for consistent display. */
-const STEP_LOG_SEP_LEN = 76;
 
 function loadDebugLogsFromStorage(): DebugLogEntry[] {
   if (typeof window === "undefined") return [];
@@ -824,14 +822,10 @@ export default function Home() {
     setThreshold(Number(data.threshold) || 0);
     setDebugFacebookListings([]);
     setDebugEbayQueries([]);
-    const timestampMs = Date.now();
-    const step1Msg = `🔍 Step 1: Starting search — query='${data.query}', location=${data.zipCode}, radius=${data.radius}mi`;
-    const sep = "─".repeat(STEP_LOG_SEP_LEN);
-    setDebugLogs([
-      { level: "INFO", message: sep, timestampMs },
-      { level: "INFO", message: step1Msg, timestampMs },
-      { level: "INFO", message: sep, timestampMs },
-    ]);
+<<<<<<< Updated upstream
+=======
+    setDebugLogs([]);
+>>>>>>> Stashed changes
     setAppState("loading");
     
     // Start search directly — backend handles killing any previous search before starting
