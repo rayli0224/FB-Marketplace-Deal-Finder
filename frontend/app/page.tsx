@@ -394,11 +394,17 @@ export default function Home() {
   /**
    * On loading page, reload or tab close sends a cancel request to the backend
    * (same effect as the Cancel button). Uses keepalive so the request completes
-   * even as the page unloads.
+   * even as the page unloads. Adds "Search cancelled by user" to debug logs when
+   * debug mode is on so it appears after reload.
    */
   useEffect(() => {
     if (appState !== "loading") return;
     const handleBeforeUnload = () => {
+      if (localStorage.getItem(DEBUG_MODE_ENABLED_KEY) === "true") {
+        const logs = loadDebugLogsFromStorage();
+        logs.push({ level: "WARNING", message: "Search cancelled by user", timestampMs: Date.now() });
+        saveDebugLogsToStorage(logs);
+      }
       void fetch(`${API_URL}/api/search/cancel`, { method: "POST", keepalive: true });
     };
     window.addEventListener("beforeunload", handleBeforeUnload);
