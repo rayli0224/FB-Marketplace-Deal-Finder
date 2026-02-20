@@ -2,7 +2,7 @@
 Colored logging formatter and reusable log helpers.
 
 - setup_colored_logger(module_name): get a logger that outputs message only (no INFO/DEBUG prefix, no module prefix). WARNING/ERROR messages are colored when stdout is a TTY.
-- log_step_sep(logger, title): separator line for a main step (overall query only: Step 1, Step 2, ...).
+- log_step_sep(logger, title): separator line, bold title (overall query only: Step 1, Step 2, ...). No trailing line so consecutive steps share one boundary.
 - log_section_sep(logger, title): separator line for a section within a flow (e.g. per-listing header). Do not use "Step N" here.
 - log_step_title(logger, message, level=INFO): separator line, bold title, separator line (for main steps or section titles).
 - log_data_line(logger, label, **kwargs): one-line key=value data.
@@ -165,16 +165,19 @@ def _bold_if_tty(text: str) -> str:
     return text
 
 
-def _log_sep_with_title(logger: logging.Logger, title: str, level: int = logging.INFO) -> None:
-    """Log separator line, bold title on its own line, then separator line. Shared by step/section/step_title."""
+def _log_sep_with_title(
+    logger: logging.Logger, title: str, level: int = logging.INFO, trailing_sep: bool = True
+) -> None:
+    """Log separator line, bold title. If trailing_sep, add separator line after title."""
     logger.info("─" * SEP_LINE_LEN)
     logger.log(level, _bold_if_tty(title))
-    logger.info("─" * SEP_LINE_LEN)
+    if trailing_sep:
+        logger.info("─" * SEP_LINE_LEN)
 
 
 def log_step_sep(logger: logging.Logger, title: str) -> None:
-    """Log a main step break (overall query only): separator line, bold title, separator line."""
-    _log_sep_with_title(logger, title)
+    """Log a main step break (overall query only): separator line, bold title. No trailing line so consecutive steps share one boundary."""
+    _log_sep_with_title(logger, title, trailing_sep=False)
 
 
 def log_section_sep(logger: logging.Logger, title: str) -> None:

@@ -1143,6 +1143,7 @@ class FBMarketplaceScraper:
 
                     idx = len(listings) + 1
                     label = f"[{idx}/{max_listings}] Retrieved:"
+                    log_listing_box_sep(logger)
                     log_data_block(
                         logger, label,
                         title=listing.title, price=listing.price, location=listing.location, url=listing.url,

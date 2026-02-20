@@ -139,22 +139,17 @@ class QueueLogHandler(logging.Handler):
             "level": "INFO",
             "message": end_message,
         })
-        
-        # Emit the buffered per-listing logs first so any separator lines
-        # appear as a prefix/suffix around the listing block.
+
+        # Emit the buffered per-listing logs. The last buffered line is typically
+        # the separator from evaluation_orchestrator's finally, so we do not add
+        # another one here to avoid two consecutive separator lines.
         for line in lines:
             self._event_queue.put({
                 "type": "debug_log",
                 "level": "INFO",
                 "message": line,
             })
-        
-        self._event_queue.put({
-            "type": "debug_log",
-            "level": "INFO",
-            "message": "─" * SEP_LINE_LEN,
-        })
-        
+
 
 def create_search_stream(request, debug_mode: bool):
     """
