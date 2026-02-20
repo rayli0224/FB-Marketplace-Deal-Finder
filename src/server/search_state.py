@@ -29,9 +29,14 @@ _PREVIOUS_SEARCH_CLEANUP_TIMEOUT = 10.0
 
 # Active search state for immediate cancellation from a separate HTTP request.
 # "complete" is set when a search finishes all cleanup; new searches wait on it.
+# Poison pill sent to the event queue so the generator unblocks immediately on cancel.
+CANCEL_SIGNAL_TYPE = "_cancel_signal"
+_CANCEL_SIGNAL = {"type": CANCEL_SIGNAL_TYPE}
+
 _active_search: dict = {
     "cancelled": None,
     "thread_id": None,
+    "event_queue": None,
     "complete": threading.Event(),
 }
 _active_search["complete"].set()
@@ -41,16 +46,25 @@ _active_search_lock = threading.Lock()
 def _signal_cancellation():
     """Read the active search state and kill Chrome for the FB scraper thread.
 
-    eBay pool cleanup is handled by the event generator via ebay_pool_ref.
+    Puts a poison pill in the event queue so the generator unblocks immediately
+    instead of waiting up to 0.5s in event_queue.get(). eBay pool cleanup is
+    handled by the event generator via ebay_pool_ref.
     Returns the complete event so callers can optionally wait on it.
     """
     with _active_search_lock:
         cancelled = _active_search.get("cancelled")
         thread_id = _active_search.get("thread_id")
+        event_queue = _active_search.get("event_queue")
         complete = _active_search["complete"]
 
     if cancelled is not None:
         cancelled.set()
+    if event_queue is not None:
+        try:
+            event_queue.put_nowait(_CANCEL_SIGNAL)
+        except Exception:
+            # Queue is unbounded; put_nowait should not raise. Ignore defensively.
+            pass
     if thread_id is not None:
         force_close_active_scraper(thread_id)
 
@@ -74,12 +88,14 @@ def cancel_active_search():
     _signal_cancellation()
 
 
-def set_active_search(*, cancelled, thread_id=None):
-    """Register the current search's cancellation event and thread ID."""
+def set_active_search(*, cancelled, thread_id=None, event_queue=None):
+    """Register the current search's cancellation event, thread ID, and event queue."""
     with _active_search_lock:
         _active_search["cancelled"] = cancelled
         if thread_id is not None:
             _active_search["thread_id"] = thread_id
+        if event_queue is not None:
+            _active_search["event_queue"] = event_queue
 
 
 def mark_search_starting():
@@ -93,6 +109,7 @@ def mark_search_complete():
     with _active_search_lock:
         _active_search["cancelled"] = None
         _active_search["thread_id"] = None
+        _active_search["event_queue"] = None
         _active_search["complete"].set()
 
 

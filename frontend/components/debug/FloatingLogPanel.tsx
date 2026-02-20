@@ -117,7 +117,7 @@ export interface FloatingLogPanelProps {
 
 /**
  * Free-floating, draggable and resizable panel that shows debug logs.
- * Always visible when debug mode is enabled. Logs persist across searches and page refreshes until the container restarts.
+ * Always visible when debug mode is enabled. Logs clear when a new search starts; they persist across page refreshes until the container restarts.
  * Auto-scrolls to the latest logs when the user is at the bottom; pauses when they scroll up and resumes when they scroll back down.
  */
 export function FloatingLogPanel({ logs, debugEnabled }: FloatingLogPanelProps) {
