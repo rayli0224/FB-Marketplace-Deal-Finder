@@ -822,10 +822,7 @@ export default function Home() {
     setThreshold(Number(data.threshold) || 0);
     setDebugFacebookListings([]);
     setDebugEbayQueries([]);
-<<<<<<< Updated upstream
-=======
     setDebugLogs([]);
->>>>>>> Stashed changes
     setAppState("loading");
     
     // Start search directly — backend handles killing any previous search before starting
