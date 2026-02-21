@@ -15,6 +15,7 @@ import { SearchResultsView } from "@/components/results/SearchResultsView";
 import { CookieSetupGuide } from "@/components/auth/CookieSetupGuide";
 import type { Listing } from "@/components/results/ResultsTable";
 import { FloatingLogPanel } from "@/components/debug/FloatingLogPanel";
+import { FloatingDebugTogglesPanel } from "@/components/debug/FloatingDebugTogglesPanel";
 import type { DebugFacebookListing, DebugEbayQueryEntry, DebugLogEntry } from "@/components/debug/DebugPanel";
 import type { DebugSearchParams } from "@/components/debug/DebugSearchParams";
 
@@ -38,6 +39,7 @@ const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
 const DEBUG_LOGS_STORAGE_KEY = "fb_marketplace_debug_logs";
 const DEBUG_MODE_ENABLED_KEY = "fb_marketplace_debug_mode_enabled";
+const OPEN_DEVTOOLS_TABS_KEY = "fb_marketplace_open_devtools_tabs";
 
 function loadDebugLogsFromStorage(): DebugLogEntry[] {
   if (typeof window === "undefined") return [];
@@ -78,6 +80,24 @@ function isDebugModeEnabledInStorage(): boolean {
     return localStorage.getItem(DEBUG_MODE_ENABLED_KEY) === "true";
   } catch {
     return false;
+  }
+}
+
+function setOpenDevToolsTabsInStorage(enabled: boolean): void {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.setItem(OPEN_DEVTOOLS_TABS_KEY, enabled ? "true" : "false");
+  } catch {
+    // Storage may be disabled or quota exceeded; continue without persistence
+  }
+}
+
+function isOpenDevToolsTabsInStorage(): boolean {
+  if (typeof window === "undefined") return true;
+  try {
+    return localStorage.getItem(OPEN_DEVTOOLS_TABS_KEY) !== "false";
+  } catch {
+    return true;
   }
 }
 
@@ -333,11 +353,40 @@ export default function Home() {
   const [filteredOutListings, setFilteredOutListings] = useState<DebugFacebookListing[]>([]);
   const [debugEbayQueries, setDebugEbayQueries] = useState<DebugEbayQueryEntry[]>([]);
   const [debugLogs, setDebugLogs] = useState<DebugLogEntry[]>(() => loadDebugLogsFromStorage());
-  const [debugModeEnabled, setDebugModeEnabledState] = useState<boolean>(() => isDebugModeEnabledInStorage());
+  const [debugModeEnabled, setDebugModeEnabledState] = useState<boolean>(false);
+  const [openDevToolsTabs, setOpenDevToolsTabs] = useState<boolean>(true);
   const [isSearching, setIsSearching] = useState<boolean>(false);
   const isSearchingRef = useRef<boolean>(false);
   const abortControllerRef = useRef<AbortController | null>(null);
   const readerRef = useRef<ReadableStreamDefaultReader<Uint8Array> | null>(null);
+
+  /** Sync openDevToolsTabs from localStorage on mount. */
+  useEffect(() => {
+    setOpenDevToolsTabs(isOpenDevToolsTabsInStorage());
+  }, []);
+
+  /** Fetch backend debug status on mount so panels show or hide immediately without needing to run a search. */
+  useEffect(() => {
+    async function fetchDebugStatus() {
+      try {
+        const res = await fetch(`${API_URL}/api/debug/status`);
+        if (!res.ok) {
+          setDebugModeEnabledState(false);
+          return;
+        }
+        const data = (await res.json()) as { debug?: boolean };
+        setDebugModeEnabledState(Boolean(data.debug));
+      } catch {
+        setDebugModeEnabledState(false);
+      }
+    }
+    fetchDebugStatus();
+  }, []);
+
+  const handleOpenDevToolsTabsChange = useCallback((checked: boolean) => {
+    setOpenDevToolsTabs(checked);
+    setOpenDevToolsTabsInStorage(checked);
+  }, []);
 
   /**
    * Persists debug logs to localStorage whenever they change.
@@ -345,6 +394,26 @@ export default function Home() {
   useEffect(() => {
     saveDebugLogsToStorage(debugLogs);
   }, [debugLogs]);
+
+  /**
+   * On loading page, reload or tab close sends a cancel request to the backend
+   * (same effect as the Cancel button). Uses keepalive so the request completes
+   * even as the page unloads. Adds "Search cancelled by user" to debug logs when
+   * debug mode is on so it appears after reload.
+   */
+  useEffect(() => {
+    if (appState !== "loading") return;
+    const handleBeforeUnload = () => {
+      if (localStorage.getItem(DEBUG_MODE_ENABLED_KEY) === "true") {
+        const logs = loadDebugLogsFromStorage();
+        logs.push({ level: "WARNING", message: "Search cancelled by user", timestampMs: Date.now() });
+        saveDebugLogsToStorage(logs);
+      }
+      void fetch(`${API_URL}/api/search/cancel`, { method: "POST", keepalive: true });
+    };
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+  }, [appState]);
 
   /**
    * Generates a CSV blob from listings data with pirate-themed column headers.
@@ -671,7 +740,9 @@ export default function Home() {
         onDebugEbayQueryFinished: onDebugEbayQueryFinished,
         onDebugProductRecon: onDebugProductRecon,
         onDebugLog: (entry) => setDebugLogs((prev: DebugLogEntry[]) => [...prev, entry]),
-        onInspectorUrl: openBackgroundTab,
+        onInspectorUrl: (url) => {
+          if (openDevToolsTabs) openBackgroundTab(url);
+        },
       };
 
       try {
@@ -724,7 +795,7 @@ export default function Home() {
         reader.releaseLock();
       }
     },
-    [handlePhaseUpdate, handleProgressUpdate, handleCompletion, handleAuthError, handleLocationError, handleCurrentItem, onListingResult, onFilteredFacebookListing, onDebugEbayQueryStart, onDebugEbayQueryGenerated, onDebugEbayQueryFinished, onDebugProductRecon]
+    [handlePhaseUpdate, handleProgressUpdate, handleCompletion, handleAuthError, handleLocationError, handleCurrentItem, onListingResult, onFilteredFacebookListing, onDebugEbayQueryStart, onDebugEbayQueryGenerated, onDebugEbayQueryFinished, onDebugProductRecon, openDevToolsTabs]
   );
 
   /**
@@ -826,6 +897,7 @@ export default function Home() {
     setThreshold(Number(data.threshold) || 0);
     setDebugFacebookListings([]);
     setDebugEbayQueries([]);
+    setDebugLogs([]);
     setAppState("loading");
     
     // Start search directly — backend handles killing any previous search before starting
@@ -936,7 +1008,13 @@ export default function Home() {
         </div>
 
         {debugModeEnabled && (
-          <FloatingLogPanel logs={debugLogs} debugEnabled={true} />
+          <>
+            <FloatingLogPanel logs={debugLogs} debugEnabled={true} />
+            <FloatingDebugTogglesPanel
+              openDevToolsTabs={openDevToolsTabs}
+              onOpenDevToolsTabsChange={handleOpenDevToolsTabsChange}
+            />
+          </>
         )}
 
         <AppFooter />

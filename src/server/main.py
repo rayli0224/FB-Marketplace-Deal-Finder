@@ -129,6 +129,12 @@ def health_check():
     return {"status": "healthy"}
 
 
+@app.get("/api/debug/status")
+def debug_status():
+    """Return whether the backend is running in debug mode. Used by the frontend to show or hide debug panels on load."""
+    return {"debug": DEBUG_MODE}
+
+
 @app.get("/api/cookies/status")
 def cookies_status():
     """
