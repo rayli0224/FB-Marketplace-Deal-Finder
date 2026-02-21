@@ -27,7 +27,7 @@ export type DebugEbayQueryEntry = {
     category?: string;
     model_or_series?: string;
     year_or_generation?: string;
-    variant_dimensions?: string[];
+    key_attributes?: Array<{ attribute: string; value: string; price_impact: string }>;
     notes?: string;
     citations?: { url: string; title?: string }[];
   };
@@ -282,8 +282,10 @@ function EbayQueryCell({ entry, nowMs }: { entry: DebugEbayQueryEntry; nowMs: nu
             <div>
               <span>◦ Price-changing details: </span>
               <span className="text-foreground">
-                {(entry.productRecon.variant_dimensions ?? []).length > 0
-                  ? (entry.productRecon.variant_dimensions ?? []).join(", ")
+                {(entry.productRecon.key_attributes ?? []).length > 0
+                  ? (entry.productRecon.key_attributes ?? [])
+                      .map((attr) => `${attr.attribute}: ${attr.value} (${attr.price_impact})`)
+                      .join(", ")
                   : "—"}
               </span>
             </div>

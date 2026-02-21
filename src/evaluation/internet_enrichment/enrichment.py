@@ -90,17 +90,26 @@ def enrich_listing_with_internet(
             logger.debug(f"Product research response text: {recon_raw if recon_raw else '(empty)'}")
             return None
 
-        variant_dimensions = recon_result.get("variant_dimensions", [])
-        variant_dimensions_text = (
-            ", ".join(str(v) for v in variant_dimensions) if isinstance(variant_dimensions, list) else str(variant_dimensions)
-        ) or "None"
+        key_attributes = recon_result.get("key_attributes", [])
+        if isinstance(key_attributes, list) and len(key_attributes) > 0:
+            key_attributes_text = ", ".join(
+                f"{attr.get('attribute', 'unknown')}: {attr.get('value', 'unknown')} ({attr.get('price_impact', 'unknown')})"
+                for attr in key_attributes
+                if isinstance(attr, dict)
+            ) or "None"
+        else:
+            key_attributes_text = "None"
+        computable = recon_result.get("computable", True)
         logger.debug(" Internet search found:")
         logger.debug(f"  - Product name: {recon_result.get('canonical_name', 'Unknown')}")
         logger.debug(f"  - Brand: {recon_result.get('brand', 'Unknown')}")
         logger.debug(f"  - Category: {recon_result.get('category', 'Unknown')}")
         logger.debug(f"  - Model/series: {recon_result.get('model_or_series', 'Unknown')}")
         logger.debug(f"  - Year/generation: {recon_result.get('year_or_generation', 'Unknown')}")
-        logger.debug(f"  - Price-changing details: {variant_dimensions_text}")
+        logger.debug(f"  - Price-changing details: {key_attributes_text}")
+        logger.debug(f"  - Computable: {computable}")
+        if not computable:
+            logger.debug(f"  - Reject reason: {recon_result.get('reject_reason', 'None')}")
         logger.debug(f"  - Notes: {recon_result.get('notes', '') or 'None'}")
         if recon_citations:
             for c in recon_citations:

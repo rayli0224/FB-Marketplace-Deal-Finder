@@ -1,83 +1,76 @@
 """Prompts for FB listing filter (pre-filtering step)."""
 
-from src.evaluation.listing_format import format_fb_listing_for_prompt
+SYSTEM_MESSAGE = """You are evaluating raw Facebook Marketplace listings to decide whether they are worth investigating further.
 
-SYSTEM_MESSAGE = "You are an expert at evaluating marketplace listings. Always respond with valid JSON only."
+Your job is NOT to assess whether the product can be precisely identified — that comes later.
+Your job is to reject listings that are so vague, malformed, or inherently unquantifiable that no amount of research could produce a reliable price comparison.
+
+Rules:
+- Reject if the listing is a non-inherent lot or atypical bundle (e.g., "box of clothes", "lot of 50 games", "bag of misc tools"). Inherent or product-specific bundles like "pair of shoes", "chess set", "Lord of the Rings trilogy", or "box set of Phantasy Star Online 2" are fine.
+- Reject if the listing is a service, rental, or non-physical item.
+- Reject if the listing has no identifiable product — just a vague category with no brand, model, or specific name (e.g., "bag", "blender", "lamp").
+- Reject if the listing is clearly from a buyer, not a seller (covered separately by rules, but flag if unsure).
+- Accept if there is a brand, model, specific product name, or enough description to narrow down a product universe.
+
+Bias toward false rejects. It is better to skip a listing than to produce a bad price comparison.
+
+Always respond with valid JSON only."""
 
 
-def get_pre_filtering_prompt(fb_listing_text: str, product_recon_json: str = "") -> str:
-    return f"""You will be given a Facebook Marketplace listing. Determine whether the listing contains enough information to generate a useful eBay search that will find a reasonably comparable product for pricing.
+def get_pre_filtering_prompt(fb_listing_text: str) -> str:
+    """Pre-recon filter prompt - evaluates raw listing before product recon."""
+    return f"""Evaluate this Facebook Marketplace listing. Decide whether it has enough signal to be worth investigating for price comparison.
 
-The goal is not perfect identification. The goal is whether we can estimate fair market value with reasonable confidence. Depending on the product, differences between variants can be big or small (e.g., collectors items, electronics, book series).
-
-Ambiguity is acceptable if price differences between likely variants are typically small. Reject only if the listing is too vague to form a representative eBay search.
-
-Prefer false accepts over false rejects.
-
-### Facebook Marketplace Listing:
 {fb_listing_text}
 
-### Product Details from Internet Search:
-{product_recon_json}
-
-### Output Format
-Return ONLY a valid JSON object with this exact format:
-{{
-  "rejected": true,
-  "reason": "brief explanation"
-}}
-
-# Examples
-
-## Example 1:
-
-Facebook Marketplace listing:
-- Title: "Phantasy Star Online 3 GameCube"
-- Price: $40.00
-- Description: ""
-
-Output:
-{{
-  "rejected": false,
-  "reason": "Game title and platform sufficient for representative pricing despite minor version ambiguity"
-}}
-
-## Example 2:
-
-Facebook Marketplace listing:
-- Title: "50 Xbox One & Xbox 360 Games - job lot"
-- Price: £30.00
-- Description: ""
-
-Output:
-{{
-  "rejected": false,
-  "reason": "Quantity and console specified; sufficient for lot pricing"
-}}
-
-## Example 3:
-
-Facebook Marketplace listing:
-- Title: "Messenger bag"
-- Price: $5.00
-- Description: ""
-
-Output:
-{{
-  "rejected": true,
-  "reason": "No brand or identifiable product details"
-}}
-
-## Example 4:
+### Examples
 
 Facebook Marketplace listing:
 - Title: "Ninja smoothie blender"
 - Price: $30.00
 - Description: "Condition Used - Good Brand Ninja"
-
 Output:
+{{"rejected": false, "reason": "Brand and product type sufficient to identify product universe"}}
+
+---
+
+Facebook Marketplace listing:
+- Title: "Messenger bag"
+- Price: $5.00
+- Description: ""
+Output:
+{{"rejected": true, "reason": "No brand or identifiable product details"}}
+
+---
+
+Facebook Marketplace listing:
+- Title: "Lot of 50 assorted Xbox games"
+- Price: $40.00
+- Description: ""
+Output:
+{{"rejected": true, "reason": "Non-inherent lot — unit price cannot be reliably estimated"}}
+
+---
+
+Facebook Marketplace listing:
+- Title: "Chess set"
+- Price: $20.00
+- Description: "Wooden, full set"
+Output:
+{{"rejected": false, "reason": "Inherent set; product type identifiable"}}
+
+---
+
+Facebook Marketplace listing:
+- Title: "iPhone 12"
+- Price: $200.00
+- Description: ""
+Output:
+{{"rejected": false, "reason": "Specific product name identifiable; variant ambiguity resolved later"}}
+
+### Output Format
+Return ONLY a valid JSON object:
 {{
-  "rejected": false,
-  "reason": "Brand and product type sufficient for pricing"
-}}
-"""
+  "rejected": true,
+  "reason": "brief explanation (1 sentence)"
+}}"""

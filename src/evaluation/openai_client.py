@@ -125,16 +125,14 @@ def extract_url_citations(response: Any) -> list[dict]:
 
 def strip_markdown_code_fences(raw_content: str) -> str:
     """Remove surrounding markdown code fences from model output."""
-    content = raw_content.strip()
-    if not content:
+    text = raw_content.strip()
+    if not text:
         return ""
-
-    lines = content.splitlines()
-    if lines and lines[0].strip().startswith("```"):
-        lines = lines[1:]
-    if lines and lines[-1].strip().startswith("```"):
-        lines = lines[:-1]
-    return "\n".join(lines).strip()
+    
+    # Strip markdown code fences
+    text = re.sub(r"^```(?:json)?\s*", "", text)
+    text = re.sub(r"\s*```$", "", text)
+    return text.strip()
 
 
 def try_parse_json_dict(raw_content: str) -> Optional[dict]:
