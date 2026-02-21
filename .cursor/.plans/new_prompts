@@ -1,0 +1,93 @@
+# Pipeline Redesign Document
+
+## Overview of Changes
+
+The existing pipeline has 8 stages. The redesign modifies the filtering architecture,
+improves prompt structure, and tightens matching accuracy.
+
+---
+
+## Stage Changes
+
+### Pre-Filtering (Stage 1) — Split into Two Gates
+
+**Current:** Single pre-filter that evaluates both raw listing quality and recon results.
+
+**New:** Split into two separate gates.
+
+**Gate 1 — Pre-Recon Filter (new, before recon):**
+- Rule-based rejections (no LLM): listings containing "wanted", "looking for", "ISO", "WTB"
+- Lightweight LLM: reject if no identifiable product, no brand/model/specific name, or listing
+  is a non-inherent lot/bundle (e.g., "lot of 50 games", "box of clothes")
+- Use a cheaper/faster model than the rest of the pipeline
+- Bias toward false rejects
+
+**Gate 2 — Post-Recon Filter (replaces current pre-filter, embedded in recon output):**
+- Reject if any high-price-impact attribute is unknown
+- Reject if product could not be disambiguated from meaningfully different variants
+- Implemented as `computable: true/false` field in recon JSON output, not a separate LLM call
+
+---
+
+### Product Recon (Stage 2) — Schema Changes
+
+**Current `variant_dimensions`:** renamed to `key_attributes`, clarified as key-value pairs.
+
+**Add `price_impact` to each attribute:**
+```json
+"key_attributes": [
+  {"attribute": "storage", "value": "128GB", "price_impact": "high"},
+  {"attribute": "color", "value": "black", "price_impact": "low"}
+]
+```
+
+**Add `computable` field to absorb post-recon gate:**
+```json
+"computable": true,
+"reject_reason": "storage is unknown and high price impact"
+```
+
+---
+
+### eBay Query Generation (Stage 4) — Minor Changes
+
+- Add guidance for edge cases: when model is unknown, use canonical name; reflect
+  quantity in query only for products inherently sold in multiples
+- Add `why` field to output for debuggability:
+```json
+{
+  "enhanced_query": "Sony WH-1000XM4",
+  "why": "Model number fully identifies product; no high-impact unknowns"
+}
+```
+
+---
+
+### Post-eBay Filter (Stage 6) — Prompt Changes
+
+**Current:** Model jumps to verdict without externalizing reasoning. Category and
+price-relevant attributes are re-derived independently each call, causing inconsistency.
+
+**New:**
+- Pass `key_attributes` from recon directly into prompt so model doesn't re-derive
+  what matters for pricing
+- Force explicit per-item reasoning before verdict:
+```json
+{
+  "key_attributes_checked": {"model": "match", "year": "mismatch (2020 vs 2019)"},
+  "quantity_match": true,
+  "decision": "reject",
+  "reason": "Year mismatch (2020 vs 2019)"
+}
+```
+- Fix incorrect few-shot example: clothing size M vs L should be `accept` (size does
+  not materially affect resale price)
+
+---
+
+## General Prompt Changes
+
+- Move stable rules and rubrics into system messages; keep only variable data
+  (listing text, recon JSON, eBay items) in user messages
+- Flip pre-filter bias from "prefer false accepts" to "prefer false rejects" across
+  all filtering stages

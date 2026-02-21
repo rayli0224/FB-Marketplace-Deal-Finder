@@ -110,6 +110,7 @@ async def _filter_batch(
             instructions=RESULT_FILTERING_SYSTEM_MESSAGE,
             prompt=prompt,
             max_output_tokens=BATCH_FILTER_MAX_OUTPUT_TOKENS,
+            cancelled=cancelled,
         )
         raw_content = extract_response_output_text(response)
         if not raw_content:

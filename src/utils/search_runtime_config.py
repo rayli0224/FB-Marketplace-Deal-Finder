@@ -56,3 +56,9 @@ POST_FILTER_CANCEL_POLL_INTERVAL_SEC = _read_non_negative_float_env(
     "POST_FILTER_CANCEL_POLL_INTERVAL_SEC",
     0.2,
 )
+
+# OpenAI API concurrency limit (openai_client.py)
+OPENAI_MAX_CONCURRENT_REQUESTS = _read_positive_int_env(
+    "OPENAI_MAX_CONCURRENT_REQUESTS",
+    3,
+)

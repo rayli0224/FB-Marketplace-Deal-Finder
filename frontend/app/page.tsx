@@ -261,9 +261,21 @@ function dispatchSSEEvent(payloadString: string, handlers: SSEDispatchHandlers):
         category: String((data.recon as any).category ?? ""),
         model_or_series: String((data.recon as any).model_or_series ?? ""),
         year_or_generation: String((data.recon as any).year_or_generation ?? ""),
-        variant_dimensions: Array.isArray((data.recon as any).variant_dimensions)
-          ? ((data.recon as any).variant_dimensions as any[]).map((v) => String(v))
+        key_attributes: Array.isArray((data.recon as any).key_attributes)
+          ? ((data.recon as any).key_attributes as any[]).map((attr: any) => ({
+              attribute: String(attr?.attribute ?? ""),
+              value: String(attr?.value ?? ""),
+              price_impact: String(attr?.price_impact ?? ""),
+            }))
           : [],
+        computable:
+          (data.recon as any).computable !== undefined
+            ? Boolean((data.recon as any).computable)
+            : undefined,
+        reject_reason:
+          (data.recon as any).reject_reason !== undefined && (data.recon as any).reject_reason !== null
+            ? String((data.recon as any).reject_reason)
+            : undefined,
         notes: String((data.recon as any).notes ?? ""),
         citations: Array.isArray(data.citations) ? data.citations : [],
       },

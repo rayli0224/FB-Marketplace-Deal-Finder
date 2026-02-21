@@ -27,7 +27,9 @@ export type DebugEbayQueryEntry = {
     category?: string;
     model_or_series?: string;
     year_or_generation?: string;
-    variant_dimensions?: string[];
+    key_attributes?: Array<{ attribute: string; value: string; price_impact: string }>;
+    computable?: boolean;
+    reject_reason?: string | null;
     notes?: string;
     citations?: { url: string; title?: string }[];
   };
@@ -280,13 +282,31 @@ function EbayQueryCell({ entry, nowMs }: { entry: DebugEbayQueryEntry; nowMs: nu
             <div><span>◦ Model/series: </span><span className="text-foreground">{entry.productRecon.model_or_series ?? "—"}</span></div>
             <div><span>◦ Year/generation: </span><span className="text-foreground">{entry.productRecon.year_or_generation ?? "—"}</span></div>
             <div>
-              <span>◦ Price-changing details: </span>
+              <span>◦ Key attributes: </span>
               <span className="text-foreground">
-                {(entry.productRecon.variant_dimensions ?? []).length > 0
-                  ? (entry.productRecon.variant_dimensions ?? []).join(", ")
+                {(entry.productRecon.key_attributes ?? []).length > 0
+                  ? (entry.productRecon.key_attributes ?? [])
+                      .map((attr) => `${attr.attribute}: ${attr.value} (${attr.price_impact})`)
+                      .join(", ")
                   : "—"}
               </span>
             </div>
+            <div>
+              <span>◦ Computable: </span>
+              <span className="text-foreground">
+                {entry.productRecon.computable !== undefined
+                  ? entry.productRecon.computable
+                    ? "Yes"
+                    : "No"
+                  : "—"}
+              </span>
+            </div>
+            {entry.productRecon.computable === false && entry.productRecon.reject_reason && (
+              <div>
+                <span>◦ Reject reason: </span>
+                <span className="text-foreground">{entry.productRecon.reject_reason}</span>
+              </div>
+            )}
             <div><span>◦ Notes: </span><span className="text-foreground">{entry.productRecon.notes ?? "—"}</span></div>
             <div>
               <span>◦ Citations: </span>

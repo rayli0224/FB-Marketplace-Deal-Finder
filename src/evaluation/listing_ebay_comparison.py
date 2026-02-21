@@ -141,12 +141,14 @@ def _compare_listing_to_ebay_inner(
             listing,
             original_query,
             on_product_recon=on_product_recon,
+            cancelled=cancelled,
         )
     if query_result is None:
         log_warning(logger, "Could not prepare search — skipping deal score")
         return _listing_result(listing, None, no_comp_reason="Could not prepare search")
     enhanced_query, skip_reason, product_recon_json = query_result
     if skip_reason is not None:
+        logger.info(f"Listing rejected: {skip_reason}")
         return _listing_result(listing, None, no_comp_reason=skip_reason)
     if not product_recon_json:
         log_warning(logger, "Could not research item details — skipping deal score")
