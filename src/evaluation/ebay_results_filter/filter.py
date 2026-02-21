@@ -218,7 +218,6 @@ async def _filter_ebay_results_async(
                         return_when=asyncio.FIRST_COMPLETED,
                     )
                     
-                    # Check cancellation after waiting
                     if cancelled and cancelled.is_set():
                         await _cancel_running_tasks(running_tasks)
                         raise SearchCancelledError("Search was cancelled by user")
@@ -238,7 +237,6 @@ async def _filter_ebay_results_async(
                     return_when=asyncio.FIRST_COMPLETED,
                 )
                 
-                # Check cancellation after waiting
                 if cancelled and cancelled.is_set():
                     await _cancel_running_tasks(running_tasks)
                     raise SearchCancelledError("Search was cancelled by user")

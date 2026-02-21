@@ -226,13 +226,12 @@ def create_sync_response(
     semaphore = _get_shared_semaphore()
     
     # Acquire semaphore (with cancellation check)
-    # Use blocking=True with periodic cancellation checks for better performance
+    # Use non-blocking acquire with polling to allow cancellation checks
     while True:
         if cancelled and cancelled.is_set():
             raise SearchCancelledError("Search was cancelled by user")
         if semaphore.acquire(blocking=False):
             break
-        # Shorter poll interval to reduce latency
         time.sleep(0.01)
     
     try:
@@ -299,7 +298,6 @@ async def create_async_response(
     
     # Acquire semaphore (with cancellation check)
     # Use asyncio.to_thread to wait on the threading.Semaphore from async context
-    # Shorter poll interval to reduce latency
     while True:
         if cancelled and cancelled.is_set():
             raise SearchCancelledError("Search was cancelled by user")
