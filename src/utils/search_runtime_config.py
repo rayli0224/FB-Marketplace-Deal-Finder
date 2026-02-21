@@ -43,10 +43,10 @@ LISTING_EVAL_WORKER_START_DELAY_SEC = _read_non_negative_float_env(
 EVAL_WAIT_TIMEOUT_SEC = _read_non_negative_float_env("EVAL_WAIT_TIMEOUT_SEC", 0.2)
 
 # eBay post-filtering batch concurrency (ebay_results_filter/)
-POST_FILTER_BATCH_SIZE = _read_positive_int_env("POST_FILTER_BATCH_SIZE", 5)
+POST_FILTER_BATCH_SIZE = _read_positive_int_env("POST_FILTER_BATCH_SIZE", 10)
 POST_FILTER_MAX_CONCURRENT_BATCHES = _read_positive_int_env(
     "POST_FILTER_MAX_CONCURRENT_BATCHES",
-    2,
+    5,
 )
 POST_FILTER_BATCH_START_DELAY_SEC = _read_non_negative_float_env(
     "POST_FILTER_BATCH_START_DELAY_SEC",
@@ -56,3 +56,6 @@ POST_FILTER_CANCEL_POLL_INTERVAL_SEC = _read_non_negative_float_env(
     "POST_FILTER_CANCEL_POLL_INTERVAL_SEC",
     0.2,
 )
+
+# OpenAI API concurrency control
+OPENAI_MAX_CONCURRENT_REQUESTS = _read_positive_int_env("OPENAI_MAX_CONCURRENT_REQUESTS", 15)

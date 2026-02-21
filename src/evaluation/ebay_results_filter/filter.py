@@ -80,6 +80,7 @@ async def _filter_batch(
     product_recon_json: str,
     items: List[dict],
     start_index: int,
+    cancelled: Optional[threading.Event] = None,
 ) -> List[Tuple[int, str, str]]:
     """Filter a batch of eBay items against a FB listing using OpenAI."""
     if not items:
@@ -95,6 +96,7 @@ async def _filter_batch(
             instructions=SYSTEM_MESSAGE,
             prompt=prompt,
             max_output_tokens=BATCH_FILTER_MAX_OUTPUT_TOKENS,
+            cancelled=cancelled,
         )
         raw_content = extract_response_output_text(response)
         if not raw_content:
@@ -117,6 +119,9 @@ async def _filter_batch(
                 reason = str(reason)
             out.append((start_index + i, decision, reason))
         return out
+    except SearchCancelledError:
+        # Propagate cancellation immediately
+        raise
     except Exception as e:
         logger.debug(f"Batch {start_index}-{start_index + len(items) - 1}: API error ({e}) — keeping all")
         return [(start_index + i, "accept", "") for i in range(len(items))]
@@ -162,8 +167,13 @@ async def _filter_ebay_results_async(
             try:
                 results_list.extend(finished_task.result())
             except asyncio.CancelledError:
+                # Task was canceled - cancel all remaining tasks and propagate
                 await _cancel_running_tasks(running_tasks)
                 raise SearchCancelledError("Search was cancelled by user")
+            except SearchCancelledError:
+                # Already a SearchCancelledError - cancel remaining tasks and propagate
+                await _cancel_running_tasks(running_tasks)
+                raise
 
     try:
         batches = []
@@ -191,26 +201,46 @@ async def _filter_ebay_results_async(
                     await _cancel_running_tasks(running_tasks)
                     raise SearchCancelledError("Search was cancelled by user")
                 task = asyncio.create_task(
-                    _filter_batch(client, product_recon_json, batch, start_index)
+                    _filter_batch(client, product_recon_json, batch, start_index, cancelled=cancelled)
                 )
                 running_tasks.add(task)
                 next_batch_idx += 1
 
                 if POST_FILTER_BATCH_START_DELAY_SEC > 0 and next_batch_idx < len(batches):
+                    # Check cancellation before waiting
+                    if cancelled and cancelled.is_set():
+                        await _cancel_running_tasks(running_tasks)
+                        raise SearchCancelledError("Search was cancelled by user")
+                    
                     done, _ = await asyncio.wait(
                         running_tasks,
                         timeout=POST_FILTER_BATCH_START_DELAY_SEC,
                         return_when=asyncio.FIRST_COMPLETED,
                     )
+                    
+                    if cancelled and cancelled.is_set():
+                        await _cancel_running_tasks(running_tasks)
+                        raise SearchCancelledError("Search was cancelled by user")
+                    
                     await _collect_batch_results(done, running_tasks, results)
                 continue
 
             if running_tasks:
+                # Check cancellation before waiting
+                if cancelled and cancelled.is_set():
+                    await _cancel_running_tasks(running_tasks)
+                    raise SearchCancelledError("Search was cancelled by user")
+                
                 done, _ = await asyncio.wait(
                     running_tasks,
                     timeout=POST_FILTER_CANCEL_POLL_INTERVAL_SEC,
                     return_when=asyncio.FIRST_COMPLETED,
                 )
+                
+                if cancelled and cancelled.is_set():
+                    await _cancel_running_tasks(running_tasks)
+                    raise SearchCancelledError("Search was cancelled by user")
+                
                 await _collect_batch_results(done, running_tasks, results)
     finally:
         try:
@@ -276,13 +306,24 @@ def filter_ebay_results_with_openai(
     try:
         try:
             asyncio.get_running_loop()
+            # We're already in an async context, so run in a thread pool
             with concurrent.futures.ThreadPoolExecutor() as executor:
                 future = executor.submit(
                     asyncio.run,
                     _filter_ebay_results_async(listing, ebay_items, product_recon_json, cancelled),
                 )
-                return future.result()
+                # Poll future.result() with timeout to check cancellation periodically
+                while True:
+                    if cancelled and cancelled.is_set():
+                        future.cancel()
+                        raise SearchCancelledError("Search was cancelled by user")
+                    try:
+                        return future.result(timeout=0.1)
+                    except concurrent.futures.TimeoutError:
+                        # Continue polling
+                        continue
         except RuntimeError:
+            # No running event loop, can use asyncio.run directly
             return asyncio.run(_filter_ebay_results_async(listing, ebay_items, product_recon_json, cancelled))
     except SearchCancelledError:
         raise
