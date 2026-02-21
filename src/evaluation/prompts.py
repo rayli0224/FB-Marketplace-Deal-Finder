@@ -3,6 +3,13 @@ Prompts for OpenAI API calls in query enhancement and filtering.
 
 Contains prompt templates used for generating eBay search queries and filtering
 eBay results to match Facebook Marketplace listings.
+
+Pipeline stages:
+  1. Pre-recon filter   — lightweight LLM + rules, gates on raw listing quality
+  2. Product recon      — internet search + LLM, identifies and disambiguates product
+                          (post-recon gate is embedded in recon output via `computable`)
+  3. eBay query gen     — generates eBay sold-listings search query from recon output
+  4. Post-eBay filter   — determines if each eBay listing is truly comparable
 """
 
 from typing import TYPE_CHECKING
@@ -10,6 +17,10 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from src.scrapers.fb_marketplace_scraper import Listing
 
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
 def format_fb_listing_for_prompt(listing: "Listing") -> str:
     """
@@ -23,94 +34,174 @@ def format_fb_listing_for_prompt(listing: "Listing") -> str:
         listing_text += f"\n- Description: {listing.description}"
     return listing_text
 
-# System message for pre-filtering (determining if listing has enough info)
-PRE_FILTERING_SYSTEM_MESSAGE = "You are an expert at evaluating marketplace listings. Always respond with valid JSON only."
 
-# System message for query generation
-QUERY_GENERATION_SYSTEM_MESSAGE = "You are an expert at creating precise search queries for online marketplaces. Always respond with valid JSON only."
+# ---------------------------------------------------------------------------
+# Step 1 — Pre-Recon Filter
+# ---------------------------------------------------------------------------
 
-# System message for internet product recon
-PRODUCT_RECON_SYSTEM_MESSAGE = "You are an expert at identifying real-world products from marketplace listings. Always respond with valid JSON only."
+PRE_RECON_FILTER_SYSTEM_MESSAGE = """You are evaluating raw Facebook Marketplace listings to decide whether they are worth investigating further.
 
-# System message for result filtering
-RESULT_FILTERING_SYSTEM_MESSAGE = "You are an expert at comparing products across marketplaces. Always respond with valid JSON only."
+Your job is NOT to assess whether the product can be precisely identified — that comes later.
+Your job is to reject listings that are so vague, malformed, or inherently unquantifiable that no amount of research could produce a reliable price comparison.
 
-def get_pre_filtering_prompt(fb_listing_text: str, product_recon_json: str = "") -> str:
-  return f"""You will be given a Facebook Marketplace listing. Determine whether the listing contains enough information to generate a useful eBay search that will find a reasonably comparable product for pricing.
+Rules:
+- Reject if the listing is a non-inherent lot or bundle (e.g., "box of clothes", "lot of 50 games", "bag of misc tools"). Inherent bundles like "pair of shoes" or "chess set" are fine.
+- Reject if the listing is a service, rental, or non-physical item.
+- Reject if the listing has no identifiable product — just a vague category with no brand, model, or specific name (e.g., "bag", "blender", "lamp").
+- Reject if the listing is clearly from a buyer, not a seller (covered separately by rules, but flag if unsure).
+- Accept if there is a brand, model, specific product name, or enough description to narrow down a product universe.
 
-The goal is not perfect identification. The goal is whether we can estimate fair market value with reasonable confidence. Depending on the product, differences between variants can be big or small (e.g., collectors items, electronics, book series).
+Bias toward false rejects. It is better to skip a listing than to produce a bad price comparison.
 
-Ambiguity is acceptable if price differences between likely variants are typically small. Reject only if the listing is too vague to form a representative eBay search.
+Always respond with valid JSON only."""
 
-Prefer false accepts over false rejects.
 
-### Facebook Marketplace Listing:
+def get_pre_recon_filter_prompt(fb_listing_text: str) -> str:
+    """Pre-recon filter prompt - evaluates raw listing before product recon."""
+    return f"""Evaluate this Facebook Marketplace listing. Decide whether it has enough signal to be worth investigating for price comparison.
+
 {fb_listing_text}
 
-### Product Details from Internet Search:
-{product_recon_json}
-
-### Output Format
-Return ONLY a valid JSON object with this exact format:
-{{
-  "rejected": true,
-  "reason": "brief explanation"
-}}
-
-# Examples
-
-## Example 1:
-
-Facebook Marketplace listing:
-- Title: "Phantasy Star Online 3 GameCube"
-- Price: $40.00
-- Description: ""
-
-Output:
-{{
-  "rejected": false,
-  "reason": "Game title and platform sufficient for representative pricing despite minor version ambiguity"
-}}
-
-## Example 2:
-
-Facebook Marketplace listing:
-- Title: "50 Xbox One & Xbox 360 Games - job lot"
-- Price: £30.00
-- Description: ""
-
-Output:
-{{
-  "rejected": false,
-  "reason": "Quantity and console specified; sufficient for lot pricing"
-}}
-
-## Example 3:
-
-Facebook Marketplace listing:
-- Title: "Messenger bag"
-- Price: $5.00
-- Description: ""
-
-Output:
-{{
-  "rejected": true,
-  "reason": "No brand or identifiable product details"
-}}
-
-## Example 4:
+### Examples
 
 Facebook Marketplace listing:
 - Title: "Ninja smoothie blender"
 - Price: $30.00
 - Description: "Condition Used - Good Brand Ninja"
-
 Output:
+{{"rejected": false, "reason": "Brand and product type sufficient to identify product universe"}}
+
+---
+
+Facebook Marketplace listing:
+- Title: "Messenger bag"
+- Price: $5.00
+- Description: ""
+Output:
+{{"rejected": true, "reason": "No brand or identifiable product details"}}
+
+---
+
+Facebook Marketplace listing:
+- Title: "Lot of 50 assorted Xbox games"
+- Price: $40.00
+- Description: ""
+Output:
+{{"rejected": true, "reason": "Non-inherent lot — unit price cannot be reliably estimated"}}
+
+---
+
+Facebook Marketplace listing:
+- Title: "Chess set"
+- Price: $20.00
+- Description: "Wooden, full set"
+Output:
+{{"rejected": false, "reason": "Inherent set; product type identifiable"}}
+
+---
+
+Facebook Marketplace listing:
+- Title: "iPhone 12"
+- Price: $200.00
+- Description: ""
+Output:
+{{"rejected": false, "reason": "Specific product name identifiable; variant ambiguity resolved later"}}
+
+### Output Format
+Return ONLY a valid JSON object:
 {{
-  "rejected": false,
-  "reason": "Brand and product type sufficient for pricing"
+  "rejected": true,
+  "reason": "brief explanation (1 sentence)"
+}}"""
+
+
+# ---------------------------------------------------------------------------
+# Step 2 — Product Recon
+# ---------------------------------------------------------------------------
+
+PRODUCT_RECON_SYSTEM_MESSAGE = """You are identifying and disambiguating the real-world product described in a Facebook Marketplace listing.
+
+Your goal is to DISAMBIGUATE, not to guess. Use internet search to resolve naming ambiguity, identify the correct product, and determine which attributes materially affect its market price.
+
+Rules:
+- Do NOT invent details. Only include information that is explicit in the listing or verifiable via search.
+- If multiple plausible products exist and they have meaningfully different price points, mark the conflicting fields as "unknown".
+- If multiple plausible products exist but their price difference is negligible, pick the most likely and note the ambiguity in `notes`.
+- Mark `computable` as false if any high-price-impact attribute is unknown, or if the product cannot be reliably disambiguated.
+- Condition of products can typically all be assumed to be used with regular wear and tear, as long as it's not listed "for parts" or "not working".
+- When in doubt, assign medium rather than high. Reserve high for attributes that cause unambiguous, well-known price splits (e.g., iPhone storage tiers, electric vs acoustic instruments).
+
+Always respond with valid JSON only."""
+
+
+def get_internet_product_recon_prompt(fb_listing_text: str) -> str:
+    return f"""Identify the real-world product in this Facebook Marketplace listing. Search the internet to resolve ambiguity and determine price-relevant attributes.
+
+{fb_listing_text}
+
+### Output Format
+Return a single JSON object:
+
+{{
+  "canonical_name": "full product name as commonly known",
+  "brand": "brand name | unknown",
+  "category": "e.g. Electronics > Smartphones",
+  "model_or_series": "specific model or series | unknown",
+  "year_or_generation": "year or generation | unknown",
+  "key_attributes": [
+    {{"attribute": "storage", "value": "128GB", "price_impact": "high"}},
+    {{"attribute": "color", "value": "black", "price_impact": "low"}}
+  ],
+  "computable": true,
+  "reject_reason": "null if computable, otherwise brief explanation",
+  "notes": "max 1 sentence on any remaining ambiguity, or empty string"
 }}
+
+### Field guidelines
+- `key_attributes`: list only attributes that exist for this product. `price_impact` must be "high", "medium", or "low". This is not general importance. It is based on the impact on the realistic resale price of the product.
+- `computable`: set to false if any high-price-impact attribute is unknown, or if the product cannot be confidently identified. Differences in low to medium price-impact attributes are acceptable.
+- `reject_reason`: required if `computable` is false, otherwise null.
+- `notes`: flag any ambiguity that could affect pricing even if `computable` is true.
+
+
+### Examples
+
+#### Example 1:
+Trek Marlin 5 29" mountain bike (no year specified):
+- model: known and specific, anchors price range well
+- year: medium — Marlin 5 resale prices vary ~15–20% across generations
+- frame_size: low — resale prices are nearly identical across frame sizes
+- condition: low — like new vs fair makes a small difference
+→ computable: true — only one medium-impact attribute unknown (year); model anchors the range
+
+#### Example 2:
+iPhone 13 Pro (no storage specified):
+- storage: high — 128GB vs 512GB is a >40% price difference
+→ computable: false — storage is unknown and high-impact
+
+#### Example 3:
+London Fog jacket (no style, size, material, or condition specified):
+- style/line: medium — trench coat vs windbreaker vs wool overcoat span a wide range
+- size: medium — some size premium exists
+- material: medium — wool vs synthetic meaningfully affects price
+- condition: low — slight difference in price for outerwear
+→ computable: false — multiple medium-impact attributes unknown simultaneously; brand + generic type insufficient to anchor price range
+
+#### Example 4:
+PSA 10 Charizard 25th Anniversary Celebrations pokemon card (graded slab):
+- card: known and specific
+- grade: PSA 10 stated in listing
+- set: 25th Anniversary Celebrations stated
+- condition: high — condition for collectibles is very important, and the grade is stated in the listing
+→ computable: true
 """
+
+
+# ---------------------------------------------------------------------------
+# Step 3 — eBay Query Generation
+# ---------------------------------------------------------------------------
+
+QUERY_GENERATION_SYSTEM_MESSAGE = "You are an expert at creating precise search queries for online marketplaces. Always respond with valid JSON only."
 
 
 def get_query_generation_prompt(product_recon_json: str) -> str:
@@ -169,6 +260,12 @@ Return ONLY a JSON object:
 }}
 """
 
+
+# ---------------------------------------------------------------------------
+# Step 4 — Post-eBay Filter
+# ---------------------------------------------------------------------------
+
+RESULT_FILTERING_SYSTEM_MESSAGE = "You are an expert at comparing products across marketplaces. Always respond with valid JSON only."
 
 
 def get_batch_filtering_prompt(
@@ -264,39 +361,4 @@ Return JSON array in same order as eBay items:
 ]
 
 No extra text. Reason ≤10 words, include key detail.
-"""
-
-
-def get_internet_product_recon_prompt(fb_listing_text: str) -> str:
-    return f"""
-You are identifying the real-world product described in a Facebook Marketplace listing.
-
-Your goal is to DISAMBIGUATE, not to guess.
-Make an internet search to gather more information, resolve naming ambiguity, and identify the product universe.
-Identify the most precise product possible. If ambiguity remains, assess whether the unresolved differences would meaningfully impact market price. 
-
-Rules:
-- Do NOT invent details.
-- If multiple plausible products exist, mark fields as "unknown".
-- Only add information that is explicit in the listing or objectively verifiable without guessing.
-
-Return a single JSON object with:
-
-{{
-  "canonical_name": "...",
-  "brand": "...",
-  "category": "...",
-  "model_or_series": "... | unknown",
-  "year_or_generation": "... | unknown",
-  "variant_dimensions": ["..."],
-  "notes": "max 1 sentence or empty"
-}}
-
-Field guidelines:
-- model_or_series / year_or_generation: use "unknown" if not certain.
-- variant_dimensions: features that impact price (e.g., storage tier, sealed vs opened).
-- notes: anything to note or eliminate price ambiguity.
-
-Facebook listing:
-{fb_listing_text}
 """

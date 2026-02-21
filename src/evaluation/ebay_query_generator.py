@@ -18,12 +18,12 @@ except ImportError:
 from src.scrapers.fb_marketplace_scraper import Listing
 from src.utils.colored_logger import setup_colored_logger, log_error_short, log_warning, truncate_lines
 from src.evaluation.prompts import (
-    PRE_FILTERING_SYSTEM_MESSAGE,
+    PRE_RECON_FILTER_SYSTEM_MESSAGE,
     PRODUCT_RECON_SYSTEM_MESSAGE,
     QUERY_GENERATION_SYSTEM_MESSAGE,
     format_fb_listing_for_prompt,
     get_internet_product_recon_prompt,
-    get_pre_filtering_prompt,
+    get_pre_recon_filter_prompt,
     get_query_generation_prompt,
 )
 from src.evaluation.openai_client import (
@@ -35,12 +35,33 @@ from src.evaluation.openai_client import (
 
 logger = setup_colored_logger("ebay_query_generator")
 
+
+def _should_reject_by_rules(listing: Listing) -> Optional[str]:
+    """
+    Rule-based pre-filter: reject listings that appear to be from buyers.
+    
+    Checks the listing title for buyer keywords ("wanted", "looking for", "ISO", "WTB").
+    This is Gate 1a of the pre-recon filtering stage.
+    
+    Returns:
+        Rejection reason string if listing should be rejected, None otherwise.
+    """
+    title_lower = listing.title.lower()
+    buyer_keywords = ["wanted", "looking for", "iso", "wtb"]
+    for keyword in buyer_keywords:
+        if keyword in title_lower:
+            return f"Listing appears to be from a buyer (contains '{keyword}')"
+    return None
+
+
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 QUERY_GENERATION_MAX_OUTPUT_TOKENS = 1000
-PRE_FILTER_MAX_OUTPUT_TOKENS = 500
+PRE_RECON_FILTER_MAX_OUTPUT_TOKENS = 500
 PRODUCT_RECON_MAX_OUTPUT_TOKENS = 1000
 PRODUCT_RECON_WEB_TOOLS = [{"type": "web_search"}]
 PRODUCT_RECON_RETRY_MAX_OUTPUT_TOKENS = 1500
+# Use a cheaper/faster model for pre-recon filtering
+PRE_RECON_FILTER_MODEL = "gpt-4o-mini"
 
 
 def generate_ebay_query_for_listing(
@@ -65,6 +86,38 @@ def generate_ebay_query_for_listing(
     client = OpenAI(api_key=OPENAI_API_KEY)
     fb_listing_text = format_fb_listing_for_prompt(listing)
 
+    # Step 1: Pre-Recon Filter (before product recon)
+    # Gate 1a: Rule-based pre-filter (no LLM)
+    rule_reject_reason = _should_reject_by_rules(listing)
+    if rule_reject_reason is not None:
+        logger.debug(f"Pre-recon filter (rules) rejected: {rule_reject_reason}")
+        return (None, rule_reject_reason, None)
+
+    # Gate 1b: Pre-Recon Filter (lightweight LLM)
+    pre_recon_filter_prompt = get_pre_recon_filter_prompt(fb_listing_text)
+    try:
+        pre_recon_filter_response = create_sync_response(
+            client,
+            instructions=PRE_RECON_FILTER_SYSTEM_MESSAGE,
+            prompt=pre_recon_filter_prompt,
+            max_output_tokens=PRE_RECON_FILTER_MAX_OUTPUT_TOKENS,
+            model=PRE_RECON_FILTER_MODEL,
+        )
+        pre_recon_raw = extract_response_output_text(pre_recon_filter_response)
+        pre_recon_result = try_parse_json_dict(pre_recon_raw)
+        if pre_recon_result is None:
+            logger.debug(f"Pre-recon filter response was not valid JSON: {pre_recon_raw if pre_recon_raw else '(empty)'}")
+        elif pre_recon_result.get("rejected"):
+            reject_reason = pre_recon_result.get("reason", "insufficient information")
+            logger.debug(f"Pre-recon filter rejected: {reject_reason}")
+            return (None, reject_reason, None)
+        else:
+            logger.debug(f"Pre-recon filter accepted: {pre_recon_result.get('reason', '')}")
+    except Exception as e:
+        logger.warning(f"Pre-recon filter API call failed: {e}")
+        # Continue on error (fail-open for pre-recon filter)
+
+    # Step 2: Product Recon (internet search + disambiguation)
     try:
         recon_prompt = get_internet_product_recon_prompt(fb_listing_text)
         recon_response = None
@@ -112,18 +165,32 @@ def generate_ebay_query_for_listing(
                 logger.debug(f"Product research response status: {status or '(unknown)'}")
             return None
 
-        variant_dimensions = recon_result.get("variant_dimensions", [])
-        if isinstance(variant_dimensions, list):
-            variant_dimensions_text = ", ".join(str(value) for value in variant_dimensions) or "None"
+        # Step 3: Post-Recon Filter (check computable field from recon output)
+        computable = recon_result.get("computable", True)
+        if not computable:
+            reject_reason = recon_result.get("reject_reason", "Product cannot be reliably compared")
+            logger.debug(f"Post-recon filter rejected (computable=false): {reject_reason}")
+            return (None, reject_reason, None)
+
+        key_attributes = recon_result.get("key_attributes", [])
+        if isinstance(key_attributes, list) and len(key_attributes) > 0:
+            key_attributes_text = ", ".join(
+                f"{attr.get('attribute', 'unknown')}: {attr.get('value', 'unknown')} ({attr.get('price_impact', 'unknown')})"
+                for attr in key_attributes
+                if isinstance(attr, dict)
+            ) or "None"
         else:
-            variant_dimensions_text = str(variant_dimensions)
+            key_attributes_text = "None"
         logger.debug(" Internet search found:")
         logger.debug(f"  - Product name: {recon_result.get('canonical_name', 'Unknown')}")
         logger.debug(f"  - Brand: {recon_result.get('brand', 'Unknown')}")
         logger.debug(f"  - Category: {recon_result.get('category', 'Unknown')}")
         logger.debug(f"  - Model/series: {recon_result.get('model_or_series', 'Unknown')}")
         logger.debug(f"  - Year/generation: {recon_result.get('year_or_generation', 'Unknown')}")
-        logger.debug(f"  - Price-changing details: {variant_dimensions_text}")
+        logger.debug(f"  - Price-changing details: {key_attributes_text}")
+        logger.debug(f"  - Computable: {computable}")
+        if not computable:
+            logger.debug(f"  - Reject reason: {recon_result.get('reject_reason', 'None')}")
         logger.debug(f"  - Notes: {recon_result.get('notes', '') or 'None'}")
 
         if recon_citations:
@@ -150,27 +217,7 @@ def generate_ebay_query_for_listing(
         logger.debug(f"Product research request failed: {e}")
         return None
 
-    pre_filtering_prompt = get_pre_filtering_prompt(fb_listing_text, product_recon_json)
-    try:
-        pre_filtering_response = create_sync_response(
-            client,
-            instructions=PRE_FILTERING_SYSTEM_MESSAGE,
-            prompt=pre_filtering_prompt,
-            max_output_tokens=PRE_FILTER_MAX_OUTPUT_TOKENS,
-        )
-        pre_raw = extract_response_output_text(pre_filtering_response)
-        pre_result = try_parse_json_dict(pre_raw)
-        if pre_result is None:
-            logger.debug(f"Pre-filter response was not valid JSON: {pre_raw if pre_raw else '(empty)'}")
-        elif pre_result.get("rejected"):
-            logger.debug(f"Pre-filter rejected: {pre_result.get('reason', 'insufficient information')}")
-            return (None, pre_result.get("reason", "insufficient information"), None)
-        else:
-            logger.debug(f"Pre-filter accepted: {pre_result.get('reason', '')}")
-    except Exception as e:
-        logger.warning(f"Pre-filter API call failed: {e}")
-        pre_result = None
-
+    # Step 4: eBay Query Generation
     prompt = get_query_generation_prompt(product_recon_json)
 
     try:
