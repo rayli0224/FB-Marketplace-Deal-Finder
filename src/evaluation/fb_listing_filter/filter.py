@@ -15,9 +15,9 @@ except ImportError:
 
 from src.scrapers.fb_marketplace_scraper import Listing
 from src.utils.colored_logger import setup_colored_logger, log_warning
+from src.evaluation.listing_format import format_fb_listing_for_prompt
 from src.evaluation.fb_listing_filter.prompts import (
     SYSTEM_MESSAGE,
-    format_fb_listing_for_prompt,
     get_pre_filtering_prompt,
 )
 from src.evaluation.openai_client import create_sync_response, extract_response_output_text, try_parse_json_dict
@@ -44,14 +44,22 @@ def is_suspicious_price(price: Optional[float]) -> bool:
 
 def _should_reject_by_rules(listing: Listing) -> Optional[str]:
     """
-    Rule-based pre-filter: reject listings that appear to be from buyers.
+    Rule-based pre-filter: reject listings that appear to be from buyers or have suspicious prices.
     
-    Checks the listing title for buyer keywords ("wanted", "looking for", "ISO", "WTB").
+    Checks:
+    1. Suspicious prices (free, zero, placeholder prices)
+    2. Buyer keywords in title ("wanted", "looking for", "ISO", "WTB")
+    
     This is Gate 1a of the pre-recon filtering stage.
     
     Returns:
         Rejection reason string if listing should be rejected, None otherwise.
     """
+    # Check for suspicious prices first
+    if is_suspicious_price(listing.price):
+        return "Suspicious price (free, zero, or placeholder)"
+    
+    # Check for buyer keywords
     title_lower = listing.title.lower()
     buyer_keywords = ["wanted", "looking for", "iso", "wtb"]
     for keyword in buyer_keywords:

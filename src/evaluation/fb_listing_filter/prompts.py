@@ -6,7 +6,7 @@ Your job is NOT to assess whether the product can be precisely identified — th
 Your job is to reject listings that are so vague, malformed, or inherently unquantifiable that no amount of research could produce a reliable price comparison.
 
 Rules:
-- Reject if the listing is a non-inherent lot or bundle (e.g., "box of clothes", "lot of 50 games", "bag of misc tools"). Inherent bundles like "pair of shoes" or "chess set" are fine.
+- Reject if the listing is a non-inherent lot or atypical bundle (e.g., "box of clothes", "lot of 50 games", "bag of misc tools"). Inherent or product-specific bundles like "pair of shoes", "chess set", "Lord of the Rings trilogy", or "box set of Phantasy Star Online 2" are fine.
 - Reject if the listing is a service, rental, or non-physical item.
 - Reject if the listing has no identifiable product — just a vague category with no brand, model, or specific name (e.g., "bag", "blender", "lamp").
 - Reject if the listing is clearly from a buyer, not a seller (covered separately by rules, but flag if unsure).
