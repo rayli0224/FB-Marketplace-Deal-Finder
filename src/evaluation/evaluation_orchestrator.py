@@ -5,6 +5,7 @@ Runs: FB filter → internet enrichment → eBay query generation → eBay searc
 Calls step modules only; contains orchestration logic only.
 """
 
+import json
 import threading
 from typing import Callable, Dict, Optional, Tuple
 
@@ -50,6 +51,18 @@ def generate_ebay_query_for_listing(
     product_recon_json = enrich_listing_with_internet(listing, on_product_recon=on_product_recon)
     if product_recon_json is None:
         return None
+
+    # Step 3: Post-Recon Filter (check computable field from recon output)
+    try:
+        recon_result = json.loads(product_recon_json)
+        computable = recon_result.get("computable", True)
+        if not computable:
+            reject_reason = recon_result.get("reject_reason", "Product cannot be reliably compared")
+            logger.debug(f"Post-recon filter rejected (computable=false): {reject_reason}")
+            return (None, reject_reason, None)
+    except (json.JSONDecodeError, TypeError):
+        # If JSON parsing fails, continue (fail-open)
+        pass
 
     enhanced_query = generate_ebay_query(product_recon_json, original_query)
     if enhanced_query is None:

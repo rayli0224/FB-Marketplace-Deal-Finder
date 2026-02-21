@@ -36,7 +36,7 @@ Use the category from the product intelligence. Examples:
 ---
 
 ### Step 2 — Price-Defining Attributes
-Use the `key_attributes` array from the product intelligence to determine which attributes matter and their price impact. The product intelligence includes structured attributes with `price_impact` values ("high", "medium", "low").
+Use the `key_attributes` array from the product details to determine which attributes matter and their price impact. The product details includes structured attributes with `price_impact` values ("high", "medium", "low").
 
 **Focus on high-impact attributes:** Differences in high-impact attributes (e.g., storage capacity for electronics, generation/year for devices) should lead to rejection. Differences in low-impact attributes (e.g., color for most products) are acceptable.
 

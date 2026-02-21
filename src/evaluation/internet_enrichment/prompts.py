@@ -13,6 +13,7 @@ Rules:
 - Mark `computable` as false if any high-price-impact attribute is unknown, or if the product cannot be reliably disambiguated.
 - Condition of products can typically all be assumed to be used with regular wear and tear, as long as it's not listed "for parts" or "not working".
 - When in doubt, assign medium rather than high. Reserve high for attributes that cause unambiguous, well-known price splits (e.g., iPhone storage tiers, electric vs acoustic instruments).
+- Assume authenticity of the product unless otherwise stated or implied with "-style" or "-like" or similar.
 
 Always respond with valid JSON only."""
 
